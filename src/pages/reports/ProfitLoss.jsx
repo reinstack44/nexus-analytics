@@ -341,7 +341,7 @@ export default function ProfitLoss() {
                 <tr>
                   <th className="px-6 py-4">Date</th>
                   <th className="px-6 py-4">Description</th>
-                  <th className="px-6 py-4 text-right">Amountt (₹)</th>
+                  <th className="px-6 py-4 text-right">Amount (₹)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
