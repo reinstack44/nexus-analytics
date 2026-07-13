@@ -1,6 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
-import { Users, Plus, FileText, Calendar, Wallet, ArrowRightLeft, Edit2, Trash2, X } from 'lucide-react'; // Trash2 import kiya gaya hai
+import { Users, Plus, FileText, Calendar, Wallet, ArrowRightLeft, Edit2, Trash2, X } from 'lucide-react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+
+// Custom Date Input Box specifically built for DD/MM/YY formatting
+const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
+  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left`}>
+    <span>{value}</span>
+    <Calendar size={16} className="text-slate-400" />
+  </button>
+));
+FormDateInput.displayName = "FormDateInput";
 
 export default function PurchaseManager() {
   const [activeTab, setActiveTab] = useState('ledger'); 
@@ -27,12 +38,37 @@ export default function PurchaseManager() {
     name: ''
   });
   
+  // LOGIC: Memory Management for Date Persistence
+  // Get date from memory if it exists, otherwise use today's date
+  const savedDate = localStorage.getItem('purchaseManagerDate');
+  const initialDate = savedDate ? savedDate : new Date().toISOString().split('T')[0];
+
   const [ledgerForm, setLedgerForm] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: initialDate,
     purchaseAmount: '',
     paidAmount: '',
     manualRemaining: '', 
   });
+
+  // Strict Format Helpers
+  const parseDBDate = (str) => { if (!str) return new Date(); const [y, m, d] = str.split('-'); return new Date(y, m - 1, d); };
+  const formatForDB = (date) => { if (!date) return ''; return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'); };
+  
+  const formatAsDDMMYY = (dateString) => {
+    if (!dateString) return '-';
+    const date = new Date(dateString);
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = String(date.getFullYear()).slice(-2);
+    return `${day}/${month}/${year}`;
+  };
+
+  // Custom handler to update form state AND save to browser memory
+  const handleDateChange = (date) => {
+    const formattedDBDate = formatForDB(date);
+    setLedgerForm({ ...ledgerForm, date: formattedDBDate });
+    localStorage.setItem('purchaseManagerDate', formattedDBDate); // Storing in memory
+  };
 
   // Fetch Traders Master List
   const fetchTraders = useCallback(async () => {
@@ -138,6 +174,7 @@ export default function PurchaseManager() {
     if (error) {
       alert("Error: " + error.message);
     } else {
+      // Keeps the date as selected in memory, clears amounts
       setLedgerForm({ ...ledgerForm, purchaseAmount: '', paidAmount: '', manualRemaining: '' });
       fetchTraderLedger();
     }
@@ -158,7 +195,7 @@ export default function PurchaseManager() {
     if (error) {
       alert("Error deleting transaction: " + error.message);
     } else {
-      fetchTraderLedger(); // Refresh table after deletion
+      fetchTraderLedger(); 
     }
     setIsSubmitting(false);
   };
@@ -208,6 +245,25 @@ export default function PurchaseManager() {
 
   return (
     <div className="space-y-6 transition-colors duration-300">
+      <style>{`
+        .react-datepicker-wrapper { display: block; width: 100%; }
+        .react-datepicker-popper { z-index: 99999 !important; }
+        .react-datepicker { background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 1rem !important; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1) !important; font-family: inherit !important; padding: 0.5rem !important; }
+        .react-datepicker__header { background-color: #ffffff !important; border-bottom: none !important; }
+        .react-datepicker__current-month { color: #1e293b; font-weight: 700; font-size: 0.9rem; }
+        .react-datepicker__day-name { color: #94a3b8 !important; font-weight: 600 !important; }
+        .react-datepicker__day { color: #334155 !important; border-radius: 0.5rem !important; transition: all 0.2s; }
+        .react-datepicker__day:hover { background-color: #f1f5f9 !important; }
+        .react-datepicker__day--selected { background-color: #2563eb !important; color: #ffffff !important; }
+        .react-datepicker__triangle { display: none !important; }
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__header { background-color: #0f172a !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
+        .dark .react-datepicker__day-name { color: #64748b !important; }
+        .dark .react-datepicker__day { color: #cbd5e1 !important; }
+        .dark .react-datepicker__day:hover { background-color: #1e293b !important; }
+        .dark .react-datepicker__day--selected { background-color: #3b82f6 !important; color: #ffffff !important; }
+      `}</style>
       
       {/* Tabs Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -255,8 +311,13 @@ export default function PurchaseManager() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5"><Calendar size={12} className="inline mr-1" /> Transaction Date</label>
-                <input type="date" required value={ledgerForm.date} onChange={(e) => setLedgerForm({ ...ledgerForm, date: e.target.value })} className={inputClass} />
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Transaction Date</label>
+                <DatePicker 
+                  selected={parseDBDate(ledgerForm.date)} 
+                  onChange={handleDateChange} 
+                  dateFormat="dd/MM/yy" 
+                  customInput={<FormDateInput className={inputClass} />} 
+                />
               </div>
 
               <div>
@@ -309,7 +370,7 @@ export default function PurchaseManager() {
                     ledgerRows.map((row) => (
                       <tr key={row.id} className="transition-colors duration-200 hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
                         <td className="px-6 py-4 font-medium whitespace-nowrap">
-                          {new Date(row.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          {formatAsDDMMYY(row.date)}
                         </td>
                         <td className="px-6 py-4 text-center font-semibold text-red-600 dark:text-red-400">
                           {row.purchase_amount > 0 ? `₹${row.purchase_amount.toLocaleString()}` : '-'}
@@ -362,7 +423,12 @@ export default function PurchaseManager() {
             <form onSubmit={handleEditTxSubmit} className="p-5 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Transaction Date</label>
-                <input type="date" required value={editTxForm.date} onChange={(e) => setEditTxForm({ ...editTxForm, date: e.target.value })} className={inputClass} />
+                <DatePicker 
+                  selected={parseDBDate(editTxForm.date)} 
+                  onChange={(date) => setEditTxForm({ ...editTxForm, date: formatForDB(date) })} 
+                  dateFormat="dd/MM/yy" 
+                  customInput={<FormDateInput className={inputClass} />} 
+                />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Purchase Amount (₹)</label>
@@ -427,7 +493,7 @@ export default function PurchaseManager() {
                     traders.map((t) => (
                       <tr key={t.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
                         <td className="px-6 py-4 font-bold text-slate-800 dark:text-slate-100">{t.trader_name}</td>
-                        <td className="px-6 py-4 text-right">{new Date(t.created_at).toLocaleDateString('en-IN')}</td>
+                        <td className="px-6 py-4 text-right">{formatAsDDMMYY(t.created_at)}</td>
                       </tr>
                     ))
                   )}

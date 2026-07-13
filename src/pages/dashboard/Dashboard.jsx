@@ -22,10 +22,30 @@ CustomDateInput.displayName = "CustomDateInput";
 export default function Dashboard() {
   const { theme } = useTheme(); 
   
+  // Helpers for parsing and formatting DB strings safely
+  const parseDBDate = (str) => {
+    if (!str) return new Date();
+    const [y, m, d] = str.split('-');
+    return new Date(y, m - 1, d);
+  };
+
+  const formatDateForDB = (date) => {
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // LOGIC: Memory Management for Date Persistence
   const today = new Date();
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-  const [startDate, setStartDate] = useState(firstDay);
-  const [endDate, setEndDate] = useState(today);
+  // Get dates from memory if they exist
+  const savedStartDateStr = localStorage.getItem('dashboardStartDate');
+  const savedEndDateStr = localStorage.getItem('dashboardEndDate');
+
+  // 'defaultFirstDay' hata diya aur direct 'today' set kar diya
+  const [startDate, setStartDate] = useState(savedStartDateStr ? parseDBDate(savedStartDateStr) : today);
+  const [endDate, setEndDate] = useState(savedEndDateStr ? parseDBDate(savedEndDateStr) : today);
 
   const [stats, setStats] = useState({
     revenue: 0,
@@ -39,12 +59,15 @@ export default function Dashboard() {
   const [traderSummary, setTraderSummary] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const formatDateForDB = (date) => {
-    if (!date) return '';
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  // Custom handlers to update state AND save to browser memory
+  const handleStartDateChange = (date) => {
+    setStartDate(date);
+    if (date) localStorage.setItem('dashboardStartDate', formatDateForDB(date));
+  };
+
+  const handleEndDateChange = (date) => {
+    setEndDate(date);
+    if (date) localStorage.setItem('dashboardEndDate', formatDateForDB(date));
   };
 
   const fetchDashboardData = useCallback(async () => {
@@ -172,7 +195,7 @@ export default function Dashboard() {
   }, [startDate, endDate]);
 
   useEffect(() => {
-    // eslint-disable-next-line
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDashboardData();
   }, [fetchDashboardData]);
 
@@ -242,9 +265,9 @@ export default function Dashboard() {
         <div className="flex items-center gap-2 bg-white/60 dark:bg-slate-900/60 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm backdrop-blur-sm relative z-50">
           <DatePicker
             selected={startDate}
-            onChange={(date) => setStartDate(date)}
+            onChange={handleStartDateChange}
             maxDate={new Date()} 
-            dateFormat="MMM dd, yyyy"
+            dateFormat="dd/MM/yy"
             customInput={<CustomDateInput />}
             showMonthDropdown
             showYearDropdown
@@ -253,10 +276,10 @@ export default function Dashboard() {
           <span className="text-slate-400 font-semibold px-1">to</span>
           <DatePicker
             selected={endDate}
-            onChange={(date) => setEndDate(date)}
+            onChange={handleEndDateChange}
             minDate={startDate} 
             maxDate={new Date()}
-            dateFormat="MMM dd, yyyy"
+            dateFormat="dd/MM/yy"
             customInput={<CustomDateInput />}
             showMonthDropdown
             showYearDropdown

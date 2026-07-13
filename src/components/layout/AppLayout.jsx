@@ -4,7 +4,7 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext'; 
 import { useTranslation } from 'react-i18next'; 
-import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, Wine, ChevronLeft, ChevronRight, Sun, Moon, Globe } from 'lucide-react'; 
+import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, Wine, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText } from 'lucide-react'; // Added FileText import
 
 export default function AppLayout() {
   const { user } = useAuth();
@@ -39,13 +39,14 @@ export default function AppLayout() {
     setIsLangMenuOpen(false);
   };
 
-  // NAYE ROUTES KE HISAB SE NAVIGATION ITEMS
+  // NAYE ROUTES KE HISAB SE NAVIGATION ITEMS (Added Reports)
   const navItems = [
     { name: t('sidebar.dashboard', 'Dashboard'), path: '/', icon: LayoutDashboard },
     { name: t('sidebar.brands', 'Brand Master'), path: '/brands', icon: Tag },
     { name: t('sidebar.purchases', 'Purchases & Traders'), path: '/purchases', icon: ShoppingCart },
     { name: t('sidebar.stock', 'Daily Stock (Sale)'), path: '/daily-stock', icon: Package },
     { name: t('sidebar.profitloss', 'Profit & Loss'), path: '/profit-loss', icon: TrendingUp },
+    { name: t('sidebar.reports', 'Reports'), path: '/reports', icon: FileText }, // New Reports route
   ];
 
   return (

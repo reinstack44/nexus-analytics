@@ -1,7 +1,24 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown } from 'lucide-react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+
+// Premium Custom Dropdown Button Date Picker
+const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
+  <button
+    type="button"
+    onClick={onClick}
+    ref={ref}
+    className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 whitespace-nowrap w-full sm:w-auto"
+  >
+    <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
+    {value || placeholder}
+    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3 shrink-0" />
+  </button>
+));
+CustomDateInput.displayName = "CustomDateInput";
 
 export default function DailyStock() {
   const { user } = useAuth();
@@ -9,9 +26,17 @@ export default function DailyStock() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
 
-  // Date selection (Default is today)
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  
+  // Date Range State (Using Session Storage for persistence across page navigation)
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const saved = sessionStorage.getItem('ds_selectedDate');
+    return saved ? new Date(saved) : new Date(); // Default is Today
+  });
+
+  // Save selected date to session storage whenever it changes
+  useEffect(() => {
+    if (selectedDate) sessionStorage.setItem('ds_selectedDate', selectedDate.toISOString());
+  }, [selectedDate]);
+
   // Main Data State
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0 });
@@ -20,15 +45,26 @@ export default function DailyStock() {
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
 
+  // Helper to format Date for DB Queries (YYYY-MM-DD)
+  const formatDateForDB = (dateObj) => {
+    if (!dateObj) return '';
+    const d = new Date(dateObj);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const fetchDailyData = useCallback(async () => {
     setLoading(true);
     setSaveMessage(null);
 
-    const [year, month, day] = selectedDate.split('-').map(Number);
-    const prevDate = new Date(year, month - 1, day - 1);
-    const prevDateStr = prevDate.getFullYear() + '-' + 
-                      String(prevDate.getMonth() + 1).padStart(2, '0') + '-' + 
-                      String(prevDate.getDate()).padStart(2, '0');
+    const currentDateStr = formatDateForDB(selectedDate);
+    
+    // Calculate Yesterday's Date safely using JS Date Object
+    const prevDate = new Date(selectedDate);
+    prevDate.setDate(prevDate.getDate() - 1);
+    const prevDateStr = formatDateForDB(prevDate);
 
     // Fetch Brands ordered by display_order first, then brand_name
     const { data: brandsData } = await supabase
@@ -40,7 +76,7 @@ export default function DailyStock() {
     const { data: stockData } = await supabase
       .from('daily_stock')
       .select('*')
-      .eq('date', selectedDate);
+      .eq('date', currentDateStr);
 
     const { data: prevStockData } = await supabase
       .from('daily_stock')
@@ -197,9 +233,11 @@ export default function DailyStock() {
     setIsSaving(true);
     setSaveMessage(null);
 
+    const currentDateStr = formatDateForDB(selectedDate);
+
     const upsertData = stockRows.map(row => ({
       user_id: user.id,
-      date: selectedDate,
+      date: currentDateStr,
       brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
@@ -224,8 +262,56 @@ export default function DailyStock() {
   return (
     <div className="space-y-6 transition-colors duration-300 relative">
       
+      {/* DatePicker Global Styles */}
+      <style>{`
+        /* SEPARATE WRAPPER LOGIC FOR HEADER */
+        .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
+
+        .react-datepicker-popper { z-index: 99999 !important; }
+        .react-datepicker { 
+          background-color: #ffffff !important; 
+          border: 1px solid #e2e8f0 !important; 
+          border-radius: 1.25rem !important; 
+          box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1) !important; 
+          font-family: inherit !important; 
+          padding: 0.75rem !important;
+        }
+        .react-datepicker__month-container { background-color: #ffffff !important; }
+        .react-datepicker__header { 
+          background-color: #ffffff !important; 
+          border-bottom: 1px solid #f8fafc !important; 
+        }
+        .react-datepicker__current-month { 
+          color: #1e293b; font-weight: 700; font-size: 1rem; margin-bottom: 1rem !important; 
+        }
+        .react-datepicker__header select {
+          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
+          padding: 0.25rem 0.5rem; font-weight: 600; color: #1e293b; cursor: pointer;
+          margin: 0 0.25rem 0.75rem 0.25rem; outline: none;
+        }
+        .react-datepicker__day-name { color: #94a3b8 !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
+        .react-datepicker__day { 
+          color: #334155 !important; border-radius: 50% !important; width: 2.25rem !important;
+          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; background-color: transparent !important;
+        }
+        .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
+        .react-datepicker__day--selected { background-color: #2563eb !important; color: #ffffff !important; font-weight: 600 !important; }
+        .react-datepicker__triangle { display: none !important; }
+
+        /* Dark Mode Overrides */
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__month-container { background-color: #0f172a !important; }
+        .dark .react-datepicker__header { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
+        .dark .react-datepicker__header select { background-color: #1e293b !important; color: #f8fafc !important; border-color: #334155 !important; }
+        .dark .react-datepicker__day-name { color: #64748b !important; }
+        .dark .react-datepicker__day { color: #cbd5e1 !important; }
+        .dark .react-datepicker__day:hover { background-color: #1e293b !important; color: #f8fafc !important; }
+        .dark .react-datepicker__day--selected { background-color: #3b82f6 !important; color: #ffffff !important; }
+      `}</style>
+
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-60 relative">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
             <Package className="text-blue-500" /> Daily Stock Ledger
@@ -233,14 +319,17 @@ export default function DailyStock() {
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing stock to generate sales.</p>
         </div>
         
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 p-2 rounded-xl border border-slate-200 dark:border-slate-700">
-            <Calendar size={18} className="text-slate-500 dark:text-slate-400 ml-1" />
-            <input 
-              type="date" 
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 font-bold text-sm cursor-pointer"
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="header-date-picker flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
+            <DatePicker
+              selected={selectedDate}
+              onChange={(date) => setSelectedDate(date)}
+              maxDate={new Date()}
+              dateFormat="dd/MM/yy"
+              customInput={<CustomDateInput />}
+              showMonthDropdown
+              showYearDropdown
+              dropdownMode="select"
             />
           </div>
           
@@ -262,7 +351,7 @@ export default function DailyStock() {
       )}
 
       {/* Summary Metrics */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 relative z-10">
         <div className="bg-linear-to-br from-indigo-500 to-indigo-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
           <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
           <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty (Auto)</p>
@@ -277,7 +366,7 @@ export default function DailyStock() {
       </div>
 
       {/* Main Calculation Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden relative z-10">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
             <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">

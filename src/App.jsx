@@ -7,6 +7,7 @@ import BrandMaster from './pages/inventory/BrandMaster'; // Naya Brand Master
 import PurchaseManager from './pages/purchases/PurchaseManager'; // Naya Purchase Manager
 import DailyStock from './pages/stock/DailyStock'; // Naya Daily Stock
 import ProfitLoss from './pages/reports/ProfitLoss'; // Naya P&L
+import Reports from './pages/reports/Reports';
 
 function App() {
   const { user } = useAuth();
@@ -22,6 +23,7 @@ function App() {
           <Route path="purchases" element={<PurchaseManager />} />
           <Route path="daily-stock" element={<DailyStock />} />
           <Route path="profit-loss" element={<ProfitLoss />} />
+          <Route path="/reports" element={<Reports />} />
         </Route>
       </Routes>
     </BrowserRouter>
