@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical } from 'lucide-react';
 
 export default function DailyStock() {
   const { user } = useAuth();
@@ -16,27 +16,32 @@ export default function DailyStock() {
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0 });
 
+  // Drag and Drop Refs
+  const dragItem = useRef(null);
+  const dragOverItem = useRef(null);
+
   const fetchDailyData = useCallback(async () => {
     setLoading(true);
     setSaveMessage(null);
 
-    // Calculate Yesterday's Date safely
     const [year, month, day] = selectedDate.split('-').map(Number);
     const prevDate = new Date(year, month - 1, day - 1);
     const prevDateStr = prevDate.getFullYear() + '-' + 
                       String(prevDate.getMonth() + 1).padStart(2, '0') + '-' + 
                       String(prevDate.getDate()).padStart(2, '0');
 
-    // Fetch All Brands
-    const { data: brandsData } = await supabase.from('brands').select('*').order('brand_name', { ascending: true });
+    // Fetch Brands ordered by display_order first, then brand_name
+    const { data: brandsData } = await supabase
+      .from('brands')
+      .select('*')
+      .order('display_order', { ascending: true })
+      .order('brand_name', { ascending: true });
     
-    // Fetch Saved Daily Stock for Today
     const { data: stockData } = await supabase
       .from('daily_stock')
       .select('*')
       .eq('date', selectedDate);
 
-    // Fetch Saved Daily Stock for Yesterday (To get base opening)
     const { data: prevStockData } = await supabase
       .from('daily_stock')
       .select('*')
@@ -64,7 +69,6 @@ export default function DailyStock() {
         const existingStock = stockMap[brand.id];
         const prevStock = prevStockMap[brand.id];
         
-        // 1. Base Opening hamesha Kal (Yesterday) ka Closing rahega. (Agar closing nahi hai, toh opening uthayega)
         let baseOpening = 0;
         if (prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
           baseOpening = prevStock.closing_balance;
@@ -72,16 +76,13 @@ export default function DailyStock() {
           baseOpening = prevStock.opening_balance;
         }
 
-        // 2. Aaj ka Opening and Purchase Qty Calculation
         let purchaseQty = 0; 
         let opening = baseOpening;
 
-        // Agar database me aaj ka record already save hai
         if (existingStock && existingStock.opening_balance !== null && existingStock.opening_balance !== undefined) {
           opening = existingStock.opening_balance;
-          // Purchase Qty ko reverse-calculate kar lenge (Saved Total - Base Opening)
           purchaseQty = opening - baseOpening;
-          if (purchaseQty < 0) purchaseQty = 0; // Sanity check for negative bugs
+          if (purchaseQty < 0) purchaseQty = 0; 
         }
 
         const closing = existingStock?.closing_balance !== null && existingStock?.closing_balance !== undefined ? existingStock.closing_balance : ''; 
@@ -102,8 +103,8 @@ export default function DailyStock() {
           brand_name: brand.brand_name,
           bottle_size: brand.bottle_size,
           selling_price: brand.selling_price,
-          base_opening: baseOpening, // Permanent hold for yesterday's stock
-          purchase_qty: purchaseQty, // Now dynamically populated if data exists
+          base_opening: baseOpening,
+          purchase_qty: purchaseQty,
           opening_balance: opening,
           closing_balance: closing,
           sales_qty: salesQty,
@@ -123,6 +124,35 @@ export default function DailyStock() {
     fetchDailyData();
   }, [fetchDailyData]);
 
+  // --- DRAG AND DROP HANDLER ---
+  const handleSort = async () => {
+    if (dragItem.current === null || dragOverItem.current === null) return;
+    if (dragItem.current === dragOverItem.current) return; 
+
+    // Reorder local state array
+    let _stockRows = [...stockRows];
+    const draggedItemContent = _stockRows.splice(dragItem.current, 1)[0];
+    _stockRows.splice(dragOverItem.current, 0, draggedItemContent);
+    setStockRows(_stockRows);
+
+    // Prepare promises to update 'brands' table display_order in the background
+    try {
+      const updatePromises = _stockRows.map((row, index) => 
+        supabase
+          .from('brands')
+          .update({ display_order: index })
+          .eq('id', row.brand_id)
+      );
+      await Promise.all(updatePromises);
+    } catch (error) {
+      console.error("Error saving new sequence to database:", error);
+    }
+
+    // Reset refs
+    dragItem.current = null;
+    dragOverItem.current = null;
+  };
+
   // Handle Input Changes with Auto-Sum Logic
   const handleInputChange = (brandId, field, value) => {
     const numericValue = value === '' ? '' : parseInt(value) || 0;
@@ -132,14 +162,11 @@ export default function DailyStock() {
         if (row.brand_id === brandId) {
           const updatedRow = { ...row, [field]: numericValue };
           
-          // Agar user ne purchase qty box me badlav kiya hai
           if (field === 'purchase_qty') {
             const currentPurchase = value === '' ? 0 : parseInt(value) || 0;
-            // Formula: Opening Balance = Base Opening + Manual Purchases Qty
             updatedRow.opening_balance = updatedRow.base_opening + currentPurchase;
           }
 
-          // Dynamic Sales Quantity and Amount Calculation
           if (updatedRow.closing_balance !== '') {
             let sQty = updatedRow.opening_balance - parseInt(updatedRow.closing_balance);
             sQty = sQty < 0 ? 0 : sQty;
@@ -154,7 +181,6 @@ export default function DailyStock() {
         return row;
       });
 
-      // Recalculate Top Metric Cards
       let tQty = 0;
       let tRev = 0;
       updatedRows.forEach(r => {
@@ -256,7 +282,8 @@ export default function DailyStock() {
           <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
             <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
               <tr>
-                <th className="px-6 py-4">Brand Details</th>
+                <th className="px-3 py-4 w-10"></th> {/* Empty header for drag handle */}
+                <th className="px-3 py-4">Brand Details</th>
                 <th className="px-4 py-4 text-center">Opening Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto-Sum)</span></th>
                 <th className="px-4 py-4 text-center">Purchases Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Manual Input)</span></th>
                 <th className="px-4 py-4 text-center">Closing Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Input)</span></th>
@@ -266,13 +293,24 @@ export default function DailyStock() {
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading ? (
-                <tr><td colSpan="6" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
+                <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
               ) : stockRows.length === 0 ? (
-                <tr><td colSpan="6" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
+                <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
               ) : (
-                stockRows.map((row) => (
-                  <tr key={row.brand_id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
-                    <td className="px-6 py-4">
+                stockRows.map((row, index) => (
+                  <tr 
+                    key={row.brand_id} 
+                    draggable
+                    onDragStart={() => (dragItem.current = index)}
+                    onDragEnter={() => (dragOverItem.current = index)}
+                    onDragEnd={handleSort}
+                    onDragOver={(e) => e.preventDefault()}
+                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900"
+                  >
+                    <td className="px-3 py-4 text-center cursor-move">
+                      <GripVertical size={16} className="text-slate-300 dark:text-slate-600 group-hover:text-blue-500 transition-colors" />
+                    </td>
+                    <td className="px-3 py-4">
                       <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
                       <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{row.bottle_size} | ₹{row.selling_price} rate</div>
                     </td>
