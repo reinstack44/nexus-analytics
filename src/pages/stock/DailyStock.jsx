@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, forwardRef } from 'react';
+import { useState, useEffect, useRef, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee } from 'lucide-react';
@@ -39,12 +39,12 @@ export default function DailyStock() {
   }, [selectedDate]);
 
   const [stockRows, setStockRows] = useState([]);
-  const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0 });
+  const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0 });
 
   // --- NEW PURCHASE MODAL STATE ---
   const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '' });
 
-  // --- POPUP STATES (RESTORED PERFECTLY) ---
+  // --- POPUP STATES ---
   const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
   const [popupTab, setPopupTab] = useState('expense');
   const [expenses, setExpenses] = useState([]);
@@ -52,6 +52,7 @@ export default function DailyStock() {
 
   const [expenseForm, setExpenseForm] = useState({ date: new Date(), description: '', amount: '' });
   const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+  const [popupDate, setPopupDate] = useState(new Date());
 
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
@@ -80,12 +81,14 @@ export default function DailyStock() {
       const { data: brandsData } = await supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true });
       const { data: stockData } = await supabase.from('daily_stock').select('*').eq('date', currentDateStr);
       const { data: prevStockData } = await supabase.from('daily_stock').select('*').eq('date', prevDateStr);
+      
       const { data: expData } = await supabase.from('expenses').select('amount').eq('date', currentDateStr);
+      const { data: collData } = await supabase.from('owner_withdrawals').select('amount').eq('date', currentDateStr);
 
       if (!isMounted) return;
 
-      let tExp = 0;
-      if (expData) expData.forEach(e => tExp += parseFloat(e.amount));
+      let tExp = 0; if (expData) expData.forEach(e => tExp += parseFloat(e.amount));
+      let tColl = 0; if (collData) collData.forEach(c => tColl += parseFloat(c.amount));
 
       if (brandsData) {
         const stockMap = {};
@@ -132,7 +135,7 @@ export default function DailyStock() {
             brand_name: brand.brand_name,
             bottle_size: brand.bottle_size,
             selling_price: brand.selling_price,
-            purchase_price: brand.selling_price, // Added for FIFO
+            purchase_price: brand.selling_price, 
             base_opening: baseOpening,
             purchase_qty: purchaseQty,
             opening_balance: opening,
@@ -143,7 +146,7 @@ export default function DailyStock() {
         });
 
         setStockRows(rows);
-        setDailySummary({ totalSalesQty: totalQty, totalRevenue: totalRev, totalExpenses: tExp });
+        setDailySummary({ totalSalesQty: totalQty, totalRevenue: totalRev, totalExpenses: tExp, totalCollections: tColl });
       }
       setLoading(false);
     };
@@ -158,24 +161,11 @@ export default function DailyStock() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // --- FETCH POPUP DATA (RESTORED) ---
-  const fetchPopupData = useCallback(async (dateObj) => {
-    const dateStr = formatDateForDB(dateObj);
-    const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
-    const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('date', dateStr).order('created_at', { ascending: false });
-    
-    if (expData) setExpenses(expData);
-    if (collData) setCollections(collData);
-  }, []);
-
-  useEffect(() => {
+  // --- FETCH POPUP DATA ---
+  const handleFetchPopupTrigger = () => {
     let isMounted = true;
-
-    const loadData = async () => {
-      if (!isBankDepositOpen) return;
-      const dateToFetch = popupTab === 'expense' ? expenseForm.date : collectionForm.date;
-      const dateStr = formatDateForDB(dateToFetch);
-      
+    const fetchPopupData = async () => {
+      const dateStr = formatDateForDB(popupDate);
       const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
       const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('date', dateStr).order('created_at', { ascending: false });
       
@@ -184,11 +174,16 @@ export default function DailyStock() {
         if (collData) setCollections(collData);
       }
     };
-
-    loadData();
-
+    fetchPopupData();
     return () => { isMounted = false; };
-  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date]);
+  };
+
+  useEffect(() => {
+    if (!isBankDepositOpen) return;
+    const cleanup = handleFetchPopupTrigger();
+    return cleanup;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBankDepositOpen, popupDate]);
 
   // --- FIFO CALCULATION ENGINE ---
   const recalculateRow = (row) => {
@@ -219,6 +214,7 @@ export default function DailyStock() {
   // --- HANDLERS ---
   const handleOpenBankDeposit = () => {
     setIsBankDepositOpen(true);
+    setPopupDate(selectedDate);
     setExpenseForm(prev => ({ ...prev, date: selectedDate }));
     setCollectionForm(prev => ({ ...prev, date: selectedDate }));
   };
@@ -242,7 +238,6 @@ export default function DailyStock() {
     dragOverItem.current = null;
   };
 
-  // Input change modified to use FIFO recalculator
   const handleInputChange = (brandId, field, value) => {
     const numericValue = value === '' ? '' : parseInt(value) || 0;
 
@@ -328,7 +323,7 @@ export default function DailyStock() {
     setIsSaving(false);
   };
 
-  // --- POPUP SUBMITS (RESTORED) ---
+  // --- POPUP SUBMITS ---
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -338,7 +333,7 @@ export default function DailyStock() {
     }]);
     if (!error) { 
       setExpenseForm({ ...expenseForm, description: '', amount: '' }); 
-      fetchPopupData(expenseForm.date); 
+      handleFetchPopupTrigger(); 
       handleFetchTrigger(); 
     }
     setIsSubmitting(false);
@@ -353,7 +348,8 @@ export default function DailyStock() {
     }]);
     if (!error) { 
       setCollectionForm({ ...collectionForm, description: '', amount: '' }); 
-      fetchPopupData(collectionForm.date); 
+      handleFetchPopupTrigger();
+      handleFetchTrigger(); 
     }
     setIsSubmitting(false);
   };
@@ -430,7 +426,16 @@ export default function DailyStock() {
         
         <div className="flex flex-wrap items-center gap-3">
           <div className="header-date-picker flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
-            <DatePicker selected={selectedDate} onChange={(date) => setSelectedDate(date)} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} />
+            <DatePicker 
+              selected={selectedDate} 
+              onChange={(date) => setSelectedDate(date)} 
+              maxDate={new Date()} 
+              dateFormat="dd/MM/yy" 
+              customInput={<CustomDateInput />} 
+              showMonthDropdown
+              showYearDropdown
+              dropdownMode="select"
+            />
           </div>
           
           <button onClick={handleOpenBankDeposit} className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
@@ -528,7 +533,7 @@ export default function DailyStock() {
                 ))
               )}
             </tbody>
-            {/* FIXED ALIGNED TOTALS ROW */}
+            {/* ENHANCED FOOTER WITH NET CASH CALCULATIONS */}
             {stockRows.length > 0 && !loading && (
               <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                 <tr>
@@ -541,6 +546,20 @@ export default function DailyStock() {
                   <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</td>
                   <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{dailySummary.totalRevenue.toLocaleString()}</td>
                 </tr>
+                <tr>
+                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
+                  <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
+                </tr>
+                <tr>
+                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
+                  <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
+                </tr>
+                <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
+                  <td colSpan="6" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
+                  <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
+                    ₹{(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections).toLocaleString()}
+                  </td>
+                </tr>
               </tfoot>
             )}
           </table>
@@ -549,7 +568,7 @@ export default function DailyStock() {
 
       {/* --- ADD PURCHASE MODAL (FIFO ENGINE) --- */}
       {purchaseModal.isOpen && (
-        <div className="fixed inset-0 z-9999 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 99999 }}>
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
@@ -605,15 +624,17 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* --- BANK DEPOSIT POPUP (MODAL RESTORED COMPLETELY) --- */}
+      {/* --- BANK DEPOSIT & EXPENSES POPUP (MODAL) --- */}
       {isBankDepositOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-9999">
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 99999 }}>
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
             
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
-              <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
-              </h3>
+              <div className="flex items-center gap-4">
+                <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
+                </h3>
+              </div>
               <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
             
@@ -631,7 +652,16 @@ export default function DailyStock() {
                       <form onSubmit={handleAddExpense} className="space-y-4 animate-in fade-in zoom-in duration-200">
                         <div className="form-date-picker">
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Date</label>
-                          <DatePicker selected={expenseForm.date} onChange={(date) => setExpenseForm({ ...expenseForm, date })} dateFormat="dd/MM/yy" className={inputClass} customInput={<FormDateInput className={inputClass} />} />
+                          <DatePicker 
+                            selected={expenseForm.date} 
+                            onChange={(date) => { setExpenseForm({ ...expenseForm, date }); setPopupDate(date); }} 
+                            dateFormat="dd/MM/yy" 
+                            className={inputClass} 
+                            customInput={<FormDateInput className={inputClass} />} 
+                            showMonthDropdown
+                            showYearDropdown
+                            dropdownMode="select"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
@@ -647,7 +677,16 @@ export default function DailyStock() {
                       <form onSubmit={handleAddCollection} className="space-y-4 animate-in fade-in zoom-in duration-200">
                         <div className="form-date-picker">
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Date</label>
-                          <DatePicker selected={collectionForm.date} onChange={(date) => setCollectionForm({ ...collectionForm, date })} dateFormat="dd/MM/yy" className={inputClass} customInput={<FormDateInput className={inputClass} />} />
+                          <DatePicker 
+                            selected={collectionForm.date} 
+                            onChange={(date) => { setCollectionForm({ ...collectionForm, date }); setPopupDate(date); }} 
+                            dateFormat="dd/MM/yy" 
+                            className={inputClass} 
+                            customInput={<FormDateInput className={inputClass} />} 
+                            showMonthDropdown
+                            showYearDropdown
+                            dropdownMode="select"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>

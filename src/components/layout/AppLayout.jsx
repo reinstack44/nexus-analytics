@@ -4,7 +4,7 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext'; 
 import { useTranslation } from 'react-i18next'; 
-import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, Wine, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText } from 'lucide-react'; // Added FileText import
+import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, Wine, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText } from 'lucide-react';
 
 export default function AppLayout() {
   const { user } = useAuth();
@@ -39,14 +39,13 @@ export default function AppLayout() {
     setIsLangMenuOpen(false);
   };
 
-  // NAYE ROUTES KE HISAB SE NAVIGATION ITEMS (Added Reports)
   const navItems = [
     { name: t('sidebar.dashboard', 'Dashboard'), path: '/', icon: LayoutDashboard },
     { name: t('sidebar.brands', 'Brand Master'), path: '/brands', icon: Tag },
     { name: t('sidebar.purchases', 'Purchases & Traders'), path: '/purchases', icon: ShoppingCart },
     { name: t('sidebar.stock', 'Daily Stock (Sale)'), path: '/daily-stock', icon: Package },
     { name: t('sidebar.profitloss', 'Profit & Loss'), path: '/profit-loss', icon: TrendingUp },
-    { name: t('sidebar.reports', 'Reports'), path: '/reports', icon: FileText }, // New Reports route
+    { name: t('sidebar.reports', 'Reports'), path: '/reports', icon: FileText }, 
   ];
 
   return (
@@ -120,7 +119,7 @@ export default function AppLayout() {
                 </span>
 
                 {isCollapsed && !isMobile && (
-                  <div className="absolute left-14 bg-slate-800 text-white text-xs font-semibold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-100 border border-slate-700 shadow-xl ml-2 pointer-events-none">
+                  <div className="absolute left-14 bg-slate-800 text-white text-xs font-semibold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap border border-slate-700 shadow-xl ml-2 pointer-events-none" style={{ zIndex: 100 }}>
                     {item.name}
                   </div>
                 )}
@@ -142,7 +141,7 @@ export default function AppLayout() {
             </span>
             
             {isCollapsed && !isMobile && (
-              <div className="absolute left-14 bg-red-900/90 text-red-100 text-xs font-semibold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-100 border border-red-800 shadow-xl ml-2 pointer-events-none">
+              <div className="absolute left-14 bg-red-900/90 text-red-100 text-xs font-semibold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap border border-red-800 shadow-xl ml-2 pointer-events-none" style={{ zIndex: 100 }}>
                 {t('sidebar.logout', 'Logout System')}
               </div>
             )}
@@ -182,7 +181,7 @@ export default function AppLayout() {
               </button>
               
               {isLangMenuOpen && (
-                <div className="absolute right-0 mt-2 w-36 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-lg py-2 z-99999">
+                <div className="absolute right-0 mt-2 w-36 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-lg py-2" style={{ zIndex: 99999 }}>
                   <button onClick={() => changeLanguage('en')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'en' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>English</button>
                   <button onClick={() => changeLanguage('hi')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'hi' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>हिन्दी (Hindi)</button>
                   <button onClick={() => changeLanguage('mr')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'mr' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>मराठी (Marathi)</button>
@@ -212,7 +211,8 @@ export default function AppLayout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 scroll-smooth z-10" onClick={() => setIsLangMenuOpen(false)}>
+        {/* FIX: Z-index 10 is removed to prevent modal clipping issues */}
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 scroll-smooth" onClick={() => setIsLangMenuOpen(false)}>
           <div className="max-w-7xl mx-auto">
             <Outlet />
           </div>
