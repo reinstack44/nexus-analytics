@@ -225,14 +225,6 @@ export default function DailyStock() {
     setEditingCollectionId(null);
   };
 
-  const handlePopupDateChange = (date) => {
-    setPopupDate(date);
-    setExpenseForm(prev => ({ ...prev, date }));
-    setCollectionForm(prev => ({ ...prev, date }));
-    setEditingExpenseId(null);
-    setEditingCollectionId(null);
-  };
-
   const handleSort = async () => {
     if (dragItem.current === null || dragOverItem.current === null) return;
     if (dragItem.current === dragOverItem.current) return; 
@@ -433,7 +425,6 @@ export default function DailyStock() {
     setIsSubmitting(false);
   };
 
-
   // --- CALCULATE TABLE TOTALS ---
   const tableTotalOpening = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
   const tableTotalPurchases = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
@@ -584,21 +575,26 @@ export default function DailyStock() {
                       <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-xs text-slate-500 dark:text-slate-400">{row.bottle_size} | ₹{row.selling_price} base rate</span>
-                        {row.purchase_qty > 0 && row.purchase_price !== row.selling_price && (
-                          <span className="text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-500 px-1.5 py-0.5 rounded-md">New: ₹{row.purchase_price}</span>
-                        )}
+                        {/* Removed the amber badge to avoid redundancy with the new green badge under the button */}
                       </div>
                     </td>
                     <td className="px-4 py-4 text-center">
                       <input type="number" value={row.opening_balance} onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500`} />
                     </td>
-                    <td className="px-4 py-4 text-center">
-                      <button 
-                        onClick={() => openPurchaseModal(row)}
-                        className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
-                      >
-                        {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
-                      </button>
+                    <td className="px-4 py-4">
+                      <div className="flex flex-col items-center justify-center gap-1.5">
+                        <button 
+                          onClick={() => openPurchaseModal(row)}
+                          className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                        >
+                          {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
+                        </button>
+                        {row.purchase_qty > 0 && row.purchase_price !== row.selling_price && (
+                          <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800 whitespace-nowrap">
+                            {row.purchase_qty} = ₹{row.purchase_price}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-4 text-center">
                       <input type="number" min="0" placeholder="Qty" value={row.closing_balance} onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500`} />
@@ -627,11 +623,11 @@ export default function DailyStock() {
                   <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{dailySummary.totalRevenue.toLocaleString()}</td>
                 </tr>
                 <tr>
-                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">(-) Business Expenses :</td>
+                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
                   <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
                 </tr>
                 <tr>
-                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">(-) Online Collected :</td>
+                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
                   <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
                 </tr>
                 <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
@@ -714,18 +710,6 @@ export default function DailyStock() {
                 <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
                 </h3>
-                <div className="header-date-picker flex items-center gap-2 bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-inner">
-                  <DatePicker 
-                    selected={popupDate} 
-                    onChange={handlePopupDateChange} 
-                    maxDate={new Date()} 
-                    dateFormat="dd/MM/yy" 
-                    customInput={<CustomDateInput />} 
-                    showMonthDropdown
-                    showYearDropdown
-                    dropdownMode="select"
-                  />
-                </div>
               </div>
               <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
