@@ -18,6 +18,14 @@ export default function AppLayout() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
 
+  // Function to get dynamic greeting
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good Morning ☀️";
+    if (hour < 17) return "Good Afternoon 🌤️";
+    return "Good Evening 🔮";
+  };
+
   useEffect(() => {
     const handleResize = () => {
       const mobile = window.innerWidth < 1024;
@@ -163,8 +171,9 @@ export default function AppLayout() {
               </button>
             )}
             
+            {/* Dynamic Greeting Heading */}
             <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight hidden sm:block transition-colors duration-300">
-              {t('header.ownerPortal', 'Welcome Owner..')}
+              {getGreeting()}
             </h1>
           </div>
           
@@ -211,7 +220,6 @@ export default function AppLayout() {
           </div>
         </header>
 
-        {/* FIX: Z-index 10 is removed to prevent modal clipping issues */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 scroll-smooth" onClick={() => setIsLangMenuOpen(false)}>
           <div className="max-w-7xl mx-auto">
             <Outlet />
