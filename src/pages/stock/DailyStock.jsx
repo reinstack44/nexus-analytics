@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2 } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -115,23 +115,43 @@ export default function DailyStock() {
 
           let purchaseQty = 0; 
           let opening = baseOpening;
+          let pPrice = brand.selling_price; // Default fallback to base rate
 
           if (existingStock && existingStock.opening_balance !== null && existingStock.opening_balance !== undefined) {
             opening = existingStock.opening_balance;
             purchaseQty = opening - baseOpening;
             if (purchaseQty < 0) purchaseQty = 0; 
+            
+            // Re-hydrate the new purchase price from DB
+            if (existingStock.unit_price) {
+              pPrice = parseFloat(existingStock.unit_price);
+            }
           }
 
           const closing = existingStock?.closing_balance !== null && existingStock?.closing_balance !== undefined ? existingStock.closing_balance : ''; 
           
-          let salesQty = 0;
-          let salesAmount = 0;
+          // Execute Initial FIFO
+          let sQty = 0;
+          let sAmt = 0;
           if (closing !== '') {
-            salesQty = opening - parseInt(closing);
-            salesQty = salesQty < 0 ? 0 : salesQty; 
-            salesAmount = salesQty * brand.selling_price;
-            totalQty += salesQty;
-            totalRev += salesAmount;
+            sQty = opening - parseInt(closing);
+            sQty = sQty < 0 ? 0 : sQty; 
+            
+            let remainingSales = sQty;
+            
+            // Sell old stock first
+            const qtyFromOld = Math.min(remainingSales, baseOpening);
+            sAmt += qtyFromOld * parseFloat(brand.selling_price);
+            remainingSales -= qtyFromOld;
+
+            // Sell new stock second
+            if (remainingSales > 0 && purchaseQty > 0) {
+              const qtyFromNew = Math.min(remainingSales, purchaseQty);
+              sAmt += qtyFromNew * parseFloat(pPrice);
+            }
+
+            totalQty += sQty;
+            totalRev += sAmt;
           }
 
           return {
@@ -139,13 +159,13 @@ export default function DailyStock() {
             brand_name: brand.brand_name,
             bottle_size: brand.bottle_size,
             selling_price: brand.selling_price,
-            purchase_price: brand.selling_price, 
+            purchase_price: pPrice, 
             base_opening: baseOpening,
             purchase_qty: purchaseQty,
             opening_balance: opening,
             closing_balance: closing,
-            sales_qty: salesQty,
-            sales_amount: salesAmount,
+            sales_qty: sQty,
+            sales_amount: sAmt,
           };
         });
 
@@ -165,11 +185,22 @@ export default function DailyStock() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // --- FETCH POPUP DATA ---
-  const handleFetchPopupTrigger = () => {
+  const fetchPopupData = async (dateToFetch) => {
+    const dateStr = formatDateForDB(dateToFetch);
+    const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
+    const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('date', dateStr).order('created_at', { ascending: false });
+    
+    if (expData) setExpenses(expData);
+    if (collData) setCollections(collData);
+  };
+
+  useEffect(() => {
     let isMounted = true;
-    const fetchPopupData = async () => {
-      const dateStr = formatDateForDB(popupDate);
+    const loadData = async () => {
+      if (!isBankDepositOpen) return;
+      const dateToFetch = popupTab === 'expense' ? expenseForm.date : collectionForm.date;
+      const dateStr = formatDateForDB(dateToFetch);
+      
       const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
       const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('date', dateStr).order('created_at', { ascending: false });
       
@@ -178,16 +209,9 @@ export default function DailyStock() {
         if (collData) setCollections(collData);
       }
     };
-    fetchPopupData();
+    loadData();
     return () => { isMounted = false; };
-  };
-
-  useEffect(() => {
-    if (!isBankDepositOpen) return;
-    const cleanup = handleFetchPopupTrigger();
-    return cleanup;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isBankDepositOpen, popupDate]);
+  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date]);
 
   // --- FIFO CALCULATION ENGINE ---
   const recalculateRow = (row) => {
@@ -223,6 +247,27 @@ export default function DailyStock() {
     setCollectionForm(prev => ({ ...prev, date: selectedDate }));
     setEditingExpenseId(null);
     setEditingCollectionId(null);
+  };
+
+  const handleResetDay = () => {
+    if (!window.confirm("Are you sure you want to reset all entries for this date? This will clear all manual inputs.")) return;
+    
+    setStockRows(prevRows => {
+      const resetRows = prevRows.map(row => {
+        let updatedRow = {
+          ...row,
+          purchase_qty: 0,
+          purchase_price: row.selling_price,
+          opening_balance: row.base_opening,
+          closing_balance: ''
+        };
+        updatedRow = recalculateRow(updatedRow);
+        return updatedRow;
+      });
+
+      setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
+      return resetRows;
+    });
   };
 
   const handleSort = async () => {
@@ -317,6 +362,7 @@ export default function DailyStock() {
       user_id: user.id, date: currentDateStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
+      unit_price: parseFloat(row.purchase_price) || 0 // Save the new purchase price directly
     }));
 
     const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
@@ -344,7 +390,7 @@ export default function DailyStock() {
       if (!error) { 
         setEditingExpenseId(null);
         setExpenseForm({ date: popupDate, description: '', amount: '' }); 
-        handleFetchPopupTrigger(); handleFetchTrigger(); 
+        fetchPopupData(expenseForm.date); handleFetchTrigger(); 
       }
     } else {
       const { error } = await supabase.from('expenses').insert([{
@@ -353,7 +399,7 @@ export default function DailyStock() {
       }]);
       if (!error) { 
         setExpenseForm({ ...expenseForm, description: '', amount: '' }); 
-        handleFetchPopupTrigger(); handleFetchTrigger(); 
+        fetchPopupData(expenseForm.date); handleFetchTrigger(); 
       }
     }
     setIsSubmitting(false);
@@ -372,7 +418,7 @@ export default function DailyStock() {
     if (!window.confirm("Are you sure you want to delete this expense?")) return;
     setIsSubmitting(true);
     const { error } = await supabase.from('expenses').delete().eq('id', id);
-    if (!error) { handleFetchPopupTrigger(); handleFetchTrigger(); }
+    if (!error) { fetchPopupData(expenseForm.date); handleFetchTrigger(); }
     setIsSubmitting(false);
   };
 
@@ -392,7 +438,7 @@ export default function DailyStock() {
       if (!error) { 
         setEditingCollectionId(null);
         setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); 
-        handleFetchPopupTrigger(); handleFetchTrigger(); 
+        fetchPopupData(collectionForm.date); handleFetchTrigger(); 
       }
     } else {
       const { error } = await supabase.from('owner_withdrawals').insert([{
@@ -401,7 +447,7 @@ export default function DailyStock() {
       }]);
       if (!error) { 
         setCollectionForm({ ...collectionForm, description: '', amount: '' }); 
-        handleFetchPopupTrigger(); handleFetchTrigger();
+        fetchPopupData(collectionForm.date); handleFetchTrigger();
       }
     }
     setIsSubmitting(false);
@@ -421,7 +467,7 @@ export default function DailyStock() {
     if (!window.confirm("Are you sure you want to delete this collection entry?")) return;
     setIsSubmitting(true);
     const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id);
-    if (!error) { handleFetchPopupTrigger(); handleFetchTrigger(); }
+    if (!error) { fetchPopupData(collectionForm.date); handleFetchTrigger(); }
     setIsSubmitting(false);
   };
 
@@ -512,6 +558,10 @@ export default function DailyStock() {
           <button onClick={handleOpenBankDeposit} className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
             <Landmark size={18} /> Expenses & Bank Deposit Entry
           </button>
+          
+          <button onClick={handleResetDay} className="flex items-center gap-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 dark:hover:bg-amber-900/30 dark:hover:text-amber-400 transition-all shadow-sm">
+            <RotateCcw size={18} /> Reset Entries
+          </button>
 
           <button onClick={handleSaveStock} disabled={isSaving} className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
             <Save size={18} /> {isSaving ? 'Saving...' : 'Save Ledger'}
@@ -575,7 +625,6 @@ export default function DailyStock() {
                       <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-xs text-slate-500 dark:text-slate-400">{row.bottle_size} | ₹{row.selling_price} base rate</span>
-                        {/* Removed the amber badge to avoid redundancy with the new green badge under the button */}
                       </div>
                     </td>
                     <td className="px-4 py-4 text-center">
@@ -589,11 +638,16 @@ export default function DailyStock() {
                         >
                           {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
                         </button>
-                        {row.purchase_qty > 0 && row.purchase_price !== row.selling_price && (
-                          <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800 whitespace-nowrap">
-                            {row.purchase_qty} = ₹{row.purchase_price}
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-[9px] font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-md whitespace-nowrap border border-slate-200 dark:border-slate-700">
+                             Old: {row.base_opening} = ₹{row.selling_price}
                           </span>
-                        )}
+                          {row.purchase_qty > 0 && (
+                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800 whitespace-nowrap">
+                              New: {row.purchase_qty} = ₹{row.purchase_price}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-4 text-center">
