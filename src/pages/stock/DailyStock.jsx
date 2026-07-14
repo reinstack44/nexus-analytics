@@ -42,7 +42,7 @@ export default function DailyStock() {
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0 });
 
   // --- NEW PURCHASE MODAL STATE ---
-  const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '' });
+  const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
 
   // --- POPUP STATES & FORMS ---
   const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
@@ -317,11 +317,13 @@ export default function DailyStock() {
 
   // --- PURCHASE MODAL HANDLERS ---
   const openPurchaseModal = (row) => {
+    const isChanged = row.purchase_qty > 0 && row.purchase_price !== row.selling_price;
     setPurchaseModal({
       isOpen: true,
       brand: row,
       qty: row.purchase_qty || '',
-      price: row.purchase_price || row.selling_price
+      price: row.purchase_price || row.selling_price,
+      isPriceChanged: isChanged
     });
   };
 
@@ -351,7 +353,7 @@ export default function DailyStock() {
       return updatedRows;
     });
 
-    setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '' });
+    setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
   };
 
   const handleSaveStock = async () => {
@@ -362,7 +364,7 @@ export default function DailyStock() {
       user_id: user.id, date: currentDateStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
-      unit_price: parseFloat(row.purchase_price) || 0 // Save the new purchase price directly
+      unit_price: parseFloat(row.purchase_price) || 0 
     }));
 
     const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
@@ -482,7 +484,6 @@ export default function DailyStock() {
   return (
     <div className="space-y-6 transition-colors duration-300 relative">
       
-      {/* Premium Unified DatePicker Styles */}
       <style>{`
         .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
         .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
@@ -520,7 +521,6 @@ export default function DailyStock() {
         }
         .react-datepicker__triangle { display: none !important; }
 
-        /* Dark Mode Overrides */
         .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
         .dark .react-datepicker__month-container { background-color: #1e293b !important; }
         .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
@@ -621,35 +621,38 @@ export default function DailyStock() {
                 stockRows.map((row, index) => (
                   <tr key={row.brand_id} draggable onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
                     <td className="px-3 py-4 text-center cursor-move"><GripVertical size={16} className="text-slate-300 dark:text-slate-600 group-hover:text-blue-500 transition-colors" /></td>
+                    
+                    {/* INLINE SMART TEXT LOGIC APPLIED HERE */}
                     <td className="px-3 py-4">
                       <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-slate-500 dark:text-slate-400">{row.bottle_size} | ₹{row.selling_price} base rate</span>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center flex-wrap gap-1">
+                        <span>{row.bottle_size} |</span>
+                        {row.purchase_qty > 0 && row.purchase_price !== row.selling_price ? (
+                          <span className="inline-flex items-center gap-1.5 ml-1">
+                            <span>Old: {row.base_opening} @ ₹{row.selling_price}</span>
+                            <span className="text-slate-300 dark:text-slate-600">•</span>
+                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} @ ₹{row.purchase_price}</span>
+                          </span>
+                        ) : (
+                          <span className="ml-1">₹{row.selling_price} base rate</span>
+                        )}
                       </div>
                     </td>
+
                     <td className="px-4 py-4 text-center">
                       <input type="number" value={row.opening_balance} onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500`} />
                     </td>
-                    <td className="px-4 py-4">
-                      <div className="flex flex-col items-center justify-center gap-1.5">
-                        <button 
-                          onClick={() => openPurchaseModal(row)}
-                          className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
-                        >
-                          {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
-                        </button>
-                        <div className="flex flex-col items-center gap-1">
-                          <span className="text-[9px] font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-md whitespace-nowrap border border-slate-200 dark:border-slate-700">
-                             Old: {row.base_opening} = ₹{row.selling_price}
-                          </span>
-                          {row.purchase_qty > 0 && (
-                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800 whitespace-nowrap">
-                              New: {row.purchase_qty} = ₹{row.purchase_price}
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                    
+                    {/* ONLY BUTTON HERE NOW */}
+                    <td className="px-4 py-4 text-center">
+                      <button 
+                        onClick={() => openPurchaseModal(row)}
+                        className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                      >
+                        {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
+                      </button>
                     </td>
+
                     <td className="px-4 py-4 text-center">
                       <input type="number" min="0" placeholder="Qty" value={row.closing_balance} onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500`} />
                     </td>
@@ -663,7 +666,7 @@ export default function DailyStock() {
                 ))
               )}
             </tbody>
-            {/* ENHANCED FOOTER WITH NET CASH CALCULATIONS */}
+            {/* FIXED ALIGNED TOTALS ROW */}
             {stockRows.length > 0 && !loading && (
               <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                 <tr>
@@ -696,15 +699,15 @@ export default function DailyStock() {
         </div>
       </div>
 
-      {/* --- ADD PURCHASE MODAL (FIFO ENGINE) --- */}
+      {/* --- ADD PURCHASE MODAL (WITH YES/NO FLOW) --- */}
       {purchaseModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-99999">
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Package size={20} className="text-blue-500" /> Record New Purchase
               </h3>
-              <button onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '' })} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
+              <button onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false })} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
             
             <form onSubmit={handlePurchaseSubmit} className="p-6 space-y-5">
@@ -726,27 +729,55 @@ export default function DailyStock() {
                 />
               </div>
 
-              <div>
-                <label className="flex justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  <span>Selling Price for New Stock (₹)</span>
-                  <span className="text-[10px] text-blue-500 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
-                </label>
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={16}/></span>
-                  <input 
-                    type="number" 
-                    required min="0" step="any" 
-                    value={purchaseModal.price} 
-                    onChange={(e) => setPurchaseModal({...purchaseModal, price: e.target.value})} 
-                    className={`${inputClass} pl-10 font-bold`} 
-                  />
+              <div className="mt-4 border-t border-slate-100 dark:border-slate-800 pt-4">
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Is there a price change for this new stock?</label>
+                <div className="flex flex-col gap-3 mb-2">
+                  <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="priceChange" 
+                      checked={!purchaseModal.isPriceChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: false, price: purchaseModal.brand.selling_price})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600" 
+                    />
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">No, keep base rate (₹{purchaseModal.brand?.selling_price})</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="priceChange" 
+                      checked={purchaseModal.isPriceChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: true})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600" 
+                    />
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different price</span>
+                  </label>
                 </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                  * Note: Previous stock will continue to sell at the old rate. This new rate will only apply to these {purchaseModal.qty || '0'} newly added bottles.
-                </p>
               </div>
 
-              <button type="submit" className="w-full mt-2 bg-blue-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2">
+              {purchaseModal.isPriceChanged && (
+                <div className="animate-in fade-in slide-in-from-top-2 pt-2">
+                  <label className="flex justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    <span>New Selling Price (₹)</span>
+                    <span className="text-[10px] text-blue-500 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={16}/></span>
+                    <input 
+                      type="number" 
+                      required min="0" step="any" 
+                      value={purchaseModal.price} 
+                      onChange={(e) => setPurchaseModal({...purchaseModal, price: e.target.value})} 
+                      className={`${inputClass} pl-10 font-bold border-blue-300 dark:border-blue-800 focus:ring-blue-500`} 
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                    * Note: Previous stock will continue to sell at the old rate. This new rate will only apply to these {purchaseModal.qty || '0'} newly added bottles.
+                  </p>
+                </div>
+              )}
+
+              <button type="submit" className="w-full mt-4 bg-blue-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2">
                 <CheckCircle2 size={18} /> Confirm Addition
               </button>
             </form>
@@ -861,15 +892,7 @@ export default function DailyStock() {
                             </select>
                           </div>
                         </div>
-
-                        {editingCollectionId ? (
-                          <div className="flex gap-3 mt-2">
-                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
-                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">Update Collection</button>
-                          </div>
-                        ) : (
-                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
-                        )}
+                        <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
                       </form>
                     )}
                   </div>
