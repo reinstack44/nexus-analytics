@@ -30,18 +30,26 @@ export default function BrandMaster() {
   // --- NEW: Price Change Effective Date State ---
   const [effectiveDate, setEffectiveDate] = useState(new Date().toISOString().split('T')[0]);
 
-  // Fetch Brands
+  // Fetch Brands (Updated sorting logic to perfectly match DailyStock sequence)
   const fetchBrands = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('brands')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('display_order', { ascending: true }) // First sort by custom user arrangement
+      .order('brand_name', { ascending: true });   // Fallback alphabetical sort
 
     if (error) {
       console.error('Error fetching brands:', error.message);
     } else {
-      setBrands(data || []);
+      // Just in case any null display_orders exist, a JS fallback sort to be absolutely identical
+      const sortedBrands = (data || []).sort((a, b) => {
+        const orderA = a.display_order ?? Number.MAX_SAFE_INTEGER;
+        const orderB = b.display_order ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.brand_name || '').localeCompare(b.brand_name || '');
+      });
+      setBrands(sortedBrands);
     }
     setLoading(false);
   }, []);

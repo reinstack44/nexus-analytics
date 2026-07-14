@@ -1,10 +1,25 @@
 import { useState, useEffect, useCallback, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
-import { Users, Plus, FileText, Calendar, Wallet, ArrowRightLeft, Edit2, Trash2, X } from 'lucide-react';
+import { Users, Plus, FileText, Calendar, Wallet, ArrowRightLeft, Edit2, Trash2, X, ChevronDown, Sigma } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
-// Custom Date Input Box specifically built for DD/MM/YY formatting
+// Premium Custom Dropdown Button Date Picker (For Filters)
+const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
+  <button
+    type="button"
+    onClick={onClick}
+    ref={ref}
+    className="flex items-center px-3 py-2 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 whitespace-nowrap"
+  >
+    <Calendar size={14} className="text-blue-500 mr-2 shrink-0" />
+    {value || placeholder}
+    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-2 shrink-0" />
+  </button>
+));
+CustomDateInput.displayName = "CustomDateInput";
+
+// Custom Date Input Box specifically built for Form Inputs
 const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
   <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left`}>
     <span>{value}</span>
@@ -12,6 +27,15 @@ const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
   </button>
 ));
 FormDateInput.displayName = "FormDateInput";
+
+// Helper function to safely get dates from SessionStorage or fallback to Current Date
+const getInitialFilterDate = (storageKey) => {
+  const savedDate = sessionStorage.getItem(storageKey);
+  if (savedDate) {
+    return new Date(savedDate);
+  }
+  return new Date(); // Current date by default
+};
 
 export default function PurchaseManager() {
   const [activeTab, setActiveTab] = useState('ledger'); 
@@ -22,6 +46,19 @@ export default function PurchaseManager() {
   const [traders, setTraders] = useState([]);
   const [selectedTraderId, setSelectedTraderId] = useState('');
   const [ledgerRows, setStockLedgerRows] = useState([]);
+
+  // Filter Date Range State (Using Session Storage for persistence)
+  const [filterStartDate, setFilterStartDate] = useState(() => getInitialFilterDate('pm_filter_start'));
+  const [filterEndDate, setFilterEndDate] = useState(() => getInitialFilterDate('pm_filter_end'));
+
+  // Save filter dates to session storage whenever they change
+  useEffect(() => {
+    if (filterStartDate) sessionStorage.setItem('pm_filter_start', filterStartDate.toISOString());
+  }, [filterStartDate]);
+
+  useEffect(() => {
+    if (filterEndDate) sessionStorage.setItem('pm_filter_end', filterEndDate.toISOString());
+  }, [filterEndDate]);
 
   // Modal States for Transaction Editing
   const [isEditTxModalOpen, setIsEditTxModalOpen] = useState(false);
@@ -38,13 +75,12 @@ export default function PurchaseManager() {
     name: ''
   });
   
-  // LOGIC: Memory Management for Date Persistence
-  // Get date from memory if it exists, otherwise use today's date
-  const savedDate = localStorage.getItem('purchaseManagerDate');
-  const initialDate = savedDate ? savedDate : new Date().toISOString().split('T')[0];
+  // LOGIC: Memory Management for Entry Form Date Persistence
+  const savedFormDate = localStorage.getItem('purchaseManagerDate');
+  const initialFormDate = savedFormDate ? savedFormDate : new Date().toISOString().split('T')[0];
 
   const [ledgerForm, setLedgerForm] = useState({
-    date: initialDate,
+    date: initialFormDate,
     purchaseAmount: '',
     paidAmount: '',
     manualRemaining: '', 
@@ -63,11 +99,11 @@ export default function PurchaseManager() {
     return `${day}/${month}/${year}`;
   };
 
-  // Custom handler to update form state AND save to browser memory
-  const handleDateChange = (date) => {
+  // Custom handler to update Entry Form Date AND save to browser memory
+  const handleEntryDateChange = (date) => {
     const formattedDBDate = formatForDB(date);
     setLedgerForm({ ...ledgerForm, date: formattedDBDate });
-    localStorage.setItem('purchaseManagerDate', formattedDBDate); // Storing in memory
+    localStorage.setItem('purchaseManagerDate', formattedDBDate); 
   };
 
   // Fetch Traders Master List
@@ -83,15 +119,19 @@ export default function PurchaseManager() {
     setLoading(false);
   }, [selectedTraderId]);
 
-  // Fetch Chronological Account Ledger for selected Trader
+  // Fetch Chronological Account Ledger for selected Trader & Apply Date Filters
   const fetchTraderLedger = useCallback(async () => {
-    if (!selectedTraderId) return;
+    if (!selectedTraderId || !filterStartDate || !filterEndDate) return;
     setLoading(true);
+
+    const startStr = formatForDB(filterStartDate);
+    const endStr = formatForDB(filterEndDate);
 
     const { data: transactions } = await supabase
       .from('trader_transactions')
       .select('*')
       .eq('trader_id', selectedTraderId)
+      .lte('date', endStr) // Fetch up to end date to calculate precise running balance
       .order('date', { ascending: true })
       .order('created_at', { ascending: true });
 
@@ -103,26 +143,30 @@ export default function PurchaseManager() {
         const pAmt = parseFloat(tx.purchase_amount) || 0;
         const paidAmt = parseFloat(tx.paid_amount) || 0;
         
+        // Calculate running balance
         if (tx.manual_remaining !== null && tx.manual_remaining !== undefined) {
           currentRemaining = parseFloat(tx.manual_remaining);
         } else {
           currentRemaining = currentRemaining + pAmt - paidAmt;
         }
 
-        computedLedger.push({
-          id: tx.id,
-          date: tx.date,
-          purchase_amount: pAmt,
-          paid_amount: paidAmt,
-          manual_remaining: tx.manual_remaining,
-          remaining_amount: currentRemaining
-        });
+        // Only push to array if it is greater than or equal to start date filter
+        if (tx.date >= startStr) {
+          computedLedger.push({
+            id: tx.id,
+            date: tx.date,
+            purchase_amount: pAmt,
+            paid_amount: paidAmt,
+            manual_remaining: tx.manual_remaining,
+            remaining_amount: currentRemaining
+          });
+        }
       });
     }
 
     setStockLedgerRows(computedLedger);
     setLoading(false);
-  }, [selectedTraderId]);
+  }, [selectedTraderId, filterStartDate, filterEndDate]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -241,28 +285,64 @@ export default function PurchaseManager() {
     setIsSubmitting(false);
   };
 
+  // --- CALCULATE TOTALS ---
+  const totalPurchase = ledgerRows.reduce((sum, row) => sum + row.purchase_amount, 0);
+  const totalPaid = ledgerRows.reduce((sum, row) => sum + row.paid_amount, 0);
+  const finalRemainingBalance = ledgerRows.length > 0 ? ledgerRows[ledgerRows.length - 1].remaining_amount : 0;
+
   const inputClass = "w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all duration-300 text-sm";
 
   return (
     <div className="space-y-6 transition-colors duration-300">
+      
+      {/* Premium Unified DatePicker Styles */}
       <style>{`
-        .react-datepicker-wrapper { display: block; width: 100%; }
+        .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
+        .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
         .react-datepicker-popper { z-index: 99999 !important; }
-        .react-datepicker { background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 1rem !important; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1) !important; font-family: inherit !important; padding: 0.5rem !important; }
-        .react-datepicker__header { background-color: #ffffff !important; border-bottom: none !important; }
-        .react-datepicker__current-month { color: #1e293b; font-weight: 700; font-size: 0.9rem; }
-        .react-datepicker__day-name { color: #94a3b8 !important; font-weight: 600 !important; }
-        .react-datepicker__day { color: #334155 !important; border-radius: 0.5rem !important; transition: all 0.2s; }
-        .react-datepicker__day:hover { background-color: #f1f5f9 !important; }
-        .react-datepicker__day--selected { background-color: #2563eb !important; color: #ffffff !important; }
+        .react-datepicker { 
+          background-color: #ffffff !important; 
+          border: 1px solid #e2e8f0 !important; 
+          border-radius: 1rem !important; 
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important; 
+          font-family: inherit !important; 
+          padding: 0.5rem !important;
+        }
+        .react-datepicker__month-container { background-color: #ffffff !important; }
+        .react-datepicker__header { 
+          background-color: #ffffff !important; 
+          border-bottom: 1px solid #f1f5f9 !important; 
+          padding-top: 0.5rem !important;
+        }
+        .react-datepicker__current-month, .react-datepicker-time__header, .react-datepicker-year-header { 
+          color: #0f172a !important; font-weight: 700 !important; font-size: 0.95rem !important; margin-bottom: 0.5rem !important;
+        }
+        .react-datepicker__header select {
+          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
+          padding: 0.2rem 0.5rem; font-weight: 600; color: #1e293b; cursor: pointer;
+          margin: 0 0.25rem 0.5rem 0.25rem; outline: none;
+        }
+        .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
+        .react-datepicker__day { 
+          color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important;
+          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important;
+        }
+        .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
+        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { 
+          background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; 
+        }
         .react-datepicker__triangle { display: none !important; }
-        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
-        .dark .react-datepicker__header { background-color: #0f172a !important; }
-        .dark .react-datepicker__current-month { color: #f8fafc !important; }
-        .dark .react-datepicker__day-name { color: #64748b !important; }
-        .dark .react-datepicker__day { color: #cbd5e1 !important; }
-        .dark .react-datepicker__day:hover { background-color: #1e293b !important; }
-        .dark .react-datepicker__day--selected { background-color: #3b82f6 !important; color: #ffffff !important; }
+
+        /* Dark Mode Overrides */
+        .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
+        .dark .react-datepicker__month-container { background-color: #1e293b !important; }
+        .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
+        .dark .react-datepicker__current-month, .dark .react-datepicker-time__header, .dark .react-datepicker-year-header { color: #f8fafc !important; }
+        .dark .react-datepicker__header select { background-color: #334155 !important; color: #f8fafc !important; border-color: #475569 !important; }
+        .dark .react-datepicker__day-name { color: #94a3b8 !important; }
+        .dark .react-datepicker__day { color: #e2e8f0 !important; }
+        .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
       `}</style>
       
       {/* Tabs Header */}
@@ -310,13 +390,16 @@ export default function PurchaseManager() {
                 </select>
               </div>
 
-              <div>
+              <div className="form-date-picker">
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Transaction Date</label>
                 <DatePicker 
                   selected={parseDBDate(ledgerForm.date)} 
-                  onChange={handleDateChange} 
+                  onChange={handleEntryDateChange} 
                   dateFormat="dd/MM/yy" 
-                  customInput={<FormDateInput className={inputClass} />} 
+                  customInput={<FormDateInput className={inputClass} />}
+                  showMonthDropdown
+                  showYearDropdown
+                  dropdownMode="select" 
                 />
               </div>
 
@@ -343,11 +426,39 @@ export default function PurchaseManager() {
 
           {/* Table Ledger Display */}
           <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+            
+            {/* Table Header with Date Slicer */}
+            <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <FileText size={18} className="text-slate-400 dark:text-slate-500" />
                 Statement Account Ledger
               </h3>
+              
+              {/* Filter Date Picker */}
+              <div className="header-date-picker flex items-center gap-2">
+                <DatePicker
+                  selected={filterStartDate}
+                  onChange={(date) => setFilterStartDate(date)}
+                  maxDate={new Date()}
+                  dateFormat="dd/MM/yy"
+                  customInput={<CustomDateInput />}
+                  showMonthDropdown
+                  showYearDropdown
+                  dropdownMode="select"
+                />
+                <span className="text-slate-400 font-medium px-1">to</span>
+                <DatePicker
+                  selected={filterEndDate}
+                  onChange={(date) => setFilterEndDate(date)}
+                  minDate={filterStartDate}
+                  maxDate={new Date()}
+                  dateFormat="dd/MM/yy"
+                  customInput={<CustomDateInput />}
+                  showMonthDropdown
+                  showYearDropdown
+                  dropdownMode="select"
+                />
+              </div>
             </div>
             
             <div className="overflow-x-auto flex-1">
@@ -355,9 +466,9 @@ export default function PurchaseManager() {
                 <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-xs tracking-wider border-b border-slate-100 dark:border-slate-800">
                   <tr>
                     <th className="px-6 py-4">Date</th>
-                    <th className="px-6 py-4 text-center">Purchase Amount</th>
-                    <th className="px-6 py-4 text-center">Paid Amount</th>
-                    <th className="px-6 py-4 text-center text-indigo-600 dark:text-indigo-400">Remaining Balance</th>
+                    <th className="px-6 py-4 text-right">Purchase Amount</th>
+                    <th className="px-6 py-4 text-right">Paid Amount</th>
+                    <th className="px-6 py-4 text-right text-indigo-600 dark:text-indigo-400">Remaining Balance</th>
                     <th className="px-4 py-4 text-center">Actions</th>
                   </tr>
                 </thead>
@@ -365,20 +476,20 @@ export default function PurchaseManager() {
                   {loading ? (
                     <tr><td colSpan="5" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Compiling account nodes...</td></tr>
                   ) : ledgerRows.length === 0 ? (
-                    <tr><td colSpan="5" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No transactions recorded for this trader yet.</td></tr>
+                    <tr><td colSpan="5" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No transactions recorded for this period.</td></tr>
                   ) : (
                     ledgerRows.map((row) => (
                       <tr key={row.id} className="transition-colors duration-200 hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
                         <td className="px-6 py-4 font-medium whitespace-nowrap">
                           {formatAsDDMMYY(row.date)}
                         </td>
-                        <td className="px-6 py-4 text-center font-semibold text-red-600 dark:text-red-400">
+                        <td className="px-6 py-4 text-right font-semibold text-red-600 dark:text-red-400">
                           {row.purchase_amount > 0 ? `₹${row.purchase_amount.toLocaleString()}` : '-'}
                         </td>
-                        <td className="px-6 py-4 text-center font-semibold text-emerald-600 dark:text-emerald-400">
+                        <td className="px-6 py-4 text-right font-semibold text-emerald-600 dark:text-emerald-400">
                           {row.paid_amount > 0 ? `₹${row.paid_amount.toLocaleString()}` : '-'}
                         </td>
-                        <td className="px-6 py-4 text-center font-black text-slate-900 dark:text-white bg-slate-50/30 dark:bg-slate-950/20 text-base">
+                        <td className="px-6 py-4 text-right font-black text-slate-900 dark:text-white bg-slate-50/30 dark:bg-slate-950/20 text-base">
                           ₹{row.remaining_amount.toLocaleString()}
                         </td>
                         <td className="px-4 py-4 text-center">
@@ -403,6 +514,30 @@ export default function PurchaseManager() {
                     ))
                   )}
                 </tbody>
+                
+                {/* --- TOTALS ROW --- */}
+                {ledgerRows.length > 0 && !loading && (
+                  <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
+                    <tr>
+                      <td className="px-6 py-4">
+                        <div className="font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                          <Sigma size={16} className="text-blue-600" /> TOTALS
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-red-600 dark:text-red-400 text-base">
+                        ₹{totalPurchase.toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 text-base">
+                        ₹{totalPaid.toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-slate-900 dark:text-white text-base">
+                        ₹{finalRemainingBalance.toLocaleString()}
+                      </td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                )}
+
               </table>
             </div>
           </div>
@@ -411,7 +546,7 @@ export default function PurchaseManager() {
 
       {/* ================= EDIT TRANSACTION MODAL ================= */}
       {isEditTxModalOpen && (
-        <div className="fixed inset-0 z-100 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 9999 }}>
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center p-5 border-b border-slate-100 dark:border-slate-800">
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
@@ -421,13 +556,16 @@ export default function PurchaseManager() {
             </div>
             
             <form onSubmit={handleEditTxSubmit} className="p-5 space-y-4">
-              <div>
+              <div className="form-date-picker">
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Transaction Date</label>
                 <DatePicker 
                   selected={parseDBDate(editTxForm.date)} 
                   onChange={(date) => setEditTxForm({ ...editTxForm, date: formatForDB(date) })} 
                   dateFormat="dd/MM/yy" 
                   customInput={<FormDateInput className={inputClass} />} 
+                  showMonthDropdown
+                  showYearDropdown
+                  dropdownMode="select" 
                 />
               </div>
               <div>
