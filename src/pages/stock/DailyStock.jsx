@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw, Coffee } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -29,14 +29,21 @@ export default function DailyStock() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
 
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const saved = sessionStorage.getItem('ds_selectedDate');
-    return saved ? new Date(saved) : new Date();
+  // --- SMART DATE RANGE STATE ---
+  const [dateRange, setDateRange] = useState(() => {
+    const savedStart = sessionStorage.getItem('ds_startDate');
+    const savedEnd = sessionStorage.getItem('ds_endDate');
+    return [
+      savedStart ? new Date(savedStart) : new Date(),
+      savedEnd ? new Date(savedEnd) : new Date()
+    ];
   });
+  const [startDate, endDate] = dateRange;
 
   useEffect(() => {
-    if (selectedDate) sessionStorage.setItem('ds_selectedDate', selectedDate.toISOString());
-  }, [selectedDate]);
+    if (startDate) sessionStorage.setItem('ds_startDate', startDate.toISOString());
+    if (endDate) sessionStorage.setItem('ds_endDate', endDate.toISOString());
+  }, [startDate, endDate]);
 
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0 });
@@ -54,7 +61,6 @@ export default function DailyStock() {
   const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
   const [popupDate, setPopupDate] = useState(new Date());
 
-  // Edit Tracking States
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [editingCollectionId, setEditingCollectionId] = useState(null);
 
@@ -70,24 +76,43 @@ export default function DailyStock() {
     return `${year}-${month}-${day}`;
   };
 
-  // --- FETCH MAIN DAILY STOCK ---
+  // --- FETCH MAIN DAILY STOCK (GAP BRIDGING LOGIC) ---
   const handleFetchTrigger = () => {
     let isMounted = true;
     const fetchDailyData = async () => {
       setLoading(true);
       setSaveMessage(null);
 
-      const currentDateStr = formatDateForDB(selectedDate);
-      const prevDate = new Date(selectedDate);
-      prevDate.setDate(prevDate.getDate() - 1);
-      const prevDateStr = formatDateForDB(prevDate);
+      const startStr = formatDateForDB(startDate);
+      // If end date is not selected yet (during range selection), fallback to startStr
+      const endStr = endDate ? formatDateForDB(endDate) : startStr;
 
+      // 1. Find the last available entry strictly BEFORE the start date
+      const { data: latestDateData } = await supabase
+        .from('daily_stock')
+        .select('date')
+        .lt('date', startStr)
+        .order('date', { ascending: false })
+        .limit(1);
+
+      let prevDateStr = null;
+      if (latestDateData && latestDateData.length > 0) {
+        prevDateStr = latestDateData[0].date;
+      }
+
+      // Fetch dependencies
       const { data: brandsData } = await supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true });
-      const { data: stockData } = await supabase.from('daily_stock').select('*').eq('date', currentDateStr);
-      const { data: prevStockData } = await supabase.from('daily_stock').select('*').eq('date', prevDateStr);
+      const { data: stockData } = await supabase.from('daily_stock').select('*').eq('date', endStr);
       
-      const { data: expData } = await supabase.from('expenses').select('amount').eq('date', currentDateStr);
-      const { data: collData } = await supabase.from('owner_withdrawals').select('amount').eq('date', currentDateStr);
+      let prevStockData = [];
+      if (prevDateStr) {
+        const { data: pData } = await supabase.from('daily_stock').select('*').eq('date', prevDateStr);
+        if (pData) prevStockData = pData;
+      }
+      
+      // Fetch Expenses & Collections for the selected END date
+      const { data: expData } = await supabase.from('expenses').select('amount').eq('date', endStr);
+      const { data: collData } = await supabase.from('owner_withdrawals').select('amount').eq('date', endStr);
 
       if (!isMounted) return;
 
@@ -115,14 +140,13 @@ export default function DailyStock() {
 
           let purchaseQty = 0; 
           let opening = baseOpening;
-          let pPrice = brand.selling_price; // Default fallback to base rate
+          let pPrice = brand.selling_price; 
 
           if (existingStock && existingStock.opening_balance !== null && existingStock.opening_balance !== undefined) {
             opening = existingStock.opening_balance;
             purchaseQty = opening - baseOpening;
             if (purchaseQty < 0) purchaseQty = 0; 
             
-            // Re-hydrate the new purchase price from DB
             if (existingStock.unit_price) {
               pPrice = parseFloat(existingStock.unit_price);
             }
@@ -130,7 +154,6 @@ export default function DailyStock() {
 
           const closing = existingStock?.closing_balance !== null && existingStock?.closing_balance !== undefined ? existingStock.closing_balance : ''; 
           
-          // Execute Initial FIFO
           let sQty = 0;
           let sAmt = 0;
           if (closing !== '') {
@@ -138,13 +161,10 @@ export default function DailyStock() {
             sQty = sQty < 0 ? 0 : sQty; 
             
             let remainingSales = sQty;
-            
-            // Sell old stock first
             const qtyFromOld = Math.min(remainingSales, baseOpening);
             sAmt += qtyFromOld * parseFloat(brand.selling_price);
             remainingSales -= qtyFromOld;
 
-            // Sell new stock second
             if (remainingSales > 0 && purchaseQty > 0) {
               const qtyFromNew = Math.min(remainingSales, purchaseQty);
               sAmt += qtyFromNew * parseFloat(pPrice);
@@ -183,7 +203,7 @@ export default function DailyStock() {
     const cleanup = handleFetchTrigger();
     return cleanup;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
+  }, [startDate, endDate]);
 
   const fetchPopupData = async (dateToFetch) => {
     const dateStr = formatDateForDB(dateToFetch);
@@ -224,12 +244,10 @@ export default function DailyStock() {
       
       let remainingSales = sQty;
       
-      // 1. Sell from Base Opening (Old Stock) first
       const qtyFromOld = Math.min(remainingSales, parseInt(row.base_opening));
       sAmt += qtyFromOld * parseFloat(row.selling_price);
       remainingSales -= qtyFromOld;
 
-      // 2. Sell from New Purchase (New Stock) second
       if (remainingSales > 0 && parseInt(row.purchase_qty) > 0) {
         const qtyFromNew = Math.min(remainingSales, parseInt(row.purchase_qty));
         sAmt += qtyFromNew * parseFloat(row.purchase_price);
@@ -242,9 +260,9 @@ export default function DailyStock() {
   // --- HANDLERS ---
   const handleOpenBankDeposit = () => {
     setIsBankDepositOpen(true);
-    setPopupDate(selectedDate);
-    setExpenseForm(prev => ({ ...prev, date: selectedDate }));
-    setCollectionForm(prev => ({ ...prev, date: selectedDate }));
+    setPopupDate(endDate || startDate);
+    setExpenseForm(prev => ({ ...prev, date: endDate || startDate }));
+    setCollectionForm(prev => ({ ...prev, date: endDate || startDate }));
     setEditingExpenseId(null);
     setEditingCollectionId(null);
   };
@@ -254,19 +272,27 @@ export default function DailyStock() {
     
     setStockRows(prevRows => {
       const resetRows = prevRows.map(row => {
-        let updatedRow = {
-          ...row,
-          purchase_qty: 0,
-          purchase_price: row.selling_price,
-          opening_balance: row.base_opening,
-          closing_balance: ''
-        };
+        let updatedRow = { ...row, purchase_qty: 0, purchase_price: row.selling_price, opening_balance: row.base_opening, closing_balance: '' };
         updatedRow = recalculateRow(updatedRow);
         return updatedRow;
       });
-
       setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
       return resetRows;
+    });
+  };
+
+  // --- MARK AS HOLIDAY FEATURE ---
+  const handleMarkHoliday = () => {
+    if (!window.confirm("Mark this period as a Holiday? This will automatically set all Closing Balances equal to Opening Balances (Zero Sales).")) return;
+    
+    setStockRows(prevRows => {
+      const holidayRows = prevRows.map(row => {
+        let updatedRow = { ...row, purchase_qty: 0, closing_balance: row.opening_balance };
+        updatedRow = recalculateRow(updatedRow);
+        return updatedRow;
+      });
+      setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
+      return holidayRows;
     });
   };
 
@@ -296,12 +322,10 @@ export default function DailyStock() {
       const updatedRows = prevRows.map(row => {
         if (row.brand_id === brandId) {
           let updatedRow = { ...row, [field]: numericValue };
-          
           if (field === 'purchase_qty') {
             const currentPurchase = value === '' ? 0 : parseInt(value) || 0;
             updatedRow.opening_balance = updatedRow.base_opening + currentPurchase;
           }
-
           updatedRow = recalculateRow(updatedRow);
           return updatedRow;
         }
@@ -319,11 +343,7 @@ export default function DailyStock() {
   const openPurchaseModal = (row) => {
     const isChanged = row.purchase_qty > 0 && row.purchase_price !== row.selling_price;
     setPurchaseModal({
-      isOpen: true,
-      brand: row,
-      qty: row.purchase_qty || '',
-      price: row.purchase_price || row.selling_price,
-      isPriceChanged: isChanged
+      isOpen: true, brand: row, qty: row.purchase_qty || '', price: row.purchase_price || row.selling_price, isPriceChanged: isChanged
     });
   };
 
@@ -335,12 +355,7 @@ export default function DailyStock() {
     setStockRows(prevRows => {
       const updatedRows = prevRows.map(row => {
         if (row.brand_id === purchaseModal.brand.brand_id) {
-          let updatedRow = { 
-            ...row, 
-            purchase_qty: newQty, 
-            purchase_price: newPrice,
-            opening_balance: row.base_opening + newQty 
-          };
+          let updatedRow = { ...row, purchase_qty: newQty, purchase_price: newPrice, opening_balance: row.base_opening + newQty };
           updatedRow = recalculateRow(updatedRow);
           return updatedRow;
         }
@@ -356,12 +371,15 @@ export default function DailyStock() {
     setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
   };
 
+  // --- SAVE RECORD ---
   const handleSaveStock = async () => {
     setIsSaving(true);
     setSaveMessage(null);
-    const currentDateStr = formatDateForDB(selectedDate);
+    // Automatically save the record on the end date
+    const saveDateStr = formatDateForDB(endDate || startDate);
+    
     const upsertData = stockRows.map(row => ({
-      user_id: user.id, date: currentDateStr, brand_id: row.brand_id,
+      user_id: user.id, date: saveDateStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
       unit_price: parseFloat(row.purchase_price) || 0 
@@ -371,109 +389,53 @@ export default function DailyStock() {
     if (error) {
       setSaveMessage({ type: 'error', text: 'Failed to save stock: ' + error.message });
     } else {
-      setSaveMessage({ type: 'success', text: 'Stock ledger updated successfully!' });
+      setSaveMessage({ type: 'success', text: `Stock ledger saved successfully for ${saveDateStr}!` });
       setTimeout(() => setSaveMessage(null), 3000);
     }
     setIsSaving(false);
   };
 
-  // --- EXPENSE CRUD HANDLERS ---
+  // --- EXPENSE/COLLECTION HANDLERS ---
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    
     if (editingExpenseId) {
       const { error } = await supabase.from('expenses').update({
-        date: formatDateForDB(expenseForm.date),
-        description: expenseForm.description, 
-        amount: parseFloat(expenseForm.amount)
+        date: formatDateForDB(expenseForm.date), description: expenseForm.description, amount: parseFloat(expenseForm.amount)
       }).eq('id', editingExpenseId);
-      
-      if (!error) { 
-        setEditingExpenseId(null);
-        setExpenseForm({ date: popupDate, description: '', amount: '' }); 
-        fetchPopupData(expenseForm.date); handleFetchTrigger(); 
-      }
+      if (!error) { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); fetchPopupData(expenseForm.date); handleFetchTrigger(); }
     } else {
       const { error } = await supabase.from('expenses').insert([{
-        user_id: user.id, date: formatDateForDB(expenseForm.date),
-        description: expenseForm.description, amount: parseFloat(expenseForm.amount)
+        user_id: user.id, date: formatDateForDB(expenseForm.date), description: expenseForm.description, amount: parseFloat(expenseForm.amount)
       }]);
-      if (!error) { 
-        setExpenseForm({ ...expenseForm, description: '', amount: '' }); 
-        fetchPopupData(expenseForm.date); handleFetchTrigger(); 
-      }
+      if (!error) { setExpenseForm({ ...expenseForm, description: '', amount: '' }); fetchPopupData(expenseForm.date); handleFetchTrigger(); }
     }
     setIsSubmitting(false);
   };
 
-  const editExpense = (exp) => {
-    setEditingExpenseId(exp.id);
-    setExpenseForm({
-      date: new Date(exp.date),
-      description: exp.description,
-      amount: exp.amount
-    });
-  };
+  const editExpense = (exp) => { setEditingExpenseId(exp.id); setExpenseForm({ date: new Date(exp.date), description: exp.description, amount: exp.amount }); };
+  const deleteExpense = async (id) => { if (!window.confirm("Are you sure you want to delete this expense?")) return; setIsSubmitting(true); const { error } = await supabase.from('expenses').delete().eq('id', id); if (!error) { fetchPopupData(expenseForm.date); handleFetchTrigger(); } setIsSubmitting(false); };
 
-  const deleteExpense = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this expense?")) return;
-    setIsSubmitting(true);
-    const { error } = await supabase.from('expenses').delete().eq('id', id);
-    if (!error) { fetchPopupData(expenseForm.date); handleFetchTrigger(); }
-    setIsSubmitting(false);
-  };
-
-  // --- COLLECTION CRUD HANDLERS ---
   const handleAddCollection = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-
     if (editingCollectionId) {
       const { error } = await supabase.from('owner_withdrawals').update({
-        date: formatDateForDB(collectionForm.date),
-        description: collectionForm.description, 
-        amount: parseFloat(collectionForm.amount), 
-        withdrawal_mode: collectionForm.mode
+        date: formatDateForDB(collectionForm.date), description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
       }).eq('id', editingCollectionId);
-
-      if (!error) { 
-        setEditingCollectionId(null);
-        setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); 
-        fetchPopupData(collectionForm.date); handleFetchTrigger(); 
-      }
+      if (!error) { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); fetchPopupData(collectionForm.date); handleFetchTrigger(); }
     } else {
       const { error } = await supabase.from('owner_withdrawals').insert([{
-        user_id: user.id, date: formatDateForDB(collectionForm.date),
-        description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
+        user_id: user.id, date: formatDateForDB(collectionForm.date), description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
       }]);
-      if (!error) { 
-        setCollectionForm({ ...collectionForm, description: '', amount: '' }); 
-        fetchPopupData(collectionForm.date); handleFetchTrigger();
-      }
+      if (!error) { setCollectionForm({ ...collectionForm, description: '', amount: '' }); fetchPopupData(collectionForm.date); handleFetchTrigger(); }
     }
     setIsSubmitting(false);
   };
 
-  const editCollection = (coll) => {
-    setEditingCollectionId(coll.id);
-    setCollectionForm({
-      date: new Date(coll.date),
-      description: coll.description,
-      amount: coll.amount,
-      mode: coll.withdrawal_mode
-    });
-  };
+  const editCollection = (coll) => { setEditingCollectionId(coll.id); setCollectionForm({ date: new Date(coll.date), description: coll.description, amount: coll.amount, mode: coll.withdrawal_mode }); };
+  const deleteCollection = async (id) => { if (!window.confirm("Are you sure you want to delete this collection entry?")) return; setIsSubmitting(true); const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id); if (!error) { fetchPopupData(collectionForm.date); handleFetchTrigger(); } setIsSubmitting(false); };
 
-  const deleteCollection = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this collection entry?")) return;
-    setIsSubmitting(true);
-    const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id);
-    if (!error) { fetchPopupData(collectionForm.date); handleFetchTrigger(); }
-    setIsSubmitting(false);
-  };
-
-  // --- CALCULATE TABLE TOTALS ---
   const tableTotalOpening = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
   const tableTotalPurchases = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
   const tableTotalClosing = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
@@ -497,43 +459,28 @@ export default function DailyStock() {
           padding: 0.5rem !important;
         }
         .react-datepicker__month-container { background-color: #ffffff !important; }
-        .react-datepicker__header { 
-          background-color: #ffffff !important; 
-          border-bottom: 1px solid #f1f5f9 !important; 
-          padding-top: 0.5rem !important;
-        }
-        .react-datepicker__current-month, .react-datepicker-time__header, .react-datepicker-year-header { 
-          color: #0f172a !important; font-weight: 700 !important; font-size: 0.95rem !important; margin-bottom: 0.5rem !important;
-        }
-        .react-datepicker__header select {
-          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
-          padding: 0.2rem 0.5rem; font-weight: 600; color: #1e293b; cursor: pointer;
-          margin: 0 0.25rem 0.5rem 0.25rem; outline: none;
-        }
+        .react-datepicker__header { background-color: #ffffff !important; border-bottom: 1px solid #f1f5f9 !important; padding-top: 0.5rem !important; }
+        .react-datepicker__current-month { color: #0f172a !important; font-weight: 700 !important; font-size: 0.95rem !important; margin-bottom: 0.5rem !important; }
         .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
-        .react-datepicker__day { 
-          color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important;
-          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important;
-        }
+        .react-datepicker__day { color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important; line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; }
         .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
-        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { 
-          background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; 
-        }
+        .react-datepicker__day--selected, .react-datepicker__day--in-range, .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; }
+        .react-datepicker__day--in-selecting-range { background-color: #93c5fd !important; color: #0f172a !important; }
         .react-datepicker__triangle { display: none !important; }
-
+        
         .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
         .dark .react-datepicker__month-container { background-color: #1e293b !important; }
         .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
-        .dark .react-datepicker__current-month, .dark .react-datepicker-time__header, .dark .react-datepicker-year-header { color: #f8fafc !important; }
-        .dark .react-datepicker__header select { background-color: #334155 !important; color: #f8fafc !important; border-color: #475569 !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
         .dark .react-datepicker__day-name { color: #94a3b8 !important; }
         .dark .react-datepicker__day { color: #e2e8f0 !important; }
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--in-range { background-color: #3b82f6 !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--in-selecting-range { background-color: #1e40af !important; color: #e2e8f0 !important; }
       `}</style>
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-50 relative">
+      <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-50 relative">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
             <Package className="text-blue-500" /> Daily Stock Ledger
@@ -541,29 +488,35 @@ export default function DailyStock() {
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing stock to generate sales.</p>
         </div>
         
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          
+          {/* UPDATED DATE PICKER TO SUPPORT RANGES */}
           <div className="header-date-picker flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
             <DatePicker 
-              selected={selectedDate} 
-              onChange={(date) => setSelectedDate(date)} 
+              selectsRange={true}
+              startDate={startDate}
+              endDate={endDate}
+              onChange={(update) => setDateRange(update)}
               maxDate={new Date()} 
-              dateFormat="dd/MM/yy" 
-              customInput={<CustomDateInput />} 
-              showMonthDropdown
-              showYearDropdown
-              dropdownMode="select"
+              dateFormat="dd/MMM/yy" 
+              customInput={<CustomDateInput placeholder="Select Period" />} 
+              isClearable={false}
             />
           </div>
           
-          <button onClick={handleOpenBankDeposit} className="flex items-center gap-2 bg-emerald-600 text-white px-2 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
-            <Landmark size={18} /> Expenses & Bank Deposit Entry
+          <button onClick={handleMarkHoliday} className="flex items-center gap-2 bg-orange-500 text-white px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm">
+            <Coffee size={18} /> Mark Holiday
           </button>
           
-          <button onClick={handleResetDay} className="flex items-center gap-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 dark:hover:bg-amber-900/30 dark:hover:text-amber-400 transition-all shadow-sm">
-            <RotateCcw size={18} />
+          <button onClick={() => setIsBankDepositOpen(true)} className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
+            <Landmark size={18} /> Expenses & Cash
+          </button>
+          
+          <button onClick={handleResetDay} className="flex items-center gap-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 transition-all shadow-sm">
+            <RotateCcw size={18} /> Reset
           </button>
 
-          <button onClick={handleSaveStock} disabled={isSaving} className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
+          <button onClick={handleSaveStock} disabled={isSaving} className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
             <Save size={18} /> {isSaving ? 'Saving...' : 'Save Ledger'}
           </button>
         </div>
@@ -701,7 +654,7 @@ export default function DailyStock() {
 
       {/* --- ADD PURCHASE MODAL (WITH YES/NO FLOW) --- */}
       {purchaseModal.isOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-99999 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
@@ -796,7 +749,7 @@ export default function DailyStock() {
                   <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
                 </h3>
               </div>
-              <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
+              <button onClick={handleOpenBankDeposit} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
             
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
@@ -892,7 +845,15 @@ export default function DailyStock() {
                             </select>
                           </div>
                         </div>
-                        <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
+
+                        {editingCollectionId ? (
+                          <div className="flex gap-3 mt-2">
+                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">Update Collection</button>
+                          </div>
+                        ) : (
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
+                        )}
                       </form>
                     )}
                   </div>
