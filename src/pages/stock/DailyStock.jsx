@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -44,7 +44,7 @@ export default function DailyStock() {
   // --- NEW PURCHASE MODAL STATE ---
   const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '' });
 
-  // --- POPUP STATES ---
+  // --- POPUP STATES & FORMS ---
   const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
   const [popupTab, setPopupTab] = useState('expense');
   const [expenses, setExpenses] = useState([]);
@@ -53,6 +53,10 @@ export default function DailyStock() {
   const [expenseForm, setExpenseForm] = useState({ date: new Date(), description: '', amount: '' });
   const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
   const [popupDate, setPopupDate] = useState(new Date());
+
+  // Edit Tracking States
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [editingCollectionId, setEditingCollectionId] = useState(null);
 
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
@@ -217,6 +221,16 @@ export default function DailyStock() {
     setPopupDate(selectedDate);
     setExpenseForm(prev => ({ ...prev, date: selectedDate }));
     setCollectionForm(prev => ({ ...prev, date: selectedDate }));
+    setEditingExpenseId(null);
+    setEditingCollectionId(null);
+  };
+
+  const handlePopupDateChange = (date) => {
+    setPopupDate(date);
+    setExpenseForm(prev => ({ ...prev, date }));
+    setCollectionForm(prev => ({ ...prev, date }));
+    setEditingExpenseId(null);
+    setEditingCollectionId(null);
   };
 
   const handleSort = async () => {
@@ -323,36 +337,102 @@ export default function DailyStock() {
     setIsSaving(false);
   };
 
-  // --- POPUP SUBMITS ---
+  // --- EXPENSE CRUD HANDLERS ---
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    const { error } = await supabase.from('expenses').insert([{
-      user_id: user.id, date: formatDateForDB(expenseForm.date),
-      description: expenseForm.description, amount: parseFloat(expenseForm.amount)
-    }]);
-    if (!error) { 
-      setExpenseForm({ ...expenseForm, description: '', amount: '' }); 
-      handleFetchPopupTrigger(); 
-      handleFetchTrigger(); 
+    
+    if (editingExpenseId) {
+      const { error } = await supabase.from('expenses').update({
+        date: formatDateForDB(expenseForm.date),
+        description: expenseForm.description, 
+        amount: parseFloat(expenseForm.amount)
+      }).eq('id', editingExpenseId);
+      
+      if (!error) { 
+        setEditingExpenseId(null);
+        setExpenseForm({ date: popupDate, description: '', amount: '' }); 
+        handleFetchPopupTrigger(); handleFetchTrigger(); 
+      }
+    } else {
+      const { error } = await supabase.from('expenses').insert([{
+        user_id: user.id, date: formatDateForDB(expenseForm.date),
+        description: expenseForm.description, amount: parseFloat(expenseForm.amount)
+      }]);
+      if (!error) { 
+        setExpenseForm({ ...expenseForm, description: '', amount: '' }); 
+        handleFetchPopupTrigger(); handleFetchTrigger(); 
+      }
     }
     setIsSubmitting(false);
   };
 
+  const editExpense = (exp) => {
+    setEditingExpenseId(exp.id);
+    setExpenseForm({
+      date: new Date(exp.date),
+      description: exp.description,
+      amount: exp.amount
+    });
+  };
+
+  const deleteExpense = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this expense?")) return;
+    setIsSubmitting(true);
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (!error) { handleFetchPopupTrigger(); handleFetchTrigger(); }
+    setIsSubmitting(false);
+  };
+
+  // --- COLLECTION CRUD HANDLERS ---
   const handleAddCollection = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    const { error } = await supabase.from('owner_withdrawals').insert([{
-      user_id: user.id, date: formatDateForDB(collectionForm.date),
-      description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
-    }]);
-    if (!error) { 
-      setCollectionForm({ ...collectionForm, description: '', amount: '' }); 
-      handleFetchPopupTrigger();
-      handleFetchTrigger(); 
+
+    if (editingCollectionId) {
+      const { error } = await supabase.from('owner_withdrawals').update({
+        date: formatDateForDB(collectionForm.date),
+        description: collectionForm.description, 
+        amount: parseFloat(collectionForm.amount), 
+        withdrawal_mode: collectionForm.mode
+      }).eq('id', editingCollectionId);
+
+      if (!error) { 
+        setEditingCollectionId(null);
+        setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); 
+        handleFetchPopupTrigger(); handleFetchTrigger(); 
+      }
+    } else {
+      const { error } = await supabase.from('owner_withdrawals').insert([{
+        user_id: user.id, date: formatDateForDB(collectionForm.date),
+        description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
+      }]);
+      if (!error) { 
+        setCollectionForm({ ...collectionForm, description: '', amount: '' }); 
+        handleFetchPopupTrigger(); handleFetchTrigger();
+      }
     }
     setIsSubmitting(false);
   };
+
+  const editCollection = (coll) => {
+    setEditingCollectionId(coll.id);
+    setCollectionForm({
+      date: new Date(coll.date),
+      description: coll.description,
+      amount: coll.amount,
+      mode: coll.withdrawal_mode
+    });
+  };
+
+  const deleteCollection = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this collection entry?")) return;
+    setIsSubmitting(true);
+    const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id);
+    if (!error) { handleFetchPopupTrigger(); handleFetchTrigger(); }
+    setIsSubmitting(false);
+  };
+
 
   // --- CALCULATE TABLE TOTALS ---
   const tableTotalOpening = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
@@ -547,11 +627,11 @@ export default function DailyStock() {
                   <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{dailySummary.totalRevenue.toLocaleString()}</td>
                 </tr>
                 <tr>
-                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
+                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">(-) Business Expenses :</td>
                   <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
                 </tr>
                 <tr>
-                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
+                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">(-) Online Collected :</td>
                   <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
                 </tr>
                 <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
@@ -568,7 +648,7 @@ export default function DailyStock() {
 
       {/* --- ADD PURCHASE MODAL (FIFO ENGINE) --- */}
       {purchaseModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 99999 }}>
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-99999">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
@@ -626,7 +706,7 @@ export default function DailyStock() {
 
       {/* --- BANK DEPOSIT & EXPENSES POPUP (MODAL) --- */}
       {isBankDepositOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 99999 }}>
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-99999">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
             
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
@@ -634,6 +714,18 @@ export default function DailyStock() {
                 <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
                 </h3>
+                <div className="header-date-picker flex items-center gap-2 bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-inner">
+                  <DatePicker 
+                    selected={popupDate} 
+                    onChange={handlePopupDateChange} 
+                    maxDate={new Date()} 
+                    dateFormat="dd/MM/yy" 
+                    customInput={<CustomDateInput />} 
+                    showMonthDropdown
+                    showYearDropdown
+                    dropdownMode="select"
+                  />
+                </div>
               </div>
               <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
@@ -643,8 +735,26 @@ export default function DailyStock() {
                 
                 <div className="bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit overflow-hidden">
                   <div className="flex border-b border-slate-100 dark:border-slate-800">
-                    <button onClick={() => setPopupTab('expense')} className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'expense' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>Business Expense</button>
-                    <button onClick={() => setPopupTab('collection')} className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'collection' ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>Online Collection</button>
+                    <button 
+                      onClick={() => {
+                        setPopupTab('expense');
+                        setEditingCollectionId(null);
+                        setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+                      }} 
+                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'expense' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                    >
+                      Business Expense
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setPopupTab('collection');
+                        setEditingExpenseId(null);
+                        setExpenseForm({ date: popupDate, description: '', amount: '' });
+                      }} 
+                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'collection' ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                    >
+                      Online Collection
+                    </button>
                   </div>
 
                   <div className="p-6">
@@ -654,7 +764,7 @@ export default function DailyStock() {
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Date</label>
                           <DatePicker 
                             selected={expenseForm.date} 
-                            onChange={(date) => { setExpenseForm({ ...expenseForm, date }); setPopupDate(date); }} 
+                            onChange={(date) => { setExpenseForm({ ...expenseForm, date }); }} 
                             dateFormat="dd/MM/yy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
@@ -671,7 +781,15 @@ export default function DailyStock() {
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Amount (₹)</label>
                           <input type="number" required min="1" step="any" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                         </div>
-                        <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-red-600 text-white font-medium py-2.5 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2"><Plus size={18}/> Add Expense</button>
+                        
+                        {editingExpenseId ? (
+                          <div className="flex gap-3 mt-2">
+                            <button type="button" onClick={() => { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">Update Expense</button>
+                          </div>
+                        ) : (
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-red-600 text-white font-medium py-2.5 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2"><Plus size={18}/> Add Expense</button>
+                        )}
                       </form>
                     ) : (
                       <form onSubmit={handleAddCollection} className="space-y-4 animate-in fade-in zoom-in duration-200">
@@ -679,7 +797,7 @@ export default function DailyStock() {
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Date</label>
                           <DatePicker 
                             selected={collectionForm.date} 
-                            onChange={(date) => { setCollectionForm({ ...collectionForm, date }); setPopupDate(date); }} 
+                            onChange={(date) => { setCollectionForm({ ...collectionForm, date }); }} 
                             dateFormat="dd/MM/yy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
@@ -705,7 +823,15 @@ export default function DailyStock() {
                             </select>
                           </div>
                         </div>
-                        <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
+
+                        {editingCollectionId ? (
+                          <div className="flex gap-3 mt-2">
+                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">Update Collection</button>
+                          </div>
+                        ) : (
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
+                        )}
                       </form>
                     )}
                   </div>
@@ -726,11 +852,12 @@ export default function DailyStock() {
                           <th className="px-6 py-4">Description</th>
                           {popupTab === 'collection' && <th className="px-6 py-4 text-center">Mode</th>}
                           <th className="px-6 py-4 text-right">Amount (₹)</th>
+                          <th className="px-4 py-4 text-center">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {(popupTab === 'expense' ? expenses : collections).length === 0 ? (
-                          <tr><td colSpan={popupTab === 'collection' ? 3 : 2} className="px-6 py-12 text-center text-slate-400">No records found for selected date.</td></tr>
+                          <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">No records found for selected date.</td></tr>
                         ) : (
                           (popupTab === 'expense' ? expenses : collections).map((row) => (
                             <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
@@ -744,6 +871,12 @@ export default function DailyStock() {
                               )}
                               <td className={`px-6 py-4 text-right font-bold ${popupTab === 'expense' ? 'text-red-600 dark:text-red-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
                                 ₹{parseFloat(row.amount).toLocaleString()}
+                              </td>
+                              <td className="px-4 py-4 text-center">
+                                <div className="flex justify-center gap-2">
+                                  <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"><Edit2 size={16} /></button>
+                                  <button onClick={() => popupTab === 'expense' ? deleteExpense(row.id) : deleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                </div>
                               </td>
                             </tr>
                           ))
