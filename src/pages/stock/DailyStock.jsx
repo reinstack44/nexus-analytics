@@ -541,7 +541,7 @@ export default function DailyStock() {
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing stock to generate sales.</p>
         </div>
         
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-1">
           <div className="header-date-picker flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
             <DatePicker 
               selected={selectedDate} 
@@ -555,15 +555,15 @@ export default function DailyStock() {
             />
           </div>
           
-          <button onClick={handleOpenBankDeposit} className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
+          <button onClick={handleOpenBankDeposit} className="flex items-center gap-2 bg-emerald-600 text-white px-2 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
             <Landmark size={18} /> Expenses & Bank Deposit Entry
           </button>
           
           <button onClick={handleResetDay} className="flex items-center gap-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 dark:hover:bg-amber-900/30 dark:hover:text-amber-400 transition-all shadow-sm">
-            <RotateCcw size={18} /> Reset Entries
+            <RotateCcw size={18} />
           </button>
 
-          <button onClick={handleSaveStock} disabled={isSaving} className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
+          <button onClick={handleSaveStock} disabled={isSaving} className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
             <Save size={18} /> {isSaving ? 'Saving...' : 'Save Ledger'}
           </button>
         </div>
