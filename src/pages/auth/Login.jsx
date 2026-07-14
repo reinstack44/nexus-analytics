@@ -57,7 +57,7 @@ export default function Login() {
                 <Wine className="text-white" size={24} />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white tracking-tight">Elixir Analytics</h3>
+                <h3 className="text-xl font-bold text-white tracking-tight">Nexus Diary</h3>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="relative flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -118,7 +118,7 @@ export default function Login() {
 
           <div className="text-center lg:text-left mb-8">
             <h2 className="text-2xl sm:text-3xl font-black text-slate-800 dark:text-white tracking-tight">
-              Owner Login
+              Log In
             </h2>
             <p className="text-slate-500 dark:text-slate-400 mt-2 text-sm font-medium">
               Securely access your business dashboard.
@@ -149,7 +149,7 @@ export default function Login() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className={inputClass}
-                  placeholder="admin@elixirstore.com"
+                  placeholder="Enter your email"
                 />
               </div>
             </div>
@@ -193,7 +193,7 @@ export default function Login() {
           {/* Footer Note */}
           <div className="mt-12 text-center lg:text-left">
             <p className="text-[11px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-              © {new Date().getFullYear()} Elixir Analytics HQ
+              © {new Date().getFullYear()} Nexus Diary
             </p>
           </div>
           

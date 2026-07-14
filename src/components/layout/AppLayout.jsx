@@ -81,7 +81,7 @@ export default function AppLayout() {
               </div>
             </div>
             <span className={`ml-3 text-lg font-bold text-white tracking-wide transition-all duration-300 ${isCollapsed ? 'opacity-0 w-0 hidden lg:block' : 'opacity-100 w-auto'}`}>
-              {t('header.brandName', 'Nexus Diary')}
+              Nexus Diary
             </span>
           </div>
           
