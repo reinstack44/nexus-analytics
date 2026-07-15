@@ -1,21 +1,49 @@
 import { useState, useEffect, useRef, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw, Coffee } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw, Coffee, CalendarOff, Info } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
-const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
-  <button type="button" onClick={onClick} ref={ref} className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 whitespace-nowrap w-full sm:w-auto">
-    <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
-    {value || placeholder}
-    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3 shrink-0" />
-  </button>
-));
+const formatDisplayDate = (dateObj) => {
+  if (!dateObj) return '';
+  const d = new Date(dateObj);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
+};
+
+const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => {
+  let displayValue = value || placeholder;
+  
+  if (value && value.includes(' - ')) {
+    const dates = value.split(' - ');
+    if (dates.length === 2) {
+      if (dates[0] === dates[1]) {
+        displayValue = dates[0];
+      } else {
+        const startParts = dates[0].split(' ');
+        const endParts = dates[1].split(' ');
+        if (startParts[1] === endParts[1] && startParts[2] === endParts[2]) {
+          displayValue = `${startParts[0]} - ${dates[1]}`;
+        }
+      }
+    }
+  }
+
+  return (
+    <button type="button" onClick={onClick} ref={ref} className="flex items-center justify-between px-3 py-2 h-10.5 w-52.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap">
+      <div className="flex items-center overflow-hidden">
+        <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
+        <span className="truncate">{displayValue}</span>
+      </div>
+      <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-2 shrink-0" />
+    </button>
+  );
+});
 CustomDateInput.displayName = "CustomDateInput";
 
 const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
-  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left`}>
+  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left h-10.5`}>
     <span>{value}</span>
     <Calendar size={16} className="text-slate-400" />
   </button>
@@ -28,6 +56,7 @@ export default function DailyStock() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0); 
 
   // --- SMART DATE RANGE STATE ---
   const [dateRange, setDateRange] = useState(() => {
@@ -48,24 +77,27 @@ export default function DailyStock() {
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0 });
 
-  // --- NEW PURCHASE MODAL STATE ---
-  const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
+  // --- CUSTOM CONFIRM MODAL STATE ---
+  const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', isDanger: false, onConfirm: null });
+  const closeConfirm = () => setConfirmModal({ ...confirmModal, isOpen: false });
 
-  // --- POPUP STATES & FORMS ---
-  const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
-  const [popupTab, setPopupTab] = useState('expense');
-  const [expenses, setExpenses] = useState([]);
-  const [collections, setCollections] = useState([]);
+  // --- HOLIDAY & RANGE LOCKING STATES ---
+  const [markedHolidays, setMarkedHolidays] = useState(() => {
+    const saved = localStorage.getItem('ds_markedHolidays');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [lockedRanges, setLockedRanges] = useState(() => {
+    const saved = localStorage.getItem('ds_lockedRanges');
+    return saved ? JSON.parse(saved) : [];
+  });
 
-  const [expenseForm, setExpenseForm] = useState({ date: new Date(), description: '', amount: '' });
-  const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
-  const [popupDate, setPopupDate] = useState(new Date());
+  useEffect(() => {
+    localStorage.setItem('ds_markedHolidays', JSON.stringify(markedHolidays));
+  }, [markedHolidays]);
 
-  const [editingExpenseId, setEditingExpenseId] = useState(null);
-  const [editingCollectionId, setEditingCollectionId] = useState(null);
-
-  const dragItem = useRef(null);
-  const dragOverItem = useRef(null);
+  useEffect(() => {
+    localStorage.setItem('ds_lockedRanges', JSON.stringify(lockedRanges));
+  }, [lockedRanges]);
 
   const formatDateForDB = (dateObj) => {
     if (!dateObj) return '';
@@ -76,18 +108,92 @@ export default function DailyStock() {
     return `${year}-${month}-${day}`;
   };
 
-  // --- FETCH MAIN DAILY STOCK (GAP BRIDGING LOGIC) ---
-  const handleFetchTrigger = () => {
+  const getDatesInRange = (start, end) => {
+    const dates = [];
+    let current = new Date(start);
+    const last = new Date(end || start);
+    current.setHours(0,0,0,0);
+    last.setHours(0,0,0,0);
+    
+    while (current <= last) {
+      dates.push(formatDateForDB(current));
+      current.setDate(current.getDate() + 1);
+    }
+    return dates;
+  };
+
+  const selectedDates = getDatesInRange(startDate, endDate);
+  const isHolidaySelected = selectedDates.some(d => markedHolidays.includes(d));
+  const isMultiDayRange = startDate && endDate && formatDateForDB(startDate) !== formatDateForDB(endDate);
+
+  // --- AUTO-FORWARD RANGE LOCKING & SNAPPING LOGIC ---
+  const handleDateSelection = (update) => {
+    const [newStart, newEnd] = update;
+    
+    if (newStart && newEnd) {
+       const datesToSelect = getDatesInRange(newStart, newEnd);
+
+       // 1. Prevent Overlapping locked ranges completely
+       const overlappingRange = lockedRanges.find(r => 
+          datesToSelect.some(d => d >= r.start && d <= r.end)
+       );
+       if (overlappingRange) {
+          setDateRange([new Date(overlappingRange.start), new Date(overlappingRange.end)]);
+          return;
+       }
+
+       // 2. Prevent mixing Holidays and Non-Holidays
+       const hasHolidays = datesToSelect.some(d => markedHolidays.includes(d));
+       const hasNonHolidays = datesToSelect.some(d => !markedHolidays.includes(d));
+
+       if (hasHolidays && hasNonHolidays) {
+          // SNAP EXACTLY TO THE NEW CLICKED DATE (Reject the range formulation)
+          setDateRange([newEnd, newEnd]);
+          return;
+       }
+
+    } else if (newStart) {
+       // Single click behavior check
+       const dateStr = formatDateForDB(newStart);
+       const overlappingRange = lockedRanges.find(r => dateStr >= r.start && dateStr <= r.end);
+       if (overlappingRange) {
+          setDateRange([new Date(overlappingRange.start), new Date(overlappingRange.end)]);
+          return;
+       }
+    }
+    setDateRange(update);
+  };
+
+  // --- POPUP STATES & FORMS ---
+  const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
+  const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
+  const [popupTab, setPopupTab] = useState('expense');
+  const [expenses, setExpenses] = useState([]);
+  const [collections, setCollections] = useState([]);
+  const [expenseForm, setExpenseForm] = useState({ date: new Date(), description: '', amount: '' });
+  const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+  const [popupDate, setPopupDate] = useState(new Date());
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [editingCollectionId, setEditingCollectionId] = useState(null);
+
+  const dragItem = useRef(null);
+  const dragOverItem = useRef(null);
+
+  // --- FETCH MAIN DAILY STOCK ---
+  useEffect(() => {
     let isMounted = true;
+
     const fetchDailyData = async () => {
+      await Promise.resolve(); // Clears sync effect warning
+      if (!isMounted) return;
+      
       setLoading(true);
       setSaveMessage(null);
 
       const startStr = formatDateForDB(startDate);
-      // If end date is not selected yet (during range selection), fallback to startStr
       const endStr = endDate ? formatDateForDB(endDate) : startStr;
 
-      // 1. Find the last available entry strictly BEFORE the start date
+      // GET THE DIRECT PREVIOUS DAY'S ENTRY (Holiday or Working)
       const { data: latestDateData } = await supabase
         .from('daily_stock')
         .select('date')
@@ -95,12 +201,8 @@ export default function DailyStock() {
         .order('date', { ascending: false })
         .limit(1);
 
-      let prevDateStr = null;
-      if (latestDateData && latestDateData.length > 0) {
-        prevDateStr = latestDateData[0].date;
-      }
+      let prevDateStr = latestDateData?.[0]?.date || null;
 
-      // Fetch dependencies
       const { data: brandsData } = await supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true });
       const { data: stockData } = await supabase.from('daily_stock').select('*').eq('date', endStr);
       
@@ -110,9 +212,8 @@ export default function DailyStock() {
         if (pData) prevStockData = pData;
       }
       
-      // Fetch Expenses & Collections for the selected END date
-      const { data: expData } = await supabase.from('expenses').select('amount').eq('date', endStr);
-      const { data: collData } = await supabase.from('owner_withdrawals').select('amount').eq('date', endStr);
+      const { data: expData } = await supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr);
+      const { data: collData } = await supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr);
 
       if (!isMounted) return;
 
@@ -140,20 +241,32 @@ export default function DailyStock() {
 
           let purchaseQty = 0; 
           let opening = baseOpening;
+          let closing = '';
           let pPrice = brand.selling_price; 
 
-          if (existingStock && existingStock.opening_balance !== null && existingStock.opening_balance !== undefined) {
-            opening = existingStock.opening_balance;
-            purchaseQty = opening - baseOpening;
-            if (purchaseQty < 0) purchaseQty = 0; 
+          if (existingStock) {
+            let recordedPurchase = 0;
+            if (existingStock.opening_balance !== null && existingStock.opening_balance !== undefined) {
+              recordedPurchase = existingStock.opening_balance - baseOpening;
+            }
+            
+            if (recordedPurchase > 0) {
+              purchaseQty = recordedPurchase;
+            }
+
+            opening = baseOpening + purchaseQty;
+
+            // Strict check: Only show closing if explicitly entered (not a fresh day)
+            if (existingStock.closing_balance !== null && existingStock.closing_balance !== undefined) {
+              closing = existingStock.closing_balance;
+              if (closing > opening) closing = opening;
+            }
             
             if (existingStock.unit_price) {
               pPrice = parseFloat(existingStock.unit_price);
             }
           }
 
-          const closing = existingStock?.closing_balance !== null && existingStock?.closing_balance !== undefined ? existingStock.closing_balance : ''; 
-          
           let sQty = 0;
           let sAmt = 0;
           if (closing !== '') {
@@ -195,16 +308,17 @@ export default function DailyStock() {
       setLoading(false);
     };
     
-    fetchDailyData();
+    if (!isHolidaySelected) {
+      fetchDailyData();
+    } else {
+      // If it's a holiday, skip processing calculations directly for UI (screen is locked)
+      setTimeout(() => { if (isMounted) setLoading(false); }, 0);
+    }
+    
     return () => { isMounted = false; };
-  };
+  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays]);
 
-  useEffect(() => {
-    const cleanup = handleFetchTrigger();
-    return cleanup;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startDate, endDate]);
-
+  // --- FETCH POPUP DATA ---
   const fetchPopupData = async (dateToFetch) => {
     const dateStr = formatDateForDB(dateToFetch);
     const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
@@ -233,7 +347,7 @@ export default function DailyStock() {
     return () => { isMounted = false; };
   }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date]);
 
-  // --- FIFO CALCULATION ENGINE ---
+  // --- CALCULATION ENGINE ---
   const recalculateRow = (row) => {
     let sQty = 0;
     let sAmt = 0;
@@ -267,33 +381,94 @@ export default function DailyStock() {
     setEditingCollectionId(null);
   };
 
-  const handleResetDay = () => {
-    if (!window.confirm("Are you sure you want to reset all entries for this date? This will clear all manual inputs.")) return;
-    
-    setStockRows(prevRows => {
-      const resetRows = prevRows.map(row => {
-        let updatedRow = { ...row, purchase_qty: 0, purchase_price: row.selling_price, opening_balance: row.base_opening, closing_balance: '' };
-        updatedRow = recalculateRow(updatedRow);
-        return updatedRow;
-      });
-      setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
-      return resetRows;
+  const openResetConfirm = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Daily Entries?',
+      message: 'Are you sure you want to reset all manual entries for this period? This will clear all added purchases and closing balances.',
+      isDanger: true,
+      onConfirm: () => {
+        setStockRows(prevRows => {
+          const resetRows = prevRows.map(row => {
+            let updatedRow = { ...row, purchase_qty: 0, purchase_price: row.selling_price, opening_balance: row.base_opening, closing_balance: '' };
+            updatedRow = recalculateRow(updatedRow);
+            return updatedRow;
+          });
+          setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
+          return resetRows;
+        });
+        closeConfirm();
+      }
     });
   };
 
-  // --- MARK AS HOLIDAY FEATURE ---
-  const handleMarkHoliday = () => {
-    if (!window.confirm("Mark this period as a Holiday? This will automatically set all Closing Balances equal to Opening Balances (Zero Sales).")) return;
-    
-    setStockRows(prevRows => {
-      const holidayRows = prevRows.map(row => {
-        let updatedRow = { ...row, purchase_qty: 0, closing_balance: row.opening_balance };
-        updatedRow = recalculateRow(updatedRow);
-        return updatedRow;
-      });
-      setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
-      return holidayRows;
+  const openHolidayConfirm = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Declare as Holiday?',
+      message: 'Marking this period as a holiday will automatically lock sales generation and carry forward opening balances as closing balances.',
+      isDanger: false,
+      onConfirm: async () => {
+        setIsSaving(true);
+        const newHolidays = [...new Set([...markedHolidays, ...selectedDates])];
+        setMarkedHolidays(newHolidays);
+        
+        const holidayRows = stockRows.map(row => {
+          let updatedRow = { ...row, purchase_qty: 0, closing_balance: row.opening_balance };
+          updatedRow = recalculateRow(updatedRow);
+          return updatedRow;
+        });
+        
+        setStockRows(holidayRows);
+        setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
+
+        try {
+          const upsertPromises = selectedDates.map(dateStr => {
+             const upsertData = holidayRows.map(row => ({
+                user_id: user.id, 
+                date: dateStr, 
+                brand_id: row.brand_id,
+                opening_balance: parseInt(row.opening_balance) || 0,
+                closing_balance: parseInt(row.closing_balance) || 0,
+                unit_price: parseFloat(row.purchase_price) || 0 
+             }));
+             return supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
+          });
+          await Promise.all(upsertPromises);
+        } catch (error) {
+          console.error("Holiday DB Save Error:", error);
+        }
+
+        setIsSaving(false);
+        closeConfirm();
+      }
     });
+  };
+
+  // 100% Instant DB Nullification upon unmarking holiday
+  const handleRemoveHoliday = async () => {
+    setIsSaving(true);
+    const newHolidays = markedHolidays.filter(date => !selectedDates.includes(date));
+    setMarkedHolidays(newHolidays);
+
+    try {
+      const resetPromises = selectedDates.map(dateStr => {
+         const resetData = stockRows.map(row => ({
+            user_id: user.id, 
+            date: dateStr, 
+            brand_id: row.brand_id,
+            opening_balance: parseInt(row.opening_balance) || 0,
+            closing_balance: null, // Wipe closing balance to allow fresh entry
+            unit_price: parseFloat(row.purchase_price) || 0 
+         }));
+         return supabase.from('daily_stock').upsert(resetData, { onConflict: 'date, brand_id, user_id' });
+      });
+      await Promise.all(resetPromises);
+      setRefreshTrigger(prev => prev + 1); // Triggers re-fetch for absolute accuracy
+    } catch (error) {
+      console.error("Error unlocking holiday:", error);
+    }
+    setIsSaving(false);
   };
 
   const handleSort = async () => {
@@ -309,7 +484,7 @@ export default function DailyStock() {
       const updatePromises = _stockRows.map((row, index) => supabase.from('brands').update({ display_order: index }).eq('id', row.brand_id));
       await Promise.all(updatePromises);
     } catch (error) {
-      console.error("Error saving new sequence to database:", error);
+      console.error("Error saving new sequence:", error);
     }
     dragItem.current = null;
     dragOverItem.current = null;
@@ -339,12 +514,9 @@ export default function DailyStock() {
     });
   };
 
-  // --- PURCHASE MODAL HANDLERS ---
   const openPurchaseModal = (row) => {
     const isChanged = row.purchase_qty > 0 && row.purchase_price !== row.selling_price;
-    setPurchaseModal({
-      isOpen: true, brand: row, qty: row.purchase_qty || '', price: row.purchase_price || row.selling_price, isPriceChanged: isChanged
-    });
+    setPurchaseModal({ isOpen: true, brand: row, qty: row.purchase_qty || '', price: row.purchase_price || row.selling_price, isPriceChanged: isChanged });
   };
 
   const handlePurchaseSubmit = (e) => {
@@ -371,15 +543,19 @@ export default function DailyStock() {
     setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
   };
 
-  // --- SAVE RECORD ---
   const handleSaveStock = async () => {
     setIsSaving(true);
     setSaveMessage(null);
-    // Automatically save the record on the end date
-    const saveDateStr = formatDateForDB(endDate || startDate);
+    const startStr = formatDateForDB(startDate);
+    const endStr = formatDateForDB(endDate || startDate);
     
+    if (startStr !== endStr) {
+      const newRanges = lockedRanges.filter(r => r.start !== startStr && r.end !== endStr);
+      setLockedRanges([...newRanges, { start: startStr, end: endStr }]);
+    }
+
     const upsertData = stockRows.map(row => ({
-      user_id: user.id, date: saveDateStr, brand_id: row.brand_id,
+      user_id: user.id, date: endStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
       unit_price: parseFloat(row.purchase_price) || 0 
@@ -389,13 +565,13 @@ export default function DailyStock() {
     if (error) {
       setSaveMessage({ type: 'error', text: 'Failed to save stock: ' + error.message });
     } else {
-      setSaveMessage({ type: 'success', text: `Stock ledger saved successfully for ${saveDateStr}!` });
+      setSaveMessage({ type: 'success', text: `Stock ledger saved successfully for the period!` });
       setTimeout(() => setSaveMessage(null), 3000);
     }
     setIsSaving(false);
   };
 
-  // --- EXPENSE/COLLECTION HANDLERS ---
+  // --- EXPENSE/COLLECTION LOGIC ---
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -403,18 +579,33 @@ export default function DailyStock() {
       const { error } = await supabase.from('expenses').update({
         date: formatDateForDB(expenseForm.date), description: expenseForm.description, amount: parseFloat(expenseForm.amount)
       }).eq('id', editingExpenseId);
-      if (!error) { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); fetchPopupData(expenseForm.date); handleFetchTrigger(); }
+      if (!error) { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); fetchPopupData(expenseForm.date); setRefreshTrigger(prev => prev + 1); }
     } else {
       const { error } = await supabase.from('expenses').insert([{
         user_id: user.id, date: formatDateForDB(expenseForm.date), description: expenseForm.description, amount: parseFloat(expenseForm.amount)
       }]);
-      if (!error) { setExpenseForm({ ...expenseForm, description: '', amount: '' }); fetchPopupData(expenseForm.date); handleFetchTrigger(); }
+      if (!error) { setExpenseForm({ ...expenseForm, description: '', amount: '' }); fetchPopupData(expenseForm.date); setRefreshTrigger(prev => prev + 1); }
     }
     setIsSubmitting(false);
   };
 
   const editExpense = (exp) => { setEditingExpenseId(exp.id); setExpenseForm({ date: new Date(exp.date), description: exp.description, amount: exp.amount }); };
-  const deleteExpense = async (id) => { if (!window.confirm("Are you sure you want to delete this expense?")) return; setIsSubmitting(true); const { error } = await supabase.from('expenses').delete().eq('id', id); if (!error) { fetchPopupData(expenseForm.date); handleFetchTrigger(); } setIsSubmitting(false); };
+  
+  const openDeleteExpense = (id) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Expense?',
+      message: 'This expense record will be permanently deleted.',
+      isDanger: true,
+      onConfirm: async () => {
+        setIsSubmitting(true); 
+        const { error } = await supabase.from('expenses').delete().eq('id', id); 
+        if (!error) { fetchPopupData(expenseForm.date); setRefreshTrigger(prev => prev + 1); } 
+        setIsSubmitting(false);
+        closeConfirm();
+      }
+    });
+  };
 
   const handleAddCollection = async (e) => {
     e.preventDefault();
@@ -423,18 +614,33 @@ export default function DailyStock() {
       const { error } = await supabase.from('owner_withdrawals').update({
         date: formatDateForDB(collectionForm.date), description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
       }).eq('id', editingCollectionId);
-      if (!error) { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); fetchPopupData(collectionForm.date); handleFetchTrigger(); }
+      if (!error) { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); fetchPopupData(collectionForm.date); setRefreshTrigger(prev => prev + 1); }
     } else {
       const { error } = await supabase.from('owner_withdrawals').insert([{
         user_id: user.id, date: formatDateForDB(collectionForm.date), description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
       }]);
-      if (!error) { setCollectionForm({ ...collectionForm, description: '', amount: '' }); fetchPopupData(collectionForm.date); handleFetchTrigger(); }
+      if (!error) { setCollectionForm({ ...collectionForm, description: '', amount: '' }); fetchPopupData(collectionForm.date); setRefreshTrigger(prev => prev + 1); }
     }
     setIsSubmitting(false);
   };
 
   const editCollection = (coll) => { setEditingCollectionId(coll.id); setCollectionForm({ date: new Date(coll.date), description: coll.description, amount: coll.amount, mode: coll.withdrawal_mode }); };
-  const deleteCollection = async (id) => { if (!window.confirm("Are you sure you want to delete this collection entry?")) return; setIsSubmitting(true); const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id); if (!error) { fetchPopupData(collectionForm.date); handleFetchTrigger(); } setIsSubmitting(false); };
+  
+  const openDeleteCollection = (id) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Collection?',
+      message: 'This collection entry will be permanently removed.',
+      isDanger: true,
+      onConfirm: async () => {
+        setIsSubmitting(true); 
+        const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id); 
+        if (!error) { fetchPopupData(collectionForm.date); setRefreshTrigger(prev => prev + 1); } 
+        setIsSubmitting(false);
+        closeConfirm();
+      }
+    });
+  };
 
   const tableTotalOpening = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
   const tableTotalPurchases = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
@@ -443,6 +649,11 @@ export default function DailyStock() {
   const inputClass = "w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-semibold";
   const numInputClass = "w-20 px-2 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm text-center font-bold";
 
+  const highlightedHolidayDates = markedHolidays.map(dateStr => {
+    const [year, month, day] = dateStr.split('-');
+    return new Date(year, month - 1, day);
+  });
+
   return (
     <div className="space-y-6 transition-colors duration-300 relative">
       
@@ -450,6 +661,7 @@ export default function DailyStock() {
         .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
         .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
         .react-datepicker-popper { z-index: 99999 !important; }
+        
         .react-datepicker { 
           background-color: #ffffff !important; 
           border: 1px solid #e2e8f0 !important; 
@@ -458,9 +670,24 @@ export default function DailyStock() {
           font-family: inherit !important; 
           padding: 0.5rem !important;
         }
+        
+        /* Dropdown Styling */
+        .react-datepicker__month-select, .react-datepicker__year-select {
+          background-color: #f8fafc !important;
+          border: 1px solid #cbd5e1 !important;
+          border-radius: 0.5rem !important;
+          padding: 0.2rem 0.5rem !important;
+          color: #1e293b !important;
+          font-weight: 600 !important;
+          cursor: pointer !important;
+          outline: none !important;
+        }
+
         .react-datepicker__month-container { background-color: #ffffff !important; }
         .react-datepicker__header { background-color: #ffffff !important; border-bottom: 1px solid #f1f5f9 !important; padding-top: 0.5rem !important; }
-        .react-datepicker__current-month { color: #0f172a !important; font-weight: 700 !important; font-size: 0.95rem !important; margin-bottom: 0.5rem !important; }
+        .react-datepicker__current-month { display: none !important; } 
+        .react-datepicker__header__dropdown { margin-top: 5px; margin-bottom: 10px; display: flex; justify-content: center; gap: 8px; font-size: 0.95rem; }
+        
         .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
         .react-datepicker__day { color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important; line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; }
         .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
@@ -468,57 +695,100 @@ export default function DailyStock() {
         .react-datepicker__day--in-selecting-range { background-color: #93c5fd !important; color: #0f172a !important; }
         .react-datepicker__triangle { display: none !important; }
         
+        .react-datepicker__day--highlighted-holiday {
+          background-color: #f97316 !important; 
+          color: #ffffff !important;
+          font-weight: bold !important;
+        }
+        
+        /* Dark Mode Theme */
         .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
         .dark .react-datepicker__month-container { background-color: #1e293b !important; }
         .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
-        .dark .react-datepicker__current-month { color: #f8fafc !important; }
         .dark .react-datepicker__day-name { color: #94a3b8 !important; }
         .dark .react-datepicker__day { color: #e2e8f0 !important; }
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--selected, .dark .react-datepicker__day--in-range { background-color: #3b82f6 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--in-selecting-range { background-color: #1e40af !important; color: #e2e8f0 !important; }
+        
+        .dark .react-datepicker__day--highlighted-holiday { background-color: #ea580c !important; }
+
+        /* Dark Mode Fixes for Dropdowns */
+        .dark .react-datepicker__month-select, .dark .react-datepicker__year-select {
+          background-color: #0f172a !important;
+          border-color: #334155 !important;
+          color: #f8fafc !important;
+        }
+        .dark .react-datepicker__month-select option, .dark .react-datepicker__year-select option {
+          background-color: #0f172a !important;
+          color: #f8fafc !important;
+        }
       `}</style>
 
-      {/* Header */}
-      <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-50 relative">
-        <div>
+      {/* GLOBAL CONFIRM MODAL */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-99999 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-w-sm w-full transform scale-100 transition-transform">
+            <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">{confirmModal.title}</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">{confirmModal.message}</p>
+            <div className="flex gap-3">
+              <button onClick={closeConfirm} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors">
+                Cancel
+              </button>
+              <button onClick={confirmModal.onConfirm} className={`flex-1 px-4 py-2.5 text-white rounded-xl font-bold transition-colors shadow-sm ${confirmModal.isDanger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header Container */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-50 relative">
+        <div className="shrink-0">
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
             <Package className="text-blue-500" /> Daily Stock Ledger
           </h2>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing stock to generate sales.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing stock.</p>
         </div>
         
-        <div className="flex flex-wrap items-center gap-2">
-          
-          {/* UPDATED DATE PICKER TO SUPPORT RANGES */}
-          <div className="header-date-picker flex items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
-            <DatePicker 
-              selectsRange={true}
-              startDate={startDate}
-              endDate={endDate}
-              onChange={(update) => setDateRange(update)}
-              maxDate={new Date()} 
-              dateFormat="dd/MMM/yy" 
-              customInput={<CustomDateInput placeholder="Select Period" />} 
-              isClearable={false}
-            />
-          </div>
-          
-          <button onClick={handleMarkHoliday} className="flex items-center gap-2 bg-orange-500 text-white px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm">
-            <Coffee size={18} /> Mark Holiday
-          </button>
-          
-          <button onClick={() => setIsBankDepositOpen(true)} className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
-            <Landmark size={18} /> Expenses & Cash
-          </button>
-          
-          <button onClick={handleResetDay} className="flex items-center gap-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 py-2.5 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 transition-all shadow-sm">
-            <RotateCcw size={18} /> Reset
-          </button>
+        <div className="flex-1 min-w-0 flex xl:justify-end mt-2 xl:mt-0">
+          <div className="flex flex-wrap items-center justify-start xl:justify-end gap-2 max-w-full">
+            
+            <div className="header-date-picker shrink-0 flex items-center bg-slate-50 dark:bg-slate-800/50 p-1 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
+              <DatePicker 
+                selectsRange={true}
+                startDate={startDate}
+                endDate={endDate}
+                onChange={handleDateSelection}
+                maxDate={new Date()} 
+                dateFormat="dd MMM yyyy" 
+                customInput={<CustomDateInput placeholder="Select Period" />} 
+                isClearable={false}
+                showMonthDropdown
+                showYearDropdown
+                dropdownMode="select"
+                highlightDates={[ { "highlighted-holiday": highlightedHolidayDates } ]}
+              />
+            </div>
+            
+            <button onClick={openHolidayConfirm} disabled={isHolidaySelected} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-orange-500 text-white px-3 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+              <Coffee size={18} /> Mark Holiday
+            </button>
+            
+            <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
+              <Landmark size={18} /> Expenses & Cash
+            </button>
+            
+            <button onClick={openResetConfirm} disabled={isHolidaySelected} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 transition-all shadow-sm disabled:opacity-50">
+              <RotateCcw size={18} /> Reset
+            </button>
 
-          <button onClick={handleSaveStock} disabled={isSaving} className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
-            <Save size={18} /> {isSaving ? 'Saving...' : 'Save Ledger'}
-          </button>
+            <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50">
+              <Save size={18} /> {isSaving ? 'Saving...' : 'Save'}
+            </button>
+            
+          </div>
         </div>
       </div>
 
@@ -529,132 +799,153 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* Summary Metrics */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10">
-        <div className="bg-linear-to-br from-indigo-500 to-indigo-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
-          <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
-          <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty (Auto)</p>
-          <h3 className="text-4xl font-black relative z-10">{dailySummary.totalSalesQty} <span className="text-lg font-medium opacity-80">Units</span></h3>
+      {isMultiDayRange && !isHolidaySelected && (
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
+          <Info className="text-blue-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
+          <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed">
+            <strong>Combined View:</strong> You are entering data for the period <strong>{formatDisplayDate(startDate)}</strong> to <strong>{formatDisplayDate(endDate)}</strong>. The opening balance is from the start date, and the closing balance applies to the end date.
+          </p>
         </div>
+      )}
 
-        <div className="bg-linear-to-br from-emerald-500 to-emerald-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
-          <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
-          <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Generated Revenue (Auto)</p>
-          <h3 className="text-4xl font-black relative z-10">₹{dailySummary.totalRevenue.toLocaleString()}</h3>
+      {isHolidaySelected ? (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-12 text-center shadow-sm border border-orange-200 dark:border-orange-900/50 flex flex-col items-center justify-center min-h-[50vh] animate-in zoom-in duration-300">
+          <div className="w-24 h-24 bg-orange-100 dark:bg-orange-900/30 text-orange-500 rounded-full flex items-center justify-center mb-6 shadow-inner border border-orange-200 dark:border-orange-800">
+            <CalendarOff size={48} />
+          </div>
+          <h3 className="text-3xl font-black text-slate-800 dark:text-white mb-3">Holiday Declared!</h3>
+          <p className="text-slate-500 dark:text-slate-400 mb-8 max-w-lg text-lg">
+            Sales generation is locked for the selected period. Your stock balances have been safely carried forward. 
+          </p>
+          <button onClick={handleRemoveHoliday} disabled={isSaving} className="px-6 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50">
+            <Trash2 size={20} /> {isSaving ? 'Unlocking Entry...' : 'Cancel Holiday & Unlock Entry'}
+          </button>
         </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10 animate-in fade-in">
+            <div className="bg-linear-to-br from-indigo-500 to-indigo-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
+              <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
+              <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty (Auto)</p>
+              <h3 className="text-4xl font-black relative z-10">{dailySummary.totalSalesQty} <span className="text-lg font-medium opacity-80">Units</span></h3>
+            </div>
 
-        <div className="bg-linear-to-br from-red-500 to-red-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
-          <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Receipt size={120} /></div>
-          <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Expenses (Auto)</p>
-          <h3 className="text-4xl font-black relative z-10">₹{dailySummary.totalExpenses.toLocaleString()}</h3>
-        </div>
-      </div>
+            <div className="bg-linear-to-br from-emerald-500 to-emerald-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
+              <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
+              <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Generated Revenue (Auto)</p>
+              <h3 className="text-4xl font-black relative z-10">₹{dailySummary.totalRevenue.toLocaleString()}</h3>
+            </div>
 
-      {/* Main Calculation Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden relative z-10">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
-            <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
-              <tr>
-                <th className="px-3 py-4 w-10"></th> 
-                <th className="px-3 py-4">Brand Details</th>
-                <th className="px-4 py-4 text-center">Opening Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Editable)</span></th>
-                <th className="px-4 py-4 text-center">Purchases Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Click to Add)</span></th>
-                <th className="px-4 py-4 text-center">Closing Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Input)</span></th>
-                <th className="px-4 py-4 text-center text-indigo-600 dark:text-indigo-400">Sale Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span></th>
-                <th className="px-6 py-4 text-right text-emerald-600 dark:text-emerald-400">Sale Amount<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto FIFO)</span></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {loading ? (
-                <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
-              ) : stockRows.length === 0 ? (
-                <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
-              ) : (
-                stockRows.map((row, index) => (
-                  <tr key={row.brand_id} draggable onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
-                    <td className="px-3 py-4 text-center cursor-move"><GripVertical size={16} className="text-slate-300 dark:text-slate-600 group-hover:text-blue-500 transition-colors" /></td>
-                    
-                    {/* INLINE SMART TEXT LOGIC APPLIED HERE */}
-                    <td className="px-3 py-4">
-                      <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center flex-wrap gap-1">
-                        <span>{row.bottle_size} |</span>
-                        {row.purchase_qty > 0 && row.purchase_price !== row.selling_price ? (
-                          <span className="inline-flex items-center gap-1.5 ml-1">
-                            <span>Old: {row.base_opening} @ ₹{row.selling_price}</span>
-                            <span className="text-slate-300 dark:text-slate-600">•</span>
-                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} @ ₹{row.purchase_price}</span>
-                          </span>
-                        ) : (
-                          <span className="ml-1">₹{row.selling_price} base rate</span>
-                        )}
-                      </div>
-                    </td>
+            <div className="bg-linear-to-br from-red-500 to-red-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
+              <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Receipt size={120} /></div>
+              <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Expenses (Auto)</p>
+              <h3 className="text-4xl font-black relative z-10">₹{dailySummary.totalExpenses.toLocaleString()}</h3>
+            </div>
+          </div>
 
-                    <td className="px-4 py-4 text-center">
-                      <input type="number" value={row.opening_balance} onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500`} />
-                    </td>
-                    
-                    {/* ONLY BUTTON HERE NOW */}
-                    <td className="px-4 py-4 text-center">
-                      <button 
-                        onClick={() => openPurchaseModal(row)}
-                        className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
-                      >
-                        {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
-                      </button>
-                    </td>
-
-                    <td className="px-4 py-4 text-center">
-                      <input type="number" min="0" placeholder="Qty" value={row.closing_balance} onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500`} />
-                    </td>
-                    <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400 text-lg">
-                      {row.closing_balance === '' ? '-' : row.sales_qty}
-                    </td>
-                    <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 text-lg">
-                      {row.closing_balance === '' ? '-' : `₹${row.sales_amount.toLocaleString()}`}
-                    </td>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden relative z-10 animate-in fade-in slide-in-from-bottom-4">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
+                <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="px-3 py-4 w-10"></th> 
+                    <th className="px-3 py-4">Brand Details</th>
+                    <th className="px-4 py-4 text-center">Opening Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span></th>
+                    <th className="px-4 py-4 text-center">Purchases Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Click to Add)</span></th>
+                    <th className="px-4 py-4 text-center">Closing Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Input)</span></th>
+                    <th className="px-4 py-4 text-center text-indigo-600 dark:text-indigo-400">Sale Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span></th>
+                    <th className="px-6 py-4 text-right text-emerald-600 dark:text-emerald-400">Sale Amount<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto FIFO)</span></th>
                   </tr>
-                ))
-              )}
-            </tbody>
-            {/* FIXED ALIGNED TOTALS ROW */}
-            {stockRows.length > 0 && !loading && (
-              <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
-                <tr>
-                  <td colSpan="2" className="px-3 py-4 text-right">
-                    <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600" /> TOTALS</div>
-                  </td>
-                  <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalOpening}</td>
-                  <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalPurchases}</td>
-                  <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalClosing}</td>
-                  <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</td>
-                  <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{dailySummary.totalRevenue.toLocaleString()}</td>
-                </tr>
-                <tr>
-                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
-                  <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
-                </tr>
-                <tr>
-                  <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
-                  <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
-                </tr>
-                <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
-                  <td colSpan="6" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
-                  <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
-                    ₹{(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections).toLocaleString()}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {loading ? (
+                    <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
+                  ) : stockRows.length === 0 ? (
+                    <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
+                  ) : (
+                    stockRows.map((row, index) => (
+                      <tr key={row.brand_id} draggable onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
+                        <td className="px-3 py-4 text-center cursor-move"><GripVertical size={16} className="text-slate-300 dark:text-slate-600 group-hover:text-blue-500 transition-colors" /></td>
+                        
+                        <td className="px-3 py-4">
+                          <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center flex-wrap gap-1">
+                            <span>{row.bottle_size} |</span>
+                            {row.purchase_qty > 0 && row.purchase_price !== row.selling_price ? (
+                              <span className="inline-flex items-center gap-1.5 ml-1">
+                                <span>Old: {row.base_opening} @ ₹{row.selling_price}</span>
+                                <span className="text-slate-300 dark:text-slate-600">•</span>
+                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} @ ₹{row.purchase_price}</span>
+                              </span>
+                            ) : (
+                              <span className="ml-1">₹{row.selling_price} base rate</span>
+                            )}
+                          </div>
+                        </td>
 
-      {/* --- ADD PURCHASE MODAL (WITH YES/NO FLOW) --- */}
+                        <td className="px-4 py-4 text-center">
+                          <input type="number" readOnly value={row.opening_balance} className={`${numInputClass} border-slate-200 dark:border-slate-700 opacity-80 cursor-not-allowed`} />
+                        </td>
+                        
+                        <td className="px-4 py-4 text-center">
+                          <button 
+                            onClick={() => openPurchaseModal(row)}
+                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                          >
+                            {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
+                          </button>
+                        </td>
+
+                        <td className="px-4 py-4 text-center">
+                          <input type="number" min="0" placeholder="Qty" value={row.closing_balance} onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500`} />
+                        </td>
+                        <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400 text-lg">
+                          {row.closing_balance === '' ? '-' : row.sales_qty}
+                        </td>
+                        <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 text-lg">
+                          {row.closing_balance === '' ? '-' : `₹${row.sales_amount.toLocaleString()}`}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                {stockRows.length > 0 && !loading && (
+                  <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
+                    <tr>
+                      <td colSpan="2" className="px-3 py-4 text-right">
+                        <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600" /> TOTALS</div>
+                      </td>
+                      <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalOpening}</td>
+                      <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalPurchases}</td>
+                      <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalClosing}</td>
+                      <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</td>
+                      <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{dailySummary.totalRevenue.toLocaleString()}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">(-) Business Expenses :</td>
+                      <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">(-) Online Collected :</td>
+                      <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
+                    </tr>
+                    <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
+                      <td colSpan="6" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
+                      <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
+                        ₹{(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections).toLocaleString()}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* --- ADD PURCHASE MODAL (FIFO ENGINE) --- */}
       {purchaseModal.isOpen && (
-        <div className="fixed inset-0 z-99999 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-99999">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
@@ -748,8 +1039,26 @@ export default function DailyStock() {
                 <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
                 </h3>
+                <div className="header-date-picker flex items-center gap-2 bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-inner">
+                  <DatePicker 
+                    selected={popupDate} 
+                    onChange={(date) => {
+                      setPopupDate(date);
+                      setExpenseForm(prev => ({ ...prev, date }));
+                      setCollectionForm(prev => ({ ...prev, date }));
+                      setEditingExpenseId(null);
+                      setEditingCollectionId(null);
+                    }} 
+                    maxDate={new Date()} 
+                    dateFormat="dd/MM/yy" 
+                    customInput={<CustomDateInput />} 
+                    showMonthDropdown
+                    showYearDropdown
+                    dropdownMode="select"
+                  />
+                </div>
               </div>
-              <button onClick={handleOpenBankDeposit} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
+              <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
             
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
@@ -787,7 +1096,7 @@ export default function DailyStock() {
                           <DatePicker 
                             selected={expenseForm.date} 
                             onChange={(date) => { setExpenseForm({ ...expenseForm, date }); }} 
-                            dateFormat="dd/MM/yy" 
+                            dateFormat="dd MMM yyyy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
                             showMonthDropdown
@@ -820,7 +1129,7 @@ export default function DailyStock() {
                           <DatePicker 
                             selected={collectionForm.date} 
                             onChange={(date) => { setCollectionForm({ ...collectionForm, date }); }} 
-                            dateFormat="dd/MM/yy" 
+                            dateFormat="dd MMM yyyy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
                             showMonthDropdown
@@ -897,7 +1206,7 @@ export default function DailyStock() {
                               <td className="px-4 py-4 text-center">
                                 <div className="flex justify-center gap-2">
                                   <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                                  <button onClick={() => popupTab === 'expense' ? deleteExpense(row.id) : deleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                  <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"><Trash2 size={16} /></button>
                                 </div>
                               </td>
                             </tr>
