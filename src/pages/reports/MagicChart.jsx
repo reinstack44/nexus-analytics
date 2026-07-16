@@ -23,7 +23,6 @@ const formatDateForDB = (dateObj) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-// विभिन्न डेट फॉर्मेट्स और टाइमस्टैम्प्स को बिना टाइमज़ोन शिफ्ट के सटीक रूप से पार्स करने के लिए हेल्पर
 const getLocalDateObj = (dateInput) => {
   if (!dateInput) return null;
   const str = typeof dateInput === 'string' ? dateInput.split('T')[0] : '';
@@ -37,7 +36,6 @@ const getLocalDateObj = (dateInput) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 };
 
-// भारतीय रुपया फॉर्मेट करने के लिए ग्लोबल हेल्पर फंक्शन
 const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
 
 export default function MagicChart() {
@@ -59,7 +57,7 @@ export default function MagicChart() {
   // पिछले महीने का सहेजा हुआ डेटा
   const [prevSavedData, setPrevSavedData] = useState(null);
 
-  // मैनुअल इनपुट स्टेट्स
+  // मैनुअल / ऑटो-फ़ेच इनपुट स्टेट्स
   const [manualClosing, setManualClosing] = useState('');
   const [manualOpening, setManualOpening] = useState('');
   const [manualPurchases, setManualPurchases] = useState('');
@@ -103,7 +101,9 @@ export default function MagicChart() {
 
         if (!isMounted) return;
 
-        // Expenses कैलकुलेशन (चालू और पिछला महीना)
+        // ----------------------------------------------------
+        // 1. EXPENSES CALCULATION
+        // ----------------------------------------------------
         let currExp = 0;
         let prevExp = 0;
         allExpenses?.forEach(e => {
@@ -114,7 +114,9 @@ export default function MagicChart() {
           }
         });
 
-        // FIFO Sales सिमुलेशन
+        // ----------------------------------------------------
+        // 2. FIFO SALES SIMULATION
+        // ----------------------------------------------------
         const calculateFifoSales = async (startObj, endObj) => {
           let totalSales = 0;
           const prevClosings = {};
@@ -181,6 +183,92 @@ export default function MagicChart() {
         const currSales = await calculateFifoSales(currStartObj, currEndObj);
         const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
 
+        // ----------------------------------------------------
+        // 3. AUTO-FETCH OPENING/CLOSING & TOTAL PURCHASES (MRP-BASED)
+        // ----------------------------------------------------
+        const stockByDateStr = {};
+        allStock?.forEach(s => {
+          if (!stockByDateStr[s.date]) stockByDateStr[s.date] = {};
+          stockByDateStr[s.date][s.brand_id] = s;
+        });
+
+        // A. Opening Stock MRP Total (First Day of the Month)
+        const firstDayStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
+        let computedOpeningStockMrp = 0;
+        const firstDayRecords = stockByDateStr[firstDayStr] || {};
+        brands?.forEach(b => {
+          const rec = firstDayRecords[b.id];
+          if (rec) {
+            const opQty = parseInt(rec.opening_balance) || 0;
+            const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+            computedOpeningStockMrp += opQty * mrp;
+          }
+        });
+
+        // B. Closing Stock MRP Total (Last Day of the Month)
+        const lastDayStr = formatDateForDB(currEndObj);
+        let computedClosingStockMrp = 0;
+        const lastDayRecords = stockByDateStr[lastDayStr] || {};
+        brands?.forEach(b => {
+          const rec = lastDayRecords[b.id];
+          if (rec) {
+            const clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : 0;
+            const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+            computedClosingStockMrp += clQty * mrp;
+          }
+        });
+
+        // C. Monthly Total Purchases MRP (Cumulative daily purchase totals inside the month)
+        const prevMonthLastDayObj = new Date(currYear, currMonth, 0);
+        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
+        
+        const { data: prevStock } = await supabase
+          .from('daily_stock')
+          .select('*')
+          .eq('date', prevMonthLastDayStr);
+          
+        const prevStockMap = {};
+        prevStock?.forEach(s => { prevStockMap[s.brand_id] = s; });
+
+        let computedTotalPurchasesMrp = 0;
+        const runningPrevClosing = {};
+        brands?.forEach(b => {
+          const ps = prevStockMap[b.id];
+          runningPrevClosing[b.id] = ps && ps.closing_balance !== null ? parseInt(ps.closing_balance) : 0;
+        });
+
+        const monthDates = [];
+        let d = new Date(currYear, currMonth, 1);
+        while (d <= currEndObj) {
+          monthDates.push(formatDateForDB(d));
+          d.setDate(d.getDate() + 1);
+        }
+        monthDates.sort();
+
+        monthDates.forEach(dateStr => {
+          const dayRecords = stockByDateStr[dateStr] || {};
+          brands?.forEach(b => {
+            const rec = dayRecords[b.id];
+            const prevClose = runningPrevClosing[b.id] || 0;
+            
+            let opQty = 0;
+            let clQty = prevClose;
+            let mrp = parseFloat(b.mrp_price || 0);
+            
+            if (rec) {
+              opQty = parseInt(rec.opening_balance) || 0;
+              clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : opQty;
+              mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+            }
+            
+            const purchaseQty = Math.max(0, opQty - prevClose);
+            if (purchaseQty > 0) {
+              computedTotalPurchasesMrp += purchaseQty * mrp;
+            }
+            runningPrevClosing[b.id] = clQty;
+          });
+        });
+
         if (!isMounted) return;
 
         setSalesAmount(currSales);
@@ -189,21 +277,17 @@ export default function MagicChart() {
         setPrevMonthExpenses(prevExp);
         setPrevSavedData(prevRecord);
 
-        // डेटा लोड प्रबंधन और एडिट/रीड-ओनली मोड सेट करना
+        // डेटा लोड प्रबंधन (अवेलेबल हो तो सुरक्षित डेटा लें अन्यथा सीधे कम्प्यूटेड MRP वैल्यू लें)
         if (savedRecord) {
-          setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : '');
-          setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : '');
-          setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : '');
-          setIsEditing(false); // डेटा पहले से मौजूद है तो व्यू मोड में खोलें
+          setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : String(Math.round(computedClosingStockMrp)));
+          setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : String(Math.round(computedOpeningStockMrp)));
+          setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(computedTotalPurchasesMrp)));
+          setIsEditing(false);
         } else {
-          setManualClosing('');
-          setManualPurchases('');
-          setIsEditing(true); // डेटा नहीं है तो सीधे एडिट मोड में खोलें
-          if (prevRecord && prevRecord.closing_stock !== null) {
-            setManualOpening(String(prevRecord.closing_stock));
-          } else {
-            setManualOpening('');
-          }
+          setManualClosing(String(Math.round(computedClosingStockMrp)));
+          setManualOpening(String(Math.round(computedOpeningStockMrp)));
+          setManualPurchases(String(Math.round(computedTotalPurchasesMrp)));
+          setIsEditing(true);
         }
 
       } catch (error) {

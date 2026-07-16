@@ -56,7 +56,7 @@ export default function DailyStock() {
   }, [startDate, endDate]);
 
   const [stockRows, setStockRows] = useState([]);
-  const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0 });
+  const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0, totalMrpRevenue: 0 });
 
   // --- CUSTOM MODALS ---
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', isDanger: false, onConfirm: null });
@@ -237,7 +237,7 @@ export default function DailyStock() {
     setEndDate(date);
   };
 
-  const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
+  const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
   const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
   const [popupTab, setPopupTab] = useState('expense');
   const [expenses, setExpenses] = useState([]);
@@ -309,6 +309,7 @@ export default function DailyStock() {
 
         let totalQty = 0;
         let totalRev = 0;
+        let totalMrpRev = 0;
 
         const rows = brandsData.map(brand => {
           const existingStock = stockMap[brand.id];
@@ -316,16 +317,19 @@ export default function DailyStock() {
           
           let baseOpening = 0;
           let carriedPrice = parseFloat(brand.selling_price);
+          let carriedMrp = parseFloat(brand.mrp_price || 0);
 
           if (!isPipelineBroken && prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
             baseOpening = prevStock.closing_balance;
             if (prevStock.unit_price) carriedPrice = parseFloat(prevStock.unit_price);
+            if (prevStock.unit_mrp) carriedMrp = parseFloat(prevStock.unit_mrp);
           }
 
           let purchaseQty = 0; 
           let opening = baseOpening;
           let closing = '';
           let pPrice = carriedPrice; 
+          let pMrp = carriedMrp;
 
           if (existingStock) {
             let recordedPurchase = 0;
@@ -340,10 +344,12 @@ export default function DailyStock() {
               if (closing > opening) closing = opening;
             }
             if (existingStock.unit_price) pPrice = parseFloat(existingStock.unit_price);
+            if (existingStock.unit_mrp) pMrp = parseFloat(existingStock.unit_mrp);
           }
 
           let sQty = 0;
           let sAmt = 0;
+          let sMrpAmt = 0;
           if (closing !== '') {
             sQty = opening - parseInt(closing);
             sQty = sQty < 0 ? 0 : sQty; 
@@ -351,14 +357,17 @@ export default function DailyStock() {
             let remainingSales = sQty;
             const qtyFromOld = Math.min(remainingSales, baseOpening);
             sAmt += qtyFromOld * carriedPrice; 
+            sMrpAmt += qtyFromOld * carriedMrp;
             remainingSales -= qtyFromOld;
             
             if (remainingSales > 0 && purchaseQty > 0) {
               const qtyFromNew = Math.min(remainingSales, purchaseQty);
               sAmt += qtyFromNew * pPrice;
+              sMrpAmt += qtyFromNew * pMrp;
             }
             totalQty += sQty;
             totalRev += sAmt;
+            totalMrpRev += sMrpAmt;
           }
 
           return { 
@@ -366,19 +375,23 @@ export default function DailyStock() {
             brand_name: brand.brand_name, 
             bottle_size: brand.bottle_size, 
             selling_price: brand.selling_price, 
+            mrp_price: brand.mrp_price,
             carried_price: carriedPrice, 
+            carried_mrp: carriedMrp,
             purchase_price: pPrice, 
+            purchase_mrp: pMrp,
             base_opening: baseOpening, 
             purchase_qty: purchaseQty, 
             opening_balance: opening, 
             closing_balance: closing, 
             sales_qty: sQty, 
-            sales_amount: sAmt 
+            sales_amount: sAmt,
+            sales_mrp_amount: sMrpAmt
           };
         });
 
         setStockRows(rows);
-        setDailySummary({ totalSalesQty: totalQty, totalRevenue: totalRev, totalExpenses: tExp, totalCollections: tColl });
+        setDailySummary({ totalSalesQty: totalQty, totalRevenue: totalRev, totalExpenses: tExp, totalCollections: tColl, totalMrpRevenue: totalMrpRev });
       }
       setLoading(false);
     };
@@ -419,20 +432,23 @@ export default function DailyStock() {
 
   // --- FIFO CALCULATION ENGINE ---
   const recalculateRow = (row) => {
-    let sQty = 0; let sAmt = 0;
+    let sQty = 0; let sAmt = 0; let sMrpAmt = 0;
     if (row.closing_balance !== '') {
       sQty = Math.max(0, parseInt(row.opening_balance) - parseInt(row.closing_balance));
       let remainingSales = sQty;
       
       const qtyFromOld = Math.min(remainingSales, parseInt(row.base_opening));
       sAmt += qtyFromOld * parseFloat(row.carried_price); 
+      sMrpAmt += qtyFromOld * parseFloat(row.carried_mrp);
       remainingSales -= qtyFromOld;
 
       if (remainingSales > 0 && parseInt(row.purchase_qty) > 0) {
-        sAmt += Math.min(remainingSales, parseInt(row.purchase_qty)) * parseFloat(row.purchase_price);
+        const qtyFromNew = Math.min(remainingSales, parseInt(row.purchase_qty));
+        sAmt += qtyFromNew * parseFloat(row.purchase_price);
+        sMrpAmt += qtyFromNew * parseFloat(row.purchase_mrp);
       }
     }
-    return { ...row, sales_qty: sQty, sales_amount: sAmt };
+    return { ...row, sales_qty: sQty, sales_amount: sAmt, sales_mrp_amount: sMrpAmt };
   };
 
   // --- HANDLERS ---
@@ -454,11 +470,11 @@ export default function DailyStock() {
       onConfirm: () => {
         setStockRows(prevRows => {
           const resetRows = prevRows.map(row => {
-            let updatedRow = { ...row, purchase_qty: 0, purchase_price: row.carried_price, opening_balance: row.base_opening, closing_balance: '' };
+            let updatedRow = { ...row, purchase_qty: 0, purchase_price: row.carried_price, purchase_mrp: row.carried_mrp, opening_balance: row.base_opening, closing_balance: '' };
             updatedRow = recalculateRow(updatedRow);
             return updatedRow;
           });
-          setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
+          setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0, totalMrpRevenue: 0 }));
           return resetRows;
         });
         closeConfirm();
@@ -484,7 +500,7 @@ export default function DailyStock() {
         });
         
         setStockRows(holidayRows);
-        setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0 }));
+        setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0, totalMrpRevenue: 0 }));
 
         try {
           const upsertPromises = selectedDates.map(dateStr => {
@@ -492,7 +508,8 @@ export default function DailyStock() {
                 user_id: user.id, date: dateStr, brand_id: row.brand_id,
                 opening_balance: parseInt(row.opening_balance) || 0,
                 closing_balance: parseInt(row.closing_balance) || 0,
-                unit_price: parseFloat(row.purchase_price) || 0 
+                unit_price: parseFloat(row.purchase_price) || 0,
+                unit_mrp: parseFloat(row.purchase_mrp) || 0
              }));
              return supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
           });
@@ -548,50 +565,68 @@ export default function DailyStock() {
         return row;
       });
 
-      let tQty = 0; let tRev = 0;
+      let tQty = 0; let tRev = 0; let tMrpRev = 0;
       updatedRows.forEach(r => { 
         if (r.closing_balance !== '') {
           tQty += r.sales_qty; 
           tRev += r.sales_amount; 
+          tMrpRev += r.sales_mrp_amount;
         }
       });
-      setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev }));
+      setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev, totalMrpRevenue: tMrpRev }));
       return updatedRows;
     });
   };
 
   const openPurchaseModal = (row) => {
-    const isChanged = row.purchase_qty > 0 && row.purchase_price !== row.carried_price;
-    setPurchaseModal({ isOpen: true, brand: row, qty: row.purchase_qty || '', price: row.purchase_price || row.carried_price, isPriceChanged: isChanged });
+    const isPriceChanged = row.purchase_qty > 0 && row.purchase_price !== row.carried_price;
+    const isMrpChanged = row.purchase_qty > 0 && row.purchase_mrp !== row.carried_mrp;
+    setPurchaseModal({ 
+      isOpen: true, 
+      brand: row, 
+      qty: row.purchase_qty || '', 
+      price: row.purchase_price || row.carried_price, 
+      mrp: row.purchase_mrp || row.carried_mrp || row.mrp_price || 0,
+      isPriceChanged,
+      isMrpChanged
+    });
   };
 
   const handlePurchaseSubmit = (e) => {
     e.preventDefault();
     const newQty = parseInt(purchaseModal.qty) || 0;
     const newPrice = parseFloat(purchaseModal.price) || purchaseModal.brand.carried_price;
+    const newMrp = parseFloat(purchaseModal.mrp) || purchaseModal.brand.carried_mrp;
 
     setStockRows(prevRows => {
       const updatedRows = prevRows.map(row => {
         if (row.brand_id === purchaseModal.brand.brand_id) {
-          let updatedRow = { ...row, purchase_qty: newQty, purchase_price: newPrice, opening_balance: row.base_opening + newQty };
+          let updatedRow = { 
+            ...row, 
+            purchase_qty: newQty, 
+            purchase_price: newPrice, 
+            purchase_mrp: newMrp,
+            opening_balance: row.base_opening + newQty 
+          };
           updatedRow = recalculateRow(updatedRow);
           return updatedRow;
         }
         return row;
       });
 
-      let tQty = 0; let tRev = 0;
+      let tQty = 0; let tRev = 0; let tMrpRev = 0;
       updatedRows.forEach(r => { 
         if (r.closing_balance !== '') {
           tQty += r.sales_qty; 
           tRev += r.sales_amount; 
+          tMrpRev += r.sales_mrp_amount;
         }
       });
-      setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev }));
+      setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev, totalMrpRevenue: tMrpRev }));
       return updatedRows;
     });
 
-    setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false });
+    setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
   };
 
   const handleSaveStock = async () => {
@@ -603,7 +638,8 @@ export default function DailyStock() {
       user_id: user.id, date: endStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
-      unit_price: parseFloat(row.purchase_price) || 0 
+      unit_price: parseFloat(row.purchase_price) || 0,
+      unit_mrp: parseFloat(row.purchase_mrp) || 0
     }));
 
     const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
@@ -684,9 +720,8 @@ export default function DailyStock() {
   const tableTotalPurchasesQty = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
   const tableTotalClosingQty = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
 
-  // Exact valuation based on old vs new stock prices
+  // Exact valuation (Selling Price)
   const tableTotalOpeningAmount = stockRows.reduce((acc, row) => {
-    // Opening balance pre-dates current purchases, so it uses carried_price
     const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_price || 0);
     const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0);
     return acc + baseVal + purchaseVal;
@@ -702,21 +737,54 @@ export default function DailyStock() {
     const baseQty = parseInt(row.base_opening) || 0;
     const purchaseQty = parseInt(row.purchase_qty) || 0;
     
-    // Reverse FIFO: Closing stock consists of the newest purchases first, then older stock.
     let amt = 0;
     let remClosing = closingQty;
 
-    // First take from new purchases
     const fromNew = Math.min(remClosing, purchaseQty);
     amt += fromNew * parseFloat(row.purchase_price || 0);
     remClosing -= fromNew;
 
-    // Then take from older base opening stock
     if (remClosing > 0) {
       amt += Math.min(remClosing, baseQty) * parseFloat(row.carried_price || 0);
     }
     
     return acc + amt;
+  }, 0);
+
+  // Exact valuation (MRP Price)
+  const tableTotalOpeningMrpAmount = stockRows.reduce((acc, row) => {
+    const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_mrp || 0);
+    const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_mrp || 0);
+    return acc + baseVal + purchaseVal;
+  }, 0);
+
+  const tableTotalPurchasesMrpAmount = stockRows.reduce((acc, row) => {
+    return acc + ((parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_mrp || 0));
+  }, 0);
+
+  const tableTotalClosingMrpAmount = stockRows.reduce((acc, row) => {
+    if (row.closing_balance === '' || row.closing_balance === null) return acc;
+    const closingQty = parseInt(row.closing_balance);
+    const baseQty = parseInt(row.base_opening) || 0;
+    const purchaseQty = parseInt(row.purchase_qty) || 0;
+    
+    let amt = 0;
+    let remClosing = closingQty;
+
+    const fromNew = Math.min(remClosing, purchaseQty);
+    amt += fromNew * parseFloat(row.purchase_mrp || 0);
+    remClosing -= fromNew;
+
+    if (remClosing > 0) {
+      amt += Math.min(remClosing, baseQty) * parseFloat(row.carried_mrp || 0);
+    }
+    
+    return acc + amt;
+  }, 0);
+
+  const tableTotalMrpRevenue = stockRows.reduce((acc, row) => {
+    if (row.closing_balance === '' || row.closing_balance === null) return acc;
+    return acc + (row.sales_mrp_amount || 0);
   }, 0);
 
   const inputClass = "w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-semibold";
@@ -831,7 +899,7 @@ export default function DailyStock() {
       {/* HOLIDAY DECLARED INFO MODAL */}
       {holidayModal.isOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" style={{ zIndex: 100000 }}>
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full text-center">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 text-center">
             <div className="w-20 h-20 bg-orange-100 dark:bg-orange-900/30 text-orange-500 rounded-full flex items-center justify-center mb-5 shadow-inner border border-orange-200 dark:border-orange-800 mx-auto">
               <CalendarOff size={40} />
             </div>
@@ -974,7 +1042,7 @@ export default function DailyStock() {
 
           <div className={`bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden relative z-10 animate-in fade-in slide-in-from-bottom-4 transition-opacity ${pipelineWarning ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300 min-w-200">
+              <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300 min-w-220">
                 <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
                   <tr>
                     <th className="px-3 py-4 w-10"></th> 
@@ -983,14 +1051,15 @@ export default function DailyStock() {
                     <th className="px-4 py-4 text-center">Purchases Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Click to Add)</span></th>
                     <th className="px-4 py-4 text-center">Closing Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Input)</span></th>
                     <th className="px-4 py-4 text-center text-indigo-600 dark:text-indigo-400">Sale Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span></th>
+                    <th className="px-6 py-4 text-right text-purple-600 dark:text-purple-400 font-semibold">MRP Amount<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto FIFO)</span></th>
                     <th className="px-6 py-4 text-right text-emerald-600 dark:text-emerald-400">Sale Amount<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto FIFO)</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? (
-                    <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
+                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
                   ) : stockRows.length === 0 ? (
-                    <tr><td colSpan="7" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
+                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
                   ) : (
                     stockRows.map((row, index) => (
                       <tr key={row.brand_id} draggable onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
@@ -1000,14 +1069,14 @@ export default function DailyStock() {
                           <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center flex-wrap gap-1">
                             <span>{row.bottle_size} |</span>
-                            {row.purchase_qty > 0 && row.purchase_price !== row.carried_price ? (
-                              <span className="inline-flex items-center gap-1.5 ml-1">
-                                <span>Old: {row.base_opening} @ ₹{row.carried_price}</span>
+                            {row.purchase_qty > 0 && (row.purchase_price !== row.carried_price || row.purchase_mrp !== row.carried_mrp) ? (
+                              <span className="inline-flex items-center gap-1.5 ml-1 flex-wrap">
+                                <span>Old: {row.base_opening} (MRP: ₹{row.carried_mrp} | Sale: ₹{row.carried_price})</span>
                                 <span className="text-slate-300 dark:text-slate-600">•</span>
-                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} @ ₹{row.purchase_price}</span>
+                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} (MRP: ₹{row.purchase_mrp} | Sale: ₹{row.purchase_price})</span>
                               </span>
                             ) : (
-                              <span className="ml-1">₹{row.carried_price} base rate</span>
+                              <span className="ml-1">MRP: ₹{row.carried_mrp} | Base: ₹{row.carried_price}</span>
                             )}
                           </div>
                         </td>
@@ -1031,6 +1100,9 @@ export default function DailyStock() {
                         <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400 text-lg">
                           {row.closing_balance === '' ? '-' : row.sales_qty}
                         </td>
+                        <td className="px-6 py-4 text-right font-black text-purple-600 dark:text-purple-400 text-lg">
+                          {row.closing_balance === '' ? '-' : `₹${row.sales_mrp_amount.toLocaleString()}`}
+                        </td>
                         <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 text-lg">
                           {row.closing_balance === '' ? '-' : `₹${row.sales_amount.toLocaleString()}`}
                         </td>
@@ -1047,35 +1119,39 @@ export default function DailyStock() {
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalOpeningQty}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-1">₹{tableTotalOpeningAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: ₹{tableTotalOpeningMrpAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{tableTotalOpeningAmount.toLocaleString()}</div>
                       </td>
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalPurchasesQty}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-1">₹{tableTotalPurchasesAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: ₹{tableTotalPurchasesMrpAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{tableTotalPurchasesAmount.toLocaleString()}</div>
                       </td>
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalClosingQty}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-1">₹{tableTotalClosingAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: ₹{tableTotalClosingMrpAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{tableTotalClosingAmount.toLocaleString()}</div>
                       </td>
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</div>
-                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">₹{dailySummary.totalRevenue.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">Sale: ₹{dailySummary.totalRevenue.toLocaleString()}</div>
                       </td>
+                      <td className="px-6 py-4 text-right align-top pt-6 font-black text-purple-600 dark:text-purple-400 text-xl">₹{tableTotalMrpRevenue.toLocaleString()}</td>
                       <td className="px-6 py-4 text-right align-top pt-6 font-black text-emerald-600 dark:text-emerald-400 text-xl">₹{dailySummary.totalRevenue.toLocaleString()}</td>
                     </tr>
                     <tr>
-                      <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
+                      <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
                       <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
                     </tr>
                     <tr>
-                      <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
+                      <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
                       <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
                     </tr>
                     <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
-                      <td colSpan="6" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
+                      <td colSpan="7" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
                       <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
                         ₹{(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections).toLocaleString()}
                       </td>
@@ -1096,13 +1172,13 @@ export default function DailyStock() {
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Package size={20} className="text-blue-500" /> Record New Purchase
               </h3>
-              <button onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', isPriceChanged: false })} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
+              <button onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false })} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
             
             <form onSubmit={handlePurchaseSubmit} className="p-6 space-y-5">
               <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
                 <h4 className="font-bold text-slate-800 dark:text-slate-100 text-lg">{purchaseModal.brand?.brand_name}</h4>
-                <p className="text-sm text-slate-500 dark:text-slate-400">{purchaseModal.brand?.bottle_size} • Base Rate: ₹{purchaseModal.brand?.carried_price}</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{purchaseModal.brand?.bottle_size} • Base MRP: ₹{purchaseModal.brand?.carried_mrp} • Base Sale: ₹{purchaseModal.brand?.carried_price}</p>
               </div>
 
               <div>
@@ -1118,8 +1194,55 @@ export default function DailyStock() {
                 />
               </div>
 
+              {/* MRP CHANGE SECTION */}
               <div className="mt-4 border-t border-slate-100 dark:border-slate-800 pt-4">
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Is there a price change for this new stock?</label>
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Is there an MRP change for this new stock?</label>
+                <div className="flex flex-col gap-3 mb-2">
+                  <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="mrpChange" 
+                      checked={!purchaseModal.isMrpChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: false, mrp: purchaseModal.brand.carried_mrp})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600" 
+                    />
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">No, keep base MRP (₹{purchaseModal.brand?.carried_mrp})</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="mrpChange" 
+                      checked={purchaseModal.isMrpChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: true})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600" 
+                    />
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different MRP</span>
+                  </label>
+                </div>
+              </div>
+
+              {purchaseModal.isMrpChanged && (
+                <div className="animate-in fade-in slide-in-from-top-2 pt-2">
+                  <label className="flex justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    <span>New MRP Price (₹)</span>
+                    <span className="text-[10px] text-purple-500 bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={16}/></span>
+                    <input 
+                      type="number" 
+                      required min="0" step="any" 
+                      value={purchaseModal.mrp} 
+                      onChange={(e) => setPurchaseModal({...purchaseModal, mrp: e.target.value})} 
+                      className={`${inputClass} pl-10 font-bold border-purple-300 dark:border-purple-800 focus:ring-purple-500`} 
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* SELLING PRICE CHANGE SECTION */}
+              <div className="mt-4 border-t border-slate-100 dark:border-slate-800 pt-4">
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Is there a sale price change for this new stock?</label>
                 <div className="flex flex-col gap-3 mb-2">
                   <label className="flex items-center gap-3 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1160,11 +1283,12 @@ export default function DailyStock() {
                       className={`${inputClass} pl-10 font-bold border-blue-300 dark:border-blue-800 focus:ring-blue-500`} 
                     />
                   </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                    * Note: Previous stock will continue to sell at the old rate. This new rate will only apply to these {purchaseModal.qty || '0'} newly added bottles.
-                  </p>
                 </div>
               )}
+
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                * Note: Previous stock will continue to sell at older rates. These new rates will only apply to these {purchaseModal.qty || '0'} newly added bottles.
+              </p>
 
               <button type="submit" className="w-full mt-4 bg-blue-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2">
                 <CheckCircle2 size={18} /> Confirm Addition

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { Plus, Tag, Edit2, Trash2, X, AlertTriangle, History, Search, Wine, Layers } from 'lucide-react';
@@ -16,6 +16,7 @@ export default function BrandMaster() {
     category: 'Whisky',
     bottleSize: '750ml',
     sellingPrice: '',
+    mrpPrice: '',
   });
 
   // Modal States
@@ -28,9 +29,8 @@ export default function BrandMaster() {
   const [priceHistory, setPriceHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Fetch Brands and sort by display_order
-  const fetchBrands = useCallback(async () => {
-    setLoading(true);
+  // Fetch Brands without synchronous state setting inside the call path
+  const fetchBrands = async () => {
     const { data, error } = await supabase
       .from('brands')
       .select('*')
@@ -47,14 +47,31 @@ export default function BrandMaster() {
       setBrands(sortedBrands);
     }
     setLoading(false);
-  }, []);
+  };
 
   useEffect(() => { 
     let isMounted = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (isMounted) fetchBrands(); 
+    const loadInitialBrands = async () => {
+      const { data, error } = await supabase
+        .from('brands')
+        .select('*')
+        .order('display_order', { ascending: true })
+        .order('brand_name', { ascending: true });
+        
+      if (isMounted && !error) {
+        const sortedBrands = (data || []).sort((a, b) => {
+          const orderA = a.display_order ?? Number.MAX_SAFE_INTEGER;
+          const orderB = b.display_order ?? Number.MAX_SAFE_INTEGER;
+          if (orderA !== orderB) return orderA - orderB;
+          return (a.brand_name || '').localeCompare(b.brand_name || '');
+        });
+        setBrands(sortedBrands);
+        setLoading(false);
+      }
+    };
+    loadInitialBrands();
     return () => { isMounted = false; };
-  }, [fetchBrands]);
+  }, []);
 
   // Derived Stats
   const categoriesCount = useMemo(() => new Set(brands.map(b => b.category)).size, [brands]);
@@ -68,6 +85,7 @@ export default function BrandMaster() {
     e.preventDefault();
     setIsSubmitting(true);
     const initialPrice = parseFloat(formData.sellingPrice);
+    const mrpPrice = parseFloat(formData.mrpPrice) || 0;
     
     const { data: brandData, error: brandError } = await supabase
       .from('brands')
@@ -76,6 +94,7 @@ export default function BrandMaster() {
         category: formData.category, 
         bottle_size: formData.bottleSize, 
         selling_price: initialPrice,
+        mrp_price: mrpPrice,
       }])
       .select();
 
@@ -89,7 +108,8 @@ export default function BrandMaster() {
         effective_date: new Date().toISOString().split('T')[0] 
       }]);
       
-      setFormData({ brandName: '', category: 'Whisky', bottleSize: '750ml', sellingPrice: '' });
+      setFormData({ brandName: '', category: 'Whisky', bottleSize: '750ml', sellingPrice: '', mrpPrice: '' });
+      setLoading(true); // Safe to call inside event handlers
       fetchBrands();
     }
     setIsSubmitting(false);
@@ -106,7 +126,7 @@ export default function BrandMaster() {
     setIsEditModalOpen(true);
   };
 
-  // Submit Edit Form (Pricing is now excluded, only details are updated)
+  // Submit Edit Form
   const handleEditSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -122,6 +142,7 @@ export default function BrandMaster() {
 
     if (!updateError) {
       setIsEditModalOpen(false); 
+      setLoading(true); // Safe to call inside event handlers
       fetchBrands(); 
     } else {
       alert("Error updating brand: " + updateError.message);
@@ -142,6 +163,7 @@ export default function BrandMaster() {
       await supabase.from('brands').delete().eq('id', brandToDelete.id); 
       setIsDeleteModalOpen(false); 
       setBrandToDelete(null); 
+      setLoading(true); // Safe to call inside event handlers
       fetchBrands(); 
     } catch { 
       alert("Error deleting brand. It might be linked to existing stock records."); 
@@ -271,18 +293,34 @@ export default function BrandMaster() {
               </div>
             </div>
             
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                Base Selling Price (₹)
-              </label>
-              <input 
-                type="number" 
-                required min="0" 
-                value={formData.sellingPrice} 
-                onChange={(e) => setFormData({ ...formData, sellingPrice: e.target.value })} 
-                className={inputClass} 
-                placeholder="0.00" 
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                  MRP Price (₹)
+                </label>
+                <input 
+                  type="number" 
+                  required min="0" 
+                  value={formData.mrpPrice} 
+                  onChange={(e) => setFormData({ ...formData, mrpPrice: e.target.value })} 
+                  className={inputClass} 
+                  placeholder="0.00" 
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                  Base Price (₹)
+                </label>
+                <input 
+                  type="number" 
+                  required min="0" 
+                  value={formData.sellingPrice} 
+                  onChange={(e) => setFormData({ ...formData, sellingPrice: e.target.value })} 
+                  className={inputClass} 
+                  placeholder="0.00" 
+                />
+              </div>
             </div>
             
             <button 
@@ -322,6 +360,7 @@ export default function BrandMaster() {
                 <tr>
                   <th className="px-6 py-4">Brand Details</th>
                   <th className="px-6 py-4">Category</th>
+                  <th className="px-6 py-4 text-right">MRP Price (₹)</th>
                   <th className="px-6 py-4 text-right">Base Price (₹)</th>
                   <th className="px-6 py-4 text-center">Manage</th>
                 </tr>
@@ -329,13 +368,13 @@ export default function BrandMaster() {
               <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
                 {loading ? (
                   <tr>
-                    <td colSpan="4" className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan="5" className="px-6 py-12 text-center text-slate-400">
                       Loading catalog...
                     </td>
                   </tr>
                 ) : filteredBrands.length === 0 ? (
                   <tr>
-                    <td colSpan="4" className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan="5" className="px-6 py-12 text-center text-slate-400">
                       No matching products found.
                     </td>
                   </tr>
@@ -354,6 +393,9 @@ export default function BrandMaster() {
                         <span className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 rounded-md text-[11px] font-bold uppercase tracking-wider border border-slate-200 dark:border-slate-700">
                           {brand.category}
                         </span>
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-slate-500 dark:text-slate-400 text-base">
+                        ₹{brand.mrp_price !== undefined && brand.mrp_price !== null ? brand.mrp_price : '0'}
                       </td>
                       <td className="px-6 py-4 text-right font-black text-slate-800 dark:text-slate-100 text-base">
                         ₹{brand.selling_price}

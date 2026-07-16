@@ -43,6 +43,15 @@ const getLocalDateObj = (dateInput) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 };
 
+const getDatesInRange = (start, end) => {
+  const dates = [];
+  let current = new Date(start);
+  const last = new Date(end || start);
+  current.setHours(0,0,0,0); last.setHours(0,0,0,0);
+  while (current <= last) { dates.push(formatDateForDB(current)); current.setDate(current.getDate() + 1); }
+  return dates;
+};
+
 const isFullCalendarMonth = (start, end) => {
   if (!start || !end) return false;
   const s = getLocalDateObj(start);
@@ -74,7 +83,10 @@ export default function Reports() {
   const [traderTransactions, setTraderTransactions] = useState([]);
   const [expenseList, setExpenseList] = useState([]);
   const [collectionList, setCollectionList] = useState([]);
-  const [summary, setSummary] = useState({ grossProfit: 0, totalPurchases: 0, totalExpenses: 0, netProfit: 0, totalWithdrawn: 0, retainedCash: 0 });
+  const [summary, setSummary] = useState({ 
+    grossProfit: 0, totalPurchases: 0, totalExpenses: 0, netProfit: 0, totalWithdrawn: 0, retainedCash: 0,
+    openingSale: 0, openingMrp: 0, closingSale: 0, closingMrp: 0, purchasesSale: 0, purchasesMrp: 0
+  });
 
   const [magicChartData, setMagicChartData] = useState({
     box1: 0, box2: 0, box3: 0, box4: 0, box5: 0, box6: 0, box7: 0, currExp: 0, currNetProfit: 0, prevNetProfit: 0, cumulativeProfit: 0
@@ -135,15 +147,13 @@ export default function Reports() {
         const tWithdrawals = withData?.reduce((sum, w) => sum + parseFloat(w.amount), 0) || 0;
 
         const { data: purchData } = await supabase.from('purchases').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59');
-        let tPurchases = 0; const purchaseQtyMap = {}; 
+        const purchaseQtyMap = {}; 
         purchData?.forEach(p => {
-          tPurchases += parseFloat(p.total_amount) || 0;
           const key = `${p.date}_${p.brand_id}`; purchaseQtyMap[key] = (purchaseQtyMap[key] || 0) + (p.quantity || 0);
         });
 
         const { data: allTraderTxData } = await supabase.from('trader_transactions').select('*, traders(trader_name)').lte('date', endStr + 'T23:59:59').order('date').order('created_at');
         const txList = []; const balances = {};
-        let currPurchasesVal = 0;
 
         allTraderTxData?.forEach(tx => {
           const traderId = tx.trader_id; const pAmt = parseFloat(tx.purchase_amount) || 0; const paidAmt = parseFloat(tx.paid_amount) || 0;
@@ -153,10 +163,6 @@ export default function Reports() {
           
           if (tx.date >= startStr) {
             txList.push({ ...tx, remaining_amount: balances[traderId] });
-            const txDate = getLocalDateObj(tx.date);
-            if (txDate && txDate <= endObj) {
-              currPurchasesVal += pAmt;
-            }
           }
         });
 
@@ -193,9 +199,117 @@ export default function Reports() {
         });
         setSalesList(sortedSalesList);
 
-        const netProfit = tSales - tPurchases - tExpenses;
-        setSummary({ grossProfit: tSales, totalPurchases: tPurchases, totalExpenses: tExpenses, netProfit: netProfit, totalWithdrawn: tWithdrawals, retainedCash: netProfit - tWithdrawals });
+        // ---------------------------------------------------------------------
+        // opening, closing, and purchase quantities & valuations calculation
+        // ---------------------------------------------------------------------
+        let openingSaleVal = 0;
+        let openingMrpVal = 0;
+        let closingSaleVal = 0;
+        let closingMrpVal = 0;
 
+        const stockByBrand = {};
+        stockData?.forEach(s => {
+          const sDate = getLocalDateObj(s.date);
+          if (sDate && sDate >= startObj && sDate <= endObj) {
+            if (!stockByBrand[s.brand_id]) stockByBrand[s.brand_id] = [];
+            stockByBrand[s.brand_id].push(s);
+          }
+        });
+
+        brandsData?.forEach(b => {
+          const bStock = stockByBrand[b.id];
+          if (bStock && bStock.length > 0) {
+            const firstEntry = bStock[0];
+            const openPrice = firstEntry.unit_price ? parseFloat(firstEntry.unit_price) : parseFloat(b.selling_price);
+            const openMrp = firstEntry.unit_mrp ? parseFloat(firstEntry.unit_mrp) : parseFloat(b.mrp_price || 0);
+            
+            openingSaleVal += (parseInt(firstEntry.opening_balance || 0) * openPrice);
+            openingMrpVal += (parseInt(firstEntry.opening_balance || 0) * openMrp);
+
+            const lastEntry = bStock[bStock.length - 1];
+            const closeQty = lastEntry.closing_balance !== null ? parseInt(lastEntry.closing_balance) : 0;
+            const closePrice = lastEntry.unit_price ? parseFloat(lastEntry.unit_price) : parseFloat(b.selling_price);
+            const closeMrp = lastEntry.unit_mrp ? parseFloat(lastEntry.unit_mrp) : parseFloat(b.mrp_price || 0);
+
+            closingSaleVal += (closeQty * closePrice);
+            closingMrpVal += (closeQty * closeMrp);
+          }
+        });
+
+        // Calculate purchases from daily_stock to retrieve correct unit_price and unit_mrp
+        const prevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
+        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
+        
+        const { data: prevStock } = await supabase
+          .from('daily_stock')
+          .select('*')
+          .eq('date', prevMonthLastDayStr);
+          
+        const prevStockMap = {};
+        prevStock?.forEach(s => { prevStockMap[s.brand_id] = s; });
+
+        let rangePurchasesSale = 0;
+        let rangePurchasesMrp = 0;
+
+        const runningPrevClosing = {};
+        brandsData?.forEach(b => {
+          const ps = prevStockMap[b.id];
+          runningPrevClosing[b.id] = ps && ps.closing_balance !== null ? parseInt(ps.closing_balance) : 0;
+        });
+
+        const stockByDateStr = {};
+        stockData?.forEach(s => {
+          if (!stockByDateStr[s.date]) stockByDateStr[s.date] = {};
+          stockByDateStr[s.date][s.brand_id] = s;
+        });
+
+        const rangeDates = getDatesInRange(startObj, endObj);
+        rangeDates.forEach(dateStr => {
+          const dayRecords = stockByDateStr[dateStr] || {};
+          brandsData?.forEach(b => {
+            const rec = dayRecords[b.id];
+            const prevClose = runningPrevClosing[b.id] || 0;
+            
+            let opQty = 0;
+            let clQty = prevClose;
+            let salePrice = parseFloat(b.selling_price || 0);
+            let mrpPrice = parseFloat(b.mrp_price || 0);
+            
+            if (rec) {
+              opQty = parseInt(rec.opening_balance) || 0;
+              clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : opQty;
+              salePrice = parseFloat(rec.unit_price || b.selling_price || 0);
+              mrpPrice = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+            }
+            
+            const purchaseQty = Math.max(0, opQty - prevClose);
+            if (purchaseQty > 0) {
+              rangePurchasesSale += purchaseQty * salePrice;
+              rangePurchasesMrp += purchaseQty * mrpPrice;
+            }
+            runningPrevClosing[b.id] = clQty;
+          });
+        });
+
+        const netProfit = tSales - rangePurchasesSale - tExpenses;
+        setSummary({ 
+          grossProfit: tSales, 
+          totalPurchases: rangePurchasesSale, 
+          totalExpenses: tExpenses, 
+          netProfit: netProfit, 
+          totalWithdrawn: tWithdrawals, 
+          retainedCash: netProfit - tWithdrawals,
+          openingSale: openingSaleVal,
+          openingMrp: openingMrpVal,
+          closingSale: closingSaleVal,
+          closingMrp: closingMrpVal,
+          purchasesSale: rangePurchasesSale,
+          purchasesMrp: rangePurchasesMrp
+        });
+
+        // ----------------------------------------------------
+        // MAGIC CHART (SECTION 6) AUTO-FETCH ENGINE
+        // ----------------------------------------------------
         if (showMagicChart && user) {
           const [ { data: savedRecord }, { data: prevRecord } ] = await Promise.all([
             supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
@@ -209,32 +323,6 @@ export default function Reports() {
             if (eDate) {
               if (eDate >= startObj && eDate <= endObj) currExpVal += parseFloat(e.amount || 0);
               if (eDate >= prevStartObj && eDate <= prevEndObj) prevExpVal += parseFloat(e.amount || 0);
-            }
-          });
-
-          let openingVal = 0;
-          let closingVal = 0;
-          const stockByBrand = {};
-          
-          stockData?.forEach(s => {
-            const sDate = getLocalDateObj(s.date);
-            if (sDate && sDate >= startObj && sDate <= endObj) {
-              if (!stockByBrand[s.brand_id]) stockByBrand[s.brand_id] = [];
-              stockByBrand[s.brand_id].push(s);
-            }
-          });
-
-          brandsData?.forEach(b => {
-            const bStock = stockByBrand[b.id];
-            if (bStock && bStock.length > 0) {
-              const firstEntry = bStock[0];
-              const openPrice = firstEntry.unit_price ? parseFloat(firstEntry.unit_price) : parseFloat(b.selling_price);
-              openingVal += (parseInt(firstEntry.opening_balance || 0) * openPrice);
-
-              const lastEntry = bStock[bStock.length - 1];
-              const closeQty = lastEntry.closing_balance !== null ? parseInt(lastEntry.closing_balance) : 0;
-              const closePrice = lastEntry.unit_price ? parseFloat(lastEntry.unit_price) : parseFloat(b.selling_price);
-              closingVal += (closeQty * closePrice);
             }
           });
 
@@ -312,26 +400,22 @@ export default function Reports() {
           setMagicChartData(prev => ({
             ...prev,
             box1: currSales,
-            box2: closingVal,
-            box4: openingVal,
-            box5: currPurchasesVal,
+            box2: closingMrpVal,
+            box4: openingMrpVal,
+            box5: rangePurchasesMrp,
             currExp: currExpVal
           }));
 
           if (savedRecord) {
-            setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : '');
-            setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : '');
-            setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : '');
+            setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : String(Math.round(closingMrpVal)));
+            setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : String(Math.round(openingMrpVal)));
+            setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(rangePurchasesMrp)));
             setIsEditing(false); 
           } else {
-            setManualClosing('');
-            setManualPurchases(String(Math.round(currPurchasesVal)));
+            setManualClosing(String(Math.round(closingMrpVal)));
+            setManualOpening(String(Math.round(openingMrpVal)));
+            setManualPurchases(String(Math.round(rangePurchasesMrp)));
             setIsEditing(true); 
-            if (prevRecord && prevRecord.closing_stock !== null) {
-              setManualOpening(String(prevRecord.closing_stock));
-            } else {
-              setManualOpening(String(Math.round(openingVal)));
-            }
           }
         }
 
@@ -676,7 +760,7 @@ export default function Reports() {
                 <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Gross Profit (Sales)</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{summary.grossProfit.toLocaleString()}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Total Purchases</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">₹{summary.totalPurchases.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Total Purchases (Sale)</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">₹{summary.totalPurchases.toLocaleString()}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
                 <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Business Expenses</p><h3 className="text-2xl font-black text-red-500 print-text-rose">₹{summary.totalExpenses.toLocaleString()}</h3>
