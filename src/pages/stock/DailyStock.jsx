@@ -680,9 +680,44 @@ export default function DailyStock() {
     });
   };
 
-  const tableTotalOpening = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
-  const tableTotalPurchases = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
-  const tableTotalClosing = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
+  const tableTotalOpeningQty = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
+  const tableTotalPurchasesQty = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
+  const tableTotalClosingQty = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
+
+  // Exact valuation based on old vs new stock prices
+  const tableTotalOpeningAmount = stockRows.reduce((acc, row) => {
+    // Opening balance pre-dates current purchases, so it uses carried_price
+    const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_price || 0);
+    const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0);
+    return acc + baseVal + purchaseVal;
+  }, 0);
+
+  const tableTotalPurchasesAmount = stockRows.reduce((acc, row) => {
+    return acc + ((parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0));
+  }, 0);
+
+  const tableTotalClosingAmount = stockRows.reduce((acc, row) => {
+    if (row.closing_balance === '' || row.closing_balance === null) return acc;
+    const closingQty = parseInt(row.closing_balance);
+    const baseQty = parseInt(row.base_opening) || 0;
+    const purchaseQty = parseInt(row.purchase_qty) || 0;
+    
+    // Reverse FIFO: Closing stock consists of the newest purchases first, then older stock.
+    let amt = 0;
+    let remClosing = closingQty;
+
+    // First take from new purchases
+    const fromNew = Math.min(remClosing, purchaseQty);
+    amt += fromNew * parseFloat(row.purchase_price || 0);
+    remClosing -= fromNew;
+
+    // Then take from older base opening stock
+    if (remClosing > 0) {
+      amt += Math.min(remClosing, baseQty) * parseFloat(row.carried_price || 0);
+    }
+    
+    return acc + amt;
+  }, 0);
 
   const inputClass = "w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-semibold";
   const numInputClass = "w-20 px-2 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm text-center font-bold";
@@ -1006,14 +1041,30 @@ export default function DailyStock() {
                 {stockRows.length > 0 && !loading && (
                   <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                     <tr>
-                      <td colSpan="2" className="px-3 py-4 text-right">
+                      <td colSpan="2" className="px-3 py-4 text-right align-top pt-6">
                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600" /> TOTALS</div>
                       </td>
-                      <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalOpening}</td>
-                      <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalPurchases}</td>
-                      <td className="px-4 py-4 text-center font-black text-slate-800 dark:text-slate-200">{tableTotalClosing}</td>
-                      <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</td>
-                      <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{dailySummary.totalRevenue.toLocaleString()}</td>
+                      
+                      <td className="px-4 py-4 text-center">
+                        <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalOpeningQty}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-1">₹{tableTotalOpeningAmount.toLocaleString()}</div>
+                      </td>
+                      
+                      <td className="px-4 py-4 text-center">
+                        <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalPurchasesQty}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-1">₹{tableTotalPurchasesAmount.toLocaleString()}</div>
+                      </td>
+                      
+                      <td className="px-4 py-4 text-center">
+                        <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalClosingQty}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-1">₹{tableTotalClosingAmount.toLocaleString()}</div>
+                      </td>
+                      
+                      <td className="px-4 py-4 text-center">
+                        <div className="font-black text-lg text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</div>
+                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">₹{dailySummary.totalRevenue.toLocaleString()}</div>
+                      </td>
+                      <td className="px-6 py-4 text-right align-top pt-6 font-black text-emerald-600 dark:text-emerald-400 text-xl">₹{dailySummary.totalRevenue.toLocaleString()}</td>
                     </tr>
                     <tr>
                       <td colSpan="6" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>

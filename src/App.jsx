@@ -8,6 +8,7 @@ import PurchaseManager from './pages/purchases/PurchaseManager'; // Naya Purchas
 import DailyStock from './pages/stock/DailyStock'; // Naya Daily Stock
 import ProfitLoss from './pages/reports/ProfitLoss'; // Naya P&L
 import Reports from './pages/reports/Reports';
+import MagicChart from './pages/reports/MagicChart';
 
 function App() {
   const { user } = useAuth();
@@ -24,6 +25,7 @@ function App() {
           <Route path="daily-stock" element={<DailyStock />} />
           <Route path="profit-loss" element={<ProfitLoss />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="magic-chart" element={<MagicChart />} />
         </Route>
       </Routes>
     </BrowserRouter>
