@@ -30,7 +30,6 @@ const formatDateForDB = (date) => {
   return `${year}-${month}-${day}`;
 };
 
-// विभिन्न डेट फॉर्मेट्स को बिना टाइमज़ोन शिफ्ट के सटीक रूप से पार्स करने के लिए हेल्पर
 const getLocalDateObj = (dateInput) => {
   if (!dateInput) return null;
   const str = typeof dateInput === 'string' ? dateInput.split('T')[0] : '';
@@ -44,7 +43,6 @@ const getLocalDateObj = (dateInput) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 };
 
-// यह सुनिश्चित करने के लिए हेल्पर कि चुनी हुई अवधि एक पूर्ण कैलेंडर महीना है
 const isFullCalendarMonth = (start, end) => {
   if (!start || !end) return false;
   const s = getLocalDateObj(start);
@@ -61,7 +59,6 @@ const isFullCalendarMonth = (start, end) => {
   return sameYear && sameMonth && isFirstDay && isLastDay;
 };
 
-// भारतीय रुपया फॉर्मेट करने के लिए ग्लोबल हेल्पर फंक्शन
 const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
 
 export default function Reports() {
@@ -79,7 +76,6 @@ export default function Reports() {
   const [collectionList, setCollectionList] = useState([]);
   const [summary, setSummary] = useState({ grossProfit: 0, totalPurchases: 0, totalExpenses: 0, netProfit: 0, totalWithdrawn: 0, retainedCash: 0 });
 
-  // मैजिक चार्ट स्टेट्स
   const [magicChartData, setMagicChartData] = useState({
     box1: 0, box2: 0, box3: 0, box4: 0, box5: 0, box6: 0, box7: 0, currExp: 0, currNetProfit: 0, prevNetProfit: 0, cumulativeProfit: 0
   });
@@ -87,14 +83,12 @@ export default function Reports() {
   const [manualOpening, setManualOpening] = useState('');
   const [manualPurchases, setManualPurchases] = useState('');
 
-  // पिछले महीने का स्टेट्स (कैलकुलेशन के लिए)
   const [prevSavedData, setPrevSavedData] = useState(null);
   const [prevMonthSales, setPrevMonthSales] = useState(0);
   const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
 
-  const selectedMonth = startDate; // Reports.jsx में महीने के सिंक के लिए डिक्लेरेशन हुक के ऊपर रखा गया है
+  const selectedMonth = startDate;
 
-  // Selected Month को sessionStorage में सिंक करने के लिए हुक
   useEffect(() => {
     if (selectedMonth) {
       sessionStorage.setItem('mc_selectedMonth', selectedMonth.toISOString());
@@ -104,7 +98,6 @@ export default function Reports() {
   const handleStartDateChange = (date) => { setStartDate(date); sessionStorage.setItem('report_start_date', date.toISOString()); setLoading(true); };
   const handleEndDateChange = (date) => { setEndDate(date); sessionStorage.setItem('report_end_date', date.toISOString()); setLoading(true); };
 
-  // यह जाँचेगा कि चुनी गई अवधि पूर्ण कैलेंडर महीना है या नहीं
   const showMagicChart = isFullCalendarMonth(startDate, endDate);
 
   useEffect(() => {
@@ -128,7 +121,6 @@ export default function Reports() {
         const { data: brandsData } = await supabase.from('brands').select('*');
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
-        // Fetch Expenses
         const expQueryStart = showMagicChart ? prevStartStr : startStr;
         const { data: expData } = await supabase.from('expenses').select('*').gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date');
         
@@ -139,11 +131,9 @@ export default function Reports() {
           }
         });
         
-        // Fetch Withdrawals (Collections)
         const { data: withData } = await supabase.from('owner_withdrawals').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date');
         const tWithdrawals = withData?.reduce((sum, w) => sum + parseFloat(w.amount), 0) || 0;
 
-        // Fetch Purchases (from standard purchases table)
         const { data: purchData } = await supabase.from('purchases').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59');
         let tPurchases = 0; const purchaseQtyMap = {}; 
         purchData?.forEach(p => {
@@ -151,7 +141,6 @@ export default function Reports() {
           const key = `${p.date}_${p.brand_id}`; purchaseQtyMap[key] = (purchaseQtyMap[key] || 0) + (p.quantity || 0);
         });
 
-        // Trader Transactions
         const { data: allTraderTxData } = await supabase.from('trader_transactions').select('*, traders(trader_name)').lte('date', endStr + 'T23:59:59').order('date').order('created_at');
         const txList = []; const balances = {};
         let currPurchasesVal = 0;
@@ -171,7 +160,6 @@ export default function Reports() {
           }
         });
 
-        // Stock Data
         const stockQueryStart = showMagicChart ? prevStartStr : startStr;
         const { data: stockData } = await supabase.from('daily_stock').select('*').gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true });
         
@@ -181,7 +169,6 @@ export default function Reports() {
         setCollectionList(withData || []);
         setTraderTransactions(txList);
 
-        // Sales aggregation
         let tSales = 0; const salesAggregation = {};
         const validStockData = stockData?.filter(stock => stock.date >= startStr && stock.closing_balance !== null) || [];
         
@@ -209,15 +196,12 @@ export default function Reports() {
         const netProfit = tSales - tPurchases - tExpenses;
         setSummary({ grossProfit: tSales, totalPurchases: tPurchases, totalExpenses: tExpenses, netProfit: netProfit, totalWithdrawn: tWithdrawals, retainedCash: netProfit - tWithdrawals });
 
-        // ================= केवल पूर्ण कैलेंडर महीना होने पर मैजिक चार्ट की गणना करना =================
         if (showMagicChart && user) {
-          // सहेजे गए मैजिक चार्ट रिकॉर्ड का मिलान
           const [ { data: savedRecord }, { data: prevRecord } ] = await Promise.all([
             supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
             supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle()
           ]);
 
-          // Expenses कैलकुलेशन (चालू और पिछला महीना)
           let currExpVal = 0;
           let prevExpVal = 0;
           expData?.forEach(e => {
@@ -228,7 +212,6 @@ export default function Reports() {
             }
           });
 
-          // Stock Valuations
           let openingVal = 0;
           let closingVal = 0;
           const stockByBrand = {};
@@ -255,7 +238,6 @@ export default function Reports() {
             }
           });
 
-          // Simulate FIFO Sales (Box 1)
           const calculateFifoSales = async (startObjRange, endObjRange) => {
             let totalSales = 0;
             const prevClosings = {};
@@ -336,16 +318,15 @@ export default function Reports() {
             currExp: currExpVal
           }));
 
-          // डेटा लोड प्रबंधन और एडिट/रीड-ओनली मोड सेट करना
           if (savedRecord) {
             setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : '');
             setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : '');
             setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : '');
-            setIsEditing(false); // डेटा मौजूद होने पर रीड-ओनली व्यू
+            setIsEditing(false); 
           } else {
             setManualClosing('');
             setManualPurchases(String(Math.round(currPurchasesVal)));
-            setIsEditing(true); // डेटा न होने पर सीधे संपादन मोड
+            setIsEditing(true); 
             if (prevRecord && prevRecord.closing_stock !== null) {
               setManualOpening(String(prevRecord.closing_stock));
             } else {
@@ -400,26 +381,23 @@ export default function Reports() {
 
   const printReport = () => { window.print(); setIsExportMenuOpen(false); };
 
-  // Calculate Totals for render
   const salesTotalQty = salesList.reduce((acc, s) => acc + s.total_qty, 0);
   const salesTotalRev = salesList.reduce((acc, s) => acc + s.total_revenue, 0);
   const traderTotalPurchases = traderTransactions.reduce((acc, tx) => acc + tx.purchase_amount, 0);
   const traderTotalPaid = traderTransactions.reduce((acc, tx) => acc + tx.paid_amount, 0);
   const traderTotalRemaining = traderTransactions.length > 0 ? traderTransactions[traderTransactions.length - 1].remaining_amount : 0;
 
-  // --- CURRENT MONTH REALTIME CALCULATIONS FOR LEDGER ---
-  const ledgerBox1 = magicChartData.box1; // Auto-fetched
-  const ledgerBox2 = parseFloat(manualClosing) || 0; // Manual
+  const ledgerBox1 = magicChartData.box1; 
+  const ledgerBox2 = parseFloat(manualClosing) || 0; 
   const ledgerBox3 = ledgerBox1 + ledgerBox2;
 
-  const ledgerBox4 = parseFloat(manualOpening) || 0; // Manual
-  const ledgerBox5 = parseFloat(manualPurchases) || 0; // Manual
+  const ledgerBox4 = parseFloat(manualOpening) || 0; 
+  const ledgerBox5 = parseFloat(manualPurchases) || 0; 
   const ledgerBox6 = ledgerBox4 + ledgerBox5;
 
-  const ledgerBox7 = ledgerBox3 - ledgerBox6; // Gross Profit
-  const ledgerNetProfit = ledgerBox7 - magicChartData.currExp; // Net Profit
+  const ledgerBox7 = ledgerBox3 - ledgerBox6; 
+  const ledgerNetProfit = ledgerBox7 - magicChartData.currExp; 
 
-  // --- PREVIOUS MONTH REALTIME CALCULATIONS FOR LEDGER ---
   const prevBox2Val = prevSavedData ? parseFloat(prevSavedData.closing_stock) || 0 : 0;
   const prevBox3Val = prevMonthSales + prevBox2Val;
 
@@ -428,9 +406,9 @@ export default function Reports() {
   const prevBox6Val = prevBox4Val + prevBox5Val;
 
   const prevBox7Val = prevBox3Val - prevBox6Val;
-  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; // मागील महिन्याचा नफा
+  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; 
 
-  const cumulativeProfitVal = prevNetProfitVal + ledgerNetProfit; // एकूण नफा
+  const cumulativeProfitVal = prevNetProfitVal + ledgerNetProfit; 
 
   return (
     <div className="space-y-6 transition-colors duration-300">
@@ -481,25 +459,154 @@ export default function Reports() {
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
         
+        /* UNIFIED HIGH-FIDELITY PRINT SYSTEM */
         @media print {
-          @page { size: A4 portrait; margin: 15mm; }
-          html, body { background-color: white !important; color: black !important; margin: 0; padding: 0; font-family: Arial, sans-serif !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-          body * { visibility: hidden; } .no-print { display: none !important; }
+          @page { 
+            size: A4 portrait; 
+            margin: 12mm 12mm 12mm 12mm; 
+          }
+          
+          /* Enforce exact colors and graphics rendering regardless of active theme */
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            box-shadow: none !important;
+            text-shadow: none !important;
+          }
+
+          html, body { 
+            background-color: #ffffff !important; 
+            color: #0f172a !important; 
+            margin: 0 !important; 
+            padding: 0 !important; 
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; 
+          }
+
+          /* Forcefully strip out dark-mode styling overrides on print pages */
+          .dark, .dark * {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #cbd5e1 !important;
+          }
+          
+          body * { visibility: hidden; } 
+          .no-print { display: none !important; }
+          
           #printable-report, #printable-report * { visibility: visible; } 
-          #printable-report { position: absolute; left: 0; top: 0; width: 100%; background-color: white !important; }
-          #printable-report h1, #printable-report h2, #printable-report h3, #printable-report p, #printable-report span, #printable-report td, #printable-report th { color: black !important; }
-          #printable-report .dark\\:bg-slate-900, #printable-report .dark\\:bg-slate-800, #printable-report .bg-slate-900 { background-color: white !important; }
-          .print-card-grid { display: grid !important; grid-template-columns: repeat(3, 1fr) !important; gap: 15px !important; margin-bottom: 25px !important; }
-          .print-magic-grid { display: grid !important; grid-template-columns: repeat(2, 1fr) !important; gap: 20px !important; }
-          .print-metric { border: 2px solid #e5e7eb !important; border-radius: 8px !important; padding: 15px !important; text-align: center !important; background-color: white !important; box-shadow: none !important; }
-          .print-metric p { font-size: 10pt !important; font-weight: bold !important; margin-bottom: 8px !important; text-transform: uppercase; color: #4b5563 !important;}
-          .print-metric h3 { font-size: 16pt !important; font-weight: 900 !important; color: #000 !important; margin: 0 !important;}
-          table { width: 100% !important; border-collapse: collapse !important; margin-bottom: 20px !important; background-color: white !important; }
-          th { background-color: #f3f4f6 !important; color: #000 !important; font-weight: bold !important; text-transform: uppercase; font-size: 9pt !important; padding: 10px !important; border: 1px solid #d1d5db !important; }
-          td { padding: 10px !important; border: 1px solid #d1d5db !important; font-size: 10pt !important; color: #000 !important; background-color: white !important; }
-          tr { page-break-inside: avoid; }
-          thead { display: table-header-group; }
-          .page-break-before { page-break-before: always; padding-top: 10mm; }
+          #printable-report { 
+            position: absolute !important; 
+            left: 0 !important; 
+            top: 0 !important; 
+            width: 100% !important; 
+            background-color: #ffffff !important; 
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+
+          /* Elegant Colored Section Headings */
+          .print-section-header {
+            border-left: 5px solid #4f46e5 !important;
+            padding-left: 10px !important;
+            color: #1e1b4b !important;
+            font-size: 13pt !important;
+            font-weight: 800 !important;
+            text-transform: uppercase;
+            margin-top: 25px !important;
+            margin-bottom: 15px !important;
+          }
+
+          /* Clean Metric Grid styling */
+          .print-card-grid { 
+            display: grid !important; 
+            grid-template-columns: repeat(3, 1fr) !important; 
+            gap: 12px !important; 
+            margin-bottom: 25px !important; 
+          }
+          .print-metric { 
+            border: 1px solid #e2e8f0 !important; 
+            border-radius: 12px !important; 
+            padding: 12px !important; 
+            text-align: left !important; 
+            background-color: #f8fafc !important; 
+          }
+          .print-metric p { 
+            font-size: 8pt !important; 
+            font-weight: 700 !important; 
+            margin-bottom: 6px !important; 
+            text-transform: uppercase; 
+            color: #64748b !important;
+          }
+          .print-metric h3 { 
+            font-size: 15pt !important; 
+            font-weight: 900 !important; 
+            margin: 0 !important;
+          }
+
+          /* Auto-Scaling Magic Chart Tables */
+          .print-magic-table {
+            min-width: 0 !important;
+            width: 100% !important;
+            table-layout: fixed !important;
+            border-collapse: collapse !important;
+            border: 1px solid #cbd5e1 !important;
+          }
+
+          .print-magic-table th {
+            background-color: #f8fafc !important;
+            color: #1e293b !important;
+            font-size: 7pt !important;
+            font-weight: bold !important;
+            padding: 8px 3px !important;
+            border: 1px solid #cbd5e1 !important;
+            line-height: 1.25 !important;
+          }
+
+          .print-magic-table td {
+            font-size: 8pt !important;
+            padding: 8px 3px !important;
+            border: 1px solid #cbd5e1 !important;
+            font-weight: 800 !important;
+            background-color: #ffffff !important;
+          }
+
+          /* Print Highlights Preservation */
+          .print-text-emerald { color: #059669 !important; }
+          .print-text-rose { color: #e11d48 !important; }
+          .print-text-indigo { color: #4f46e5 !important; }
+          .print-bg-indigo-light { background-color: #e0e7ff !important; color: #4f46e5 !important; }
+          .print-bg-indigo-deep { background-color: #4f46e5 !important; color: #ffffff !important; }
+
+          /* Flatten inputs to raw text in print */
+          .print-magic-table input {
+            font-size: 8pt !important;
+            font-weight: 900 !important;
+            background-color: transparent !important;
+            border: none !important;
+            height: auto !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            text-align: center !important;
+            color: #0f172a !important;
+            -moz-appearance: textfield;
+            appearance: textfield;
+          }
+          .print-magic-table input::-webkit-outer-spin-button,
+          .print-magic-table input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+          }
+
+          /* General lists */
+          table { width: 100% !important; border-collapse: collapse !important; margin-bottom: 20px !important; }
+          th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: bold !important; text-transform: uppercase; font-size: 8pt !important; padding: 8px !important; border: 1px solid #e2e8f0 !important; }
+          td { padding: 8px !important; border: 1px solid #e2e8f0 !important; font-size: 9pt !important; color: #334155 !important; }
+          tr { page-break-inside: avoid !important; }
+          thead { display: table-header-group !important; }
+          
+          .page-break-before { 
+            page-break-before: always !important; 
+            padding-top: 8mm !important; 
+          }
         }
       `}</style>
 
@@ -536,38 +643,38 @@ export default function Reports() {
         
         {/* PAGE 1 */}
         <div>
-          <div className="text-center mb-8 border-b-2 border-slate-200 dark:border-slate-800 print:border-gray-300 pb-4">
-            <h1 className="text-3xl font-black text-slate-900 dark:text-white print:text-black uppercase tracking-widest">Nexus Diary</h1>
-            <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 print:text-black mt-1">Consolidated Financial & Sales Report</h2>
-            <p className="text-slate-500 font-medium mt-2 uppercase text-sm tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+          <div className="text-center mb-8 border-b-2 border-slate-200 dark:border-slate-800 print:border-indigo-500 pb-4">
+            <h1 className="text-3xl font-black text-slate-900 dark:text-white print:text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
+            <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 print:text-slate-700 mt-1">Consolidated Financial & Sales Report</h2>
+            <p className="text-slate-500 font-semibold mt-2 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
           </div>
 
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-4">1. Financial Summary Overview</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4">1. Financial Summary Overview</h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 print-card-grid">
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Gross Profit (Sales)</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400">₹{summary.grossProfit.toLocaleString()}</h3>
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Gross Profit (Sales)</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{summary.grossProfit.toLocaleString()}</h3>
               </div>
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
                 <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Total Purchases</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">₹{summary.totalPurchases.toLocaleString()}</h3>
               </div>
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Business Expenses</p><h3 className="text-2xl font-black text-red-500">₹{summary.totalExpenses.toLocaleString()}</h3>
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Business Expenses</p><h3 className="text-2xl font-black text-red-500 print-text-rose">₹{summary.totalExpenses.toLocaleString()}</h3>
               </div>
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Net Profit / Loss</p><h3 className="text-2xl font-black text-blue-600 dark:text-blue-400">₹{summary.netProfit.toLocaleString()}</h3>
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Net Profit / Loss</p><h3 className="text-2xl font-black text-blue-600 dark:text-blue-400 print-text-indigo">₹{summary.netProfit.toLocaleString()}</h3>
               </div>
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
                 <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Online Collections</p><h3 className="text-2xl font-black text-indigo-500">₹{summary.totalWithdrawn.toLocaleString()}</h3>
               </div>
-              <div className="bg-emerald-50 dark:bg-emerald-900/10 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric">
-                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">Cash Left in Hand</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400">₹{summary.retainedCash.toLocaleString()}</h3>
+              <div className="bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 rounded-xl p-5 print-metric shadow-sm">
+                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">Cash Left in Hand</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 print-text-emerald">₹{summary.retainedCash.toLocaleString()}</h3>
               </div>
             </div>
           </div>
 
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-4 flex items-center gap-2"><TrendingUp size={18} className="no-print" /> 2. Itemized Bottles Sold Breakdown</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><TrendingUp size={18} className="no-print" /> 2. Itemized Bottles Sold Breakdown</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
@@ -580,13 +687,15 @@ export default function Reports() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {loading ? <tr><td colSpan="5" className="px-4 py-8 text-center">Compiling sales data...</td></tr> : salesList.map((item, idx) => (
+                  {loading ? (
+                    <tr><td colSpan="5" className="px-4 py-8 text-center">Compiling sales data...</td></tr>
+                  ) : salesList.map((item, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 print:hover:bg-transparent">
-                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100 print:text-black">{item.brand_name}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{item.brand_name}</td>
                       <td className="px-4 py-3 text-center">{item.bottle_size}</td>
                       <td className="px-4 py-3 text-right">₹{item.selling_price}</td>
                       <td className="px-4 py-3 text-center font-bold">{item.total_qty}</td>
-                      <td className="px-4 py-3 text-right font-bold text-emerald-600 dark:text-emerald-400 print:text-black">₹{item.total_revenue.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right font-bold text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{item.total_revenue.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -597,7 +706,7 @@ export default function Reports() {
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTALS</div>
                       </td>
                       <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{salesTotalQty}</td>
-                      <td className="px-4 py-4 text-right font-black text-emerald-600 dark:text-emerald-400">₹{salesTotalRev.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{salesTotalRev.toLocaleString()}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -608,12 +717,12 @@ export default function Reports() {
 
         {/* PAGE 2 */}
         <div className="page-break-before pt-6 sm:pt-0">
-          <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-gray-300 pb-4">
-             <h1 className="text-2xl font-black text-black uppercase tracking-widest">Nexus Diary - Page 2</h1>
-             <p className="text-gray-600 font-medium mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+          <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
+             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
+             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
           </div>
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-4 flex items-center gap-2"><Receipt size={18} className="no-print" /> 3. Business Expenses Ledger</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Receipt size={18} className="no-print" /> 3. Business Expenses Ledger</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
@@ -621,7 +730,7 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? <tr><td colSpan="3" className="px-4 py-8 text-center">Compiling...</td></tr> : expenseList.map((e, idx) => (
-                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{e.description}</td><td className="px-4 py-3 text-right font-bold text-red-600 dark:text-red-400 print:text-black">₹{e.amount}</td></tr>
+                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{e.description}</td><td className="px-4 py-3 text-right font-bold text-red-600 dark:text-red-400 print-text-rose">₹{e.amount}</td></tr>
                   ))}
                 </tbody>
                 {expenseList.length > 0 && !loading && (
@@ -630,7 +739,7 @@ export default function Reports() {
                       <td colSpan="2" className="px-4 py-4 text-right">
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTAL EXPENSES</div>
                       </td>
-                      <td className="px-4 py-4 text-right font-black text-red-600 dark:text-red-400">₹{summary.totalExpenses.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-red-600 dark:text-red-400 print-text-rose">₹{summary.totalExpenses.toLocaleString()}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -641,12 +750,12 @@ export default function Reports() {
 
         {/* PAGE 3 */}
         <div className="page-break-before pt-6 sm:pt-0">
-          <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-gray-300 pb-4">
-             <h1 className="text-2xl font-black text-black uppercase tracking-widest">Nexus Diary - Page 3</h1>
-             <p className="text-gray-600 font-medium mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+          <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
+             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
+             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
           </div>
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-4 flex items-center gap-2"><Landmark size={18} className="no-print" /> 4. Online Collections Ledger</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Landmark size={18} className="no-print" /> 4. Online Collections Ledger</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
@@ -654,7 +763,7 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? <tr><td colSpan="4" className="px-4 py-8 text-center">Compiling...</td></tr> : collectionList.map((c, idx) => (
-                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{c.description}</td><td className="px-4 py-3 text-center"><span className="px-2 py-1 text-[10px] font-bold uppercase rounded-md bg-blue-100 text-blue-700 print:bg-transparent print:border">{c.withdrawal_mode}</span></td><td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print:text-black">₹{c.amount}</td></tr>
+                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{c.description}</td><td className="px-4 py-3 text-center"><span className="px-2 py-1 text-[10px] font-bold uppercase rounded-md bg-blue-100 text-blue-700 print:bg-slate-100 print:text-blue-800">{c.withdrawal_mode}</span></td><td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{c.amount}</td></tr>
                   ))}
                 </tbody>
                 {collectionList.length > 0 && !loading && (
@@ -663,7 +772,7 @@ export default function Reports() {
                       <td colSpan="3" className="px-4 py-4 text-right">
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTAL COLLECTIONS</div>
                       </td>
-                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400">₹{summary.totalWithdrawn.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{summary.totalWithdrawn.toLocaleString()}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -674,12 +783,12 @@ export default function Reports() {
 
         {/* PAGE 4 */}
         <div className="page-break-before pt-6 sm:pt-0">
-          <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-gray-300 pb-4">
-             <h1 className="text-2xl font-black text-black uppercase tracking-widest">Nexus Diary - Page 4</h1>
-             <p className="text-gray-600 font-medium mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+          <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
+             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
+             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
           </div>
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-4 flex items-center gap-2"><Users size={18} className="no-print" /> 5. Trader Purchases & Payment Ledger</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Users size={18} className="no-print" /> 5. Trader Purchases & Payment Ledger</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
@@ -689,10 +798,10 @@ export default function Reports() {
                   {loading ? <tr><td colSpan="5" className="px-4 py-8 text-center">Compiling trader data...</td></tr> : traderTransactions.map((tx, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 print:hover:bg-transparent">
                       <td className="px-4 py-3 font-medium">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100 print:text-black">{tx.traders?.trader_name || 'N/A'}</td>
-                      <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500 print:text-black">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
-                      <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print:text-black">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
-                      <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white print:text-black">₹{tx.remaining_amount.toLocaleString()}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{tx.traders?.trader_name || 'N/A'}</td>
+                      <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
+                      <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
+                      <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -703,7 +812,7 @@ export default function Reports() {
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TRADER TOTALS</div>
                       </td>
                       <td className="px-4 py-4 text-right font-black text-amber-600 dark:text-amber-400">₹{traderTotalPurchases.toLocaleString()}</td>
-                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400">₹{traderTotalPaid.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{traderTotalPaid.toLocaleString()}</td>
                       <td className="px-4 py-4 text-right font-black text-slate-900 dark:text-white">₹{traderTotalRemaining.toLocaleString()}</td>
                     </tr>
                   </tfoot>
@@ -713,60 +822,60 @@ export default function Reports() {
           </div>
         </div>
 
-        {/* ================= PAGE 5: DYNAMIC MAGIC CHARTS (कैलेंडर महीना होने पर ही सक्रिय होगा) ================= */}
+        {/* PAGE 5: DYNAMIC MAGIC CHARTS */}
         {showMagicChart && (
           <div className="page-break-before pt-6 sm:pt-0">
-            <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-gray-300 pb-4">
-               <h1 className="text-2xl font-black text-black uppercase tracking-widest">Nexus Diary - Page 5</h1>
-               <p className="text-gray-600 font-medium mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+            <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
+               <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
+               <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
             </div>
 
             <div className="mb-8">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-6 flex items-center gap-2"><Wand2 size={18} className="no-print" /> 6. Magic Chart Ledger Analytics & Sandbox</h3>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-6 flex items-center gap-2"><Wand2 size={18} className="no-print" /> 6. Magic Chart Ledger Analytics & Sandbox</h3>
               
               {loading ? (
                 <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling simulated charts...</p>
               ) : (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl p-6 space-y-8 overflow-hidden print:border-none print:shadow-none">
+                <div className="space-y-8 no-print:bg-[#0c111d] dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl p-6 overflow-hidden print:border-none print:shadow-none print:p-0">
                   
-                  {/* माहे LABEL (LEDGER HEADER) */}
+                  {/* Ledger Header */}
                   <div className="text-center">
-                    <h3 className="text-lg font-black text-slate-700 dark:text-slate-300 tracking-widest uppercase">
+                    <h3 className="text-lg font-black text-slate-700 dark:text-slate-300 print:text-indigo-950 tracking-widest uppercase">
                       *** माहे {startDate.toLocaleDateString('mr-IN', { month: 'long' })} {startDate.getFullYear()} ***
                     </h3>
                   </div>
 
-                  {/* 1. MAIN 7-COLUMN TABLE */}
-                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl print:border-collapse">
-                    <table className="w-full text-center border-collapse" style={{ minWidth: '900px' }}>
+                  {/* 1. MAIN 7-COLUMN TABLE ENCLOSED IN A BEAUTIFUL CARD */}
+                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300 overflow-hidden">
+                    <table className="w-full text-center border-collapse min-w-225 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            चालू महिन्याची विक्री <br /> (Total Sales)
+                            चालू महिन्याची विक्री <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Total Sales)</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            आखेर शिल्लक माल <br /> (Closing Stock)
+                            आखेर शिल्लक माल <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Closing Stock)</span>
                           </th>
-                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
-                            रकाना 1 + 2 ची बेरीज <br /> (Sum 1 + 2)
-                          </th>
-                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            सुरुवातीची शिल्लक <br /> (Opening Stock)
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10 print:bg-slate-50">
+                            रकाना 1 + 2 ची बेरीज <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Sum 1 + 2)</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            चालू महिन्याची खरेदी <br /> (Total Purchases)
+                            सुरुवातीची शिल्लक <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Opening Stock)</span>
                           </th>
-                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
-                            रकाना 4 + 5 ची बेरीज <br /> (Sum 4 + 5)
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                            चालू महिन्याची खरेदी <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Total Purchases)</span>
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10 print:bg-slate-50">
+                            रकाना 4 + 5 ची बेरीज <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Sum 4 + 5)</span>
                           </th>
                           <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[16%]">
-                            रकाना 3 - 6 <br /> ढोबळ नफा - तोटा
+                            रकाना 3 - 6 <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">ढोबळ नफा - तोटा</span>
                           </th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr className="border-b border-slate-300 dark:border-slate-700 h-16">
-                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
+                        <tr className="border-b border-slate-300 dark:border-slate-700 h-16 print:h-auto">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
                             {formatRs(ledgerBox1)}
                           </td>
                           
@@ -776,13 +885,12 @@ export default function Reports() {
                               disabled={!isEditing}
                               value={manualClosing}
                               onChange={(e) => setManualClosing(e.target.value)}
-                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
-                              style={{ minHeight: '64px' }}
+                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90 min-h-16 print:min-h-0 print:py-1"
                               placeholder="0"
                             />
                           </td>
 
-                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5 print:text-xs print:bg-indigo-50 print-text-indigo">
                             {formatRs(ledgerBox3)}
                           </td>
 
@@ -792,8 +900,7 @@ export default function Reports() {
                               disabled={!isEditing}
                               value={manualOpening}
                               onChange={(e) => setManualOpening(e.target.value)}
-                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
-                              style={{ minHeight: '64px' }}
+                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90 min-h-16 print:min-h-0 print:py-1"
                               placeholder="0"
                             />
                           </td>
@@ -804,53 +911,53 @@ export default function Reports() {
                               disabled={!isEditing}
                               value={manualPurchases}
                               onChange={(e) => setManualPurchases(e.target.value)}
-                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
-                              style={{ minHeight: '64px' }}
+                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90 min-h-16 print:min-h-0 print:py-1"
                               placeholder="0"
                             />
                           </td>
 
-                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5 print:text-xs print:bg-indigo-50 print-text-indigo">
                             {formatRs(ledgerBox6)}
                           </td>
 
-                          <td className={`font-black text-xl ${ledgerBox7 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                          <td className={`font-black text-xl print:text-xs ${ledgerBox7 >= 0 ? 'text-emerald-600 dark:text-emerald-400 print-text-emerald' : 'text-red-500 print-text-rose'}`}>
                             {formatRs(ledgerBox7)}
                           </td>
                         </tr>
                         
-                        <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 font-bold">
-                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">1</td>
-                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">2</td>
-                          <td className="py-1 border-r border-slate-300 dark:border-slate-700 bg-indigo-50/10 dark:bg-indigo-950/5">3</td>
-                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">4</td>
-                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">5</td>
-                          <td className="py-1 border-r border-slate-300 dark:border-slate-700 bg-indigo-50/10 dark:bg-indigo-950/5">6</td>
-                          <td className="py-1">7</td>
+                        {/* BOX NUMBERS ROW (1, 2, 3, 4, 5, 6, 7) */}
+                        <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 dark:text-slate-500 font-bold">
+                          <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">1</td>
+                          <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">2</td>
+                          <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300 bg-indigo-50/10 dark:bg-indigo-950/5 print:bg-slate-50">3</td>
+                          <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">4</td>
+                          <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">5</td>
+                          <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300 bg-indigo-50/10 dark:bg-indigo-950/5 print:bg-slate-50">6</td>
+                          <td className="py-2">7</td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
 
-                  {/* 2. SETTLEMENT TABLE (ढोबळ नफा - खर्च) */}
-                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
-                    <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
+                  {/* 2. SETTLEMENT TABLE ENCLOSED IN A BEAUTIFUL CARD (ढोबळ नफा - खर्च) */}
+                  <div className="overflow-hidden border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300">
+                    <table className="w-full text-center border-collapse min-w-150 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
-                            एकूण ढोबळ नफा - चालू महिन्याचा खर्च <br /> (Gross Profit - Expenses)
+                            एकूण ढोबळ नफा - चालू महिन्याचा खर्च <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Gross Profit - Expenses)</span>
                           </th>
                           <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
-                            एकूण चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                            एकूण चालू महिन्याचा नफा <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Current Month Net Profit)</span>
                           </th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr className="h-16">
-                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-700 dark:text-slate-300 text-lg">
+                        <tr className="h-16 print:h-auto">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-700 dark:text-slate-300 text-lg print:text-xs">
                             {formatRs(ledgerBox7)} - {formatRs(magicChartData.currExp)}
                           </td>
-                          <td className={`font-black text-2xl ${ledgerNetProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                          <td className={`font-black text-2xl print:text-sm ${ledgerNetProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400 print-text-emerald' : 'text-red-500 print-text-rose'}`}>
                             {formatRs(ledgerNetProfit)}
                           </td>
                         </tr>
@@ -858,31 +965,31 @@ export default function Reports() {
                     </table>
                   </div>
 
-                  {/* 3. CUMULATIVE TABLE (एकूण नफा / संचयी) */}
-                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
-                    <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
+                  {/* 3. CUMULATIVE TABLE ENCLOSED IN A BEAUTIFUL CARD (एकूण नफा / संचयी) */}
+                  <div className="overflow-hidden border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300">
+                    <table className="w-full text-center border-collapse min-w-150 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                            मागील महिन्याचा नफा (+) <br /> (Previous Month Net Profit)
+                            मागील महिन्याचा नफा (+) <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Previous Month Net Profit)</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                            चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                            चालू महिन्याचा नफा <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Current Month Net Profit)</span>
                           </th>
-                          <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5">
-                            एकूण नफा <br /> (Total Net Profit)
+                          <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5 print:bg-indigo-50">
+                            एकूण नफा <span className="block text-[10px] font-medium text-slate-400 dark:text-slate-300 print:text-slate-500 mt-0.5">(Total Net Profit)</span>
                           </th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr className="h-16">
-                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg">
+                        <tr className="h-16 print:h-auto">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg print:text-xs">
                             {formatRs(prevNetProfitVal)}
                           </td>
-                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg print:text-xs">
                             {formatRs(ledgerNetProfit)}
                           </td>
-                          <td className="font-black text-2xl text-white bg-indigo-600 dark:bg-indigo-700/80">
+                          <td className="font-black text-2xl text-white bg-indigo-600 dark:bg-indigo-700/80 print:bg-indigo-600 print:text-white print:text-sm">
                             {formatRs(cumulativeProfitVal)}
                           </td>
                         </tr>
