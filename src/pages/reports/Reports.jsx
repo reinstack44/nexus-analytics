@@ -1,6 +1,10 @@
 import { useState, useEffect, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
-import { FileText, Download, FileSpreadsheet, Printer, Calendar, ChevronDown, TrendingUp, Users, Receipt, Landmark, Sigma } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { 
+  FileText, Download, FileSpreadsheet, Printer, Calendar, ChevronDown, 
+  TrendingUp, Users, Receipt, Landmark, Sigma, Wand2, Save, Edit2 
+} from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -51,18 +55,20 @@ const isFullCalendarMonth = (start, end) => {
   const sameMonth = s.getMonth() === e.getMonth();
   const isFirstDay = s.getDate() === 1;
 
-  // उसी महीने के अंतिम दिन की संख्या निकालना (उदा. 28, 29, 30, या 31)
   const lastDayOfSameMonth = new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate();
   const isLastDay = e.getDate() === lastDayOfSameMonth;
 
   return sameYear && sameMonth && isFirstDay && isLastDay;
 };
 
-// फ़ॉर्मेटिंग हेल्पर
-const formatRs = (num) => '₹' + Math.round(num).toLocaleString('en-IN');
+// भारतीय रुपया फॉर्मेट करने के लिए ग्लोबल हेल्पर फंक्शन
+const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
 
 export default function Reports() {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [startDate, setStartDate] = useState(() => getInitialDate('report_start_date'));
   const [endDate, setEndDate] = useState(() => getInitialDate('report_end_date'));
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
@@ -75,10 +81,25 @@ export default function Reports() {
 
   // मैजिक चार्ट स्टेट्स
   const [magicChartData, setMagicChartData] = useState({
-    box1: 0, box2: 0, box3: 0, box4: 0, box5: 0, box6: 0, box7: 0, currExp: 0, currNetProfit: 0
+    box1: 0, box2: 0, box3: 0, box4: 0, box5: 0, box6: 0, box7: 0, currExp: 0, currNetProfit: 0, prevNetProfit: 0, cumulativeProfit: 0
   });
-  const [manualSales, setManualSales] = useState('0');
-  const [manualPurchases, setManualPurchases] = useState('0');
+  const [manualClosing, setManualClosing] = useState('');
+  const [manualOpening, setManualOpening] = useState('');
+  const [manualPurchases, setManualPurchases] = useState('');
+
+  // पिछले महीने का स्टेट्स (कैलकुलेशन के लिए)
+  const [prevSavedData, setPrevSavedData] = useState(null);
+  const [prevMonthSales, setPrevMonthSales] = useState(0);
+  const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
+
+  const selectedMonth = startDate; // Reports.jsx में महीने के सिंक के लिए डिक्लेरेशन हुक के ऊपर रखा गया है
+
+  // Selected Month को sessionStorage में सिंक करने के लिए हुक
+  useEffect(() => {
+    if (selectedMonth) {
+      sessionStorage.setItem('mc_selectedMonth', selectedMonth.toISOString());
+    }
+  }, [selectedMonth]);
 
   const handleStartDateChange = (date) => { setStartDate(date); sessionStorage.setItem('report_start_date', date.toISOString()); setLoading(true); };
   const handleEndDateChange = (date) => { setEndDate(date); sessionStorage.setItem('report_end_date', date.toISOString()); setLoading(true); };
@@ -96,13 +117,27 @@ export default function Reports() {
       const startStr = formatDateForDB(startObj); 
       const endStr = formatDateForDB(endObj);
 
+      const prevStartObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 1);
+      const prevEndObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
+      const prevStartStr = formatDateForDB(prevStartObj);
+
+      const monthYearStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
+      const prevMonthYearStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
+
       try {
         const { data: brandsData } = await supabase.from('brands').select('*');
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
         // Fetch Expenses
-        const { data: expData } = await supabase.from('expenses').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date');
-        const tExpenses = expData?.reduce((sum, e) => sum + parseFloat(e.amount), 0) || 0;
+        const expQueryStart = showMagicChart ? prevStartStr : startStr;
+        const { data: expData } = await supabase.from('expenses').select('*').gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date');
+        
+        let tExpenses = 0;
+        expData?.forEach(e => {
+          if (e.date >= startStr && e.date <= endStr + 'T23:59:59') {
+            tExpenses += parseFloat(e.amount);
+          }
+        });
         
         // Fetch Withdrawals (Collections)
         const { data: withData } = await supabase.from('owner_withdrawals').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date');
@@ -137,17 +172,18 @@ export default function Reports() {
         });
 
         // Stock Data
-        const { data: stockData } = await supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date', { ascending: true });
+        const stockQueryStart = showMagicChart ? prevStartStr : startStr;
+        const { data: stockData } = await supabase.from('daily_stock').select('*').gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true });
         
         if (!isMounted) return; 
 
-        setExpenseList(expData || []);
+        setExpenseList(expData?.filter(e => e.date >= startStr) || []);
         setCollectionList(withData || []);
         setTraderTransactions(txList);
 
         // Sales aggregation
         let tSales = 0; const salesAggregation = {};
-        const validStockData = stockData?.filter(stock => stock.closing_balance !== null) || [];
+        const validStockData = stockData?.filter(stock => stock.date >= startStr && stock.closing_balance !== null) || [];
         
         validStockData.forEach(stock => {
           const key = `${stock.date}_${stock.brand_id}`; const purchQty = purchaseQtyMap[key] || 0;
@@ -174,12 +210,21 @@ export default function Reports() {
         setSummary({ grossProfit: tSales, totalPurchases: tPurchases, totalExpenses: tExpenses, netProfit: netProfit, totalWithdrawn: tWithdrawals, retainedCash: netProfit - tWithdrawals });
 
         // ================= केवल पूर्ण कैलेंडर महीना होने पर मैजिक चार्ट की गणना करना =================
-        if (showMagicChart) {
+        if (showMagicChart && user) {
+          // सहेजे गए मैजिक चार्ट रिकॉर्ड का मिलान
+          const [ { data: savedRecord }, { data: prevRecord } ] = await Promise.all([
+            supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
+            supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle()
+          ]);
+
+          // Expenses कैलकुलेशन (चालू और पिछला महीना)
           let currExpVal = 0;
+          let prevExpVal = 0;
           expData?.forEach(e => {
             const eDate = getLocalDateObj(e.date);
-            if (eDate && eDate >= startObj && eDate <= endObj) {
-              currExpVal += parseFloat(e.amount || 0);
+            if (eDate) {
+              if (eDate >= startObj && eDate <= endObj) currExpVal += parseFloat(e.amount || 0);
+              if (eDate >= prevStartObj && eDate <= prevEndObj) prevExpVal += parseFloat(e.amount || 0);
             }
           });
 
@@ -211,83 +256,102 @@ export default function Reports() {
           });
 
           // Simulate FIFO Sales (Box 1)
-          let totalSalesVal = 0;
-          const prevClosings = {};
-          const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
-          beforeStock?.forEach(s => {
-            if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
-              prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
-            }
-          });
-
-          const stockByDate = {};
-          stockData?.forEach(s => {
-            const sDate = getLocalDateObj(s.date);
-            if (sDate && sDate >= startObj && sDate <= endObj) {
-              const dateKey = formatDateForDB(sDate);
-              if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
-              stockByDate[dateKey].push(s);
-            }
-          });
-
-          const sortedDates = Object.keys(stockByDate).sort();
-          let runningStates = {};
-          brandsData?.forEach(b => {
-            const pc = prevClosings[b.id];
-            runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
-          });
-
-          sortedDates.forEach(date => {
-            stockByDate[date].forEach(row => {
-              const brand = brandMap[row.brand_id];
-              if (!brand) return;
-
-              const state = runningStates[brand.id];
-              const baseOpening = state.closing;
-              const carriedPrice = state.price;
-
-              const opening = parseInt(row.opening_balance || 0);
-              const purchaseQty = Math.max(0, opening - baseOpening);
-              const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
-              const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
-
-              if (closing !== '') {
-                const sQty = Math.max(0, opening - closing);
-                let rem = sQty;
-                let sAmt = 0;
-
-                const qtyOld = Math.min(rem, baseOpening);
-                sAmt += qtyOld * carriedPrice;
-                rem -= qtyOld;
-
-                if (rem > 0 && purchaseQty > 0) {
-                  sAmt += Math.min(rem, purchaseQty) * pPrice;
-                }
-                totalSalesVal += sAmt;
-                runningStates[brand.id] = { closing: closing, price: pPrice };
+          const calculateFifoSales = async (startObjRange, endObjRange) => {
+            let totalSales = 0;
+            const prevClosings = {};
+            const startRangeStr = formatDateForDB(startObjRange);
+            const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startRangeStr).order('date', { ascending: false });
+            beforeStock?.forEach(s => {
+              if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
+                prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
               }
             });
-          });
 
-          const box3 = totalSalesVal + closingVal;
-          const box6 = openingVal + currPurchasesVal;
-          const box7 = box3 - box6;
-          const currNetProfit = box7 - currExpVal;
+            const stockByDate = {};
+            stockData?.forEach(s => {
+              const sDate = getLocalDateObj(s.date);
+              if (sDate && sDate >= startObjRange && sDate <= endObjRange) {
+                const dateKey = formatDateForDB(sDate);
+                if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
+                stockByDate[dateKey].push(s);
+              }
+            });
 
-          setMagicChartData({
-            box1: totalSalesVal,
+            const sortedDates = Object.keys(stockByDate).sort();
+            let runningStates = {};
+            brandsData?.forEach(b => {
+              const pc = prevClosings[b.id];
+              runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
+            });
+
+            sortedDates.forEach(date => {
+              stockByDate[date].forEach(row => {
+                const brand = brandMap[row.brand_id];
+                if (!brand) return;
+
+                const state = runningStates[brand.id];
+                const baseOpening = state.closing;
+                const carriedPrice = state.price;
+
+                const opening = parseInt(row.opening_balance || 0);
+                const purchaseQty = Math.max(0, opening - baseOpening);
+                const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
+                const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
+
+                if (closing !== '') {
+                  const sQty = Math.max(0, opening - closing);
+                  let rem = sQty;
+                  let sAmt = 0;
+
+                  const qtyOld = Math.min(rem, baseOpening);
+                  sAmt += qtyOld * carriedPrice;
+                  rem -= qtyOld;
+
+                  if (rem > 0 && purchaseQty > 0) {
+                    sAmt += Math.min(rem, purchaseQty) * pPrice;
+                  }
+                  totalSales += sAmt;
+                  runningStates[brand.id] = { closing: closing, price: pPrice };
+                }
+              });
+            });
+            return totalSales;
+          };
+
+          const currSales = await calculateFifoSales(startObj, endObj);
+          const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
+
+          setPrevSavedData(prevRecord);
+          setPrevMonthSales(prevSales);
+          setPrevMonthExpenses(prevExpVal);
+
+          if (!isMounted) return;
+
+          setMagicChartData(prev => ({
+            ...prev,
+            box1: currSales,
             box2: closingVal,
-            box3,
             box4: openingVal,
             box5: currPurchasesVal,
-            box6,
-            box7,
-            currExp: currExpVal,
-            currNetProfit
-          });
+            currExp: currExpVal
+          }));
 
-          setManualSales(String(Math.round(totalSalesVal)));
-          setManualPurchases(String(Math.round(currPurchasesVal)));
+          // डेटा लोड प्रबंधन और एडिट/रीड-ओनली मोड सेट करना
+          if (savedRecord) {
+            setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : '');
+            setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : '');
+            setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : '');
+            setIsEditing(false); // डेटा मौजूद होने पर रीड-ओनली व्यू
+          } else {
+            setManualClosing('');
+            setManualPurchases(String(Math.round(currPurchasesVal)));
+            setIsEditing(true); // डेटा न होने पर सीधे संपादन मोड
+            if (prevRecord && prevRecord.closing_stock !== null) {
+              setManualOpening(String(prevRecord.closing_stock));
+            } else {
+              setManualOpening(String(Math.round(openingVal)));
+            }
+          }
         }
 
       } catch (error) { console.error("Error generating report:", error); }
@@ -296,7 +360,39 @@ export default function Reports() {
 
     fetchReportData();
     return () => { isMounted = false; };
-  }, [startDate, endDate, showMagicChart]); // showMagicChart भी डिपेंडेंसी में जोड़ा गया है
+  }, [startDate, endDate, showMagicChart, user]);
+
+  const handleSaveMagicChart = async () => {
+    if (!user) return;
+    setSaving(true);
+
+    const startObj = getLocalDateObj(startDate);
+    const monthYearStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
+
+    const payload = {
+      user_id: user.id,
+      month_year: monthYearStr,
+      closing_stock: manualClosing === '' ? null : parseFloat(manualClosing),
+      opening_stock: manualOpening === '' ? null : parseFloat(manualOpening),
+      total_purchases: manualPurchases === '' ? null : parseFloat(manualPurchases),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      const { error } = await supabase
+        .from('magic_chart_saves')
+        .upsert(payload, { onConflict: 'user_id, month_year' });
+
+      if (error) throw error;
+      setIsEditing(false);
+      alert('Magic Chart saved successfully.');
+    } catch (err) {
+      console.error('Error saving magic chart:', err);
+      alert('Error saving: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const exportToCSV = () => {
     window.alert("Exporting CSV is optimized for specific fields. PDF is recommended for full multi-page reporting.");
@@ -311,15 +407,30 @@ export default function Reports() {
   const traderTotalPaid = traderTransactions.reduce((acc, tx) => acc + tx.paid_amount, 0);
   const traderTotalRemaining = traderTransactions.length > 0 ? traderTransactions[traderTransactions.length - 1].remaining_amount : 0;
 
-  // --- MANUAL CHART REALTIME CALCULATIONS ---
-  const mSalesVal = parseFloat(manualSales) || 0;
-  const mPurchasesVal = parseFloat(manualPurchases) || 0;
-  const mBox2Val = magicChartData.box2; 
-  const mBox3Val = mSalesVal + mBox2Val; 
-  const mBox4Val = magicChartData.box4; 
-  const mBox6Val = mBox4Val + mPurchasesVal; 
-  const mBox7Val = mBox3Val - mBox6Val; 
-  const mNetProfitVal = mBox7Val - magicChartData.currExp; 
+  // --- CURRENT MONTH REALTIME CALCULATIONS FOR LEDGER ---
+  const ledgerBox1 = magicChartData.box1; // Auto-fetched
+  const ledgerBox2 = parseFloat(manualClosing) || 0; // Manual
+  const ledgerBox3 = ledgerBox1 + ledgerBox2;
+
+  const ledgerBox4 = parseFloat(manualOpening) || 0; // Manual
+  const ledgerBox5 = parseFloat(manualPurchases) || 0; // Manual
+  const ledgerBox6 = ledgerBox4 + ledgerBox5;
+
+  const ledgerBox7 = ledgerBox3 - ledgerBox6; // Gross Profit
+  const ledgerNetProfit = ledgerBox7 - magicChartData.currExp; // Net Profit
+
+  // --- PREVIOUS MONTH REALTIME CALCULATIONS FOR LEDGER ---
+  const prevBox2Val = prevSavedData ? parseFloat(prevSavedData.closing_stock) || 0 : 0;
+  const prevBox3Val = prevMonthSales + prevBox2Val;
+
+  const prevBox4Val = prevSavedData ? parseFloat(prevSavedData.opening_stock) || 0 : 0;
+  const prevBox5Val = prevSavedData ? parseFloat(prevSavedData.total_purchases) || 0 : 0;
+  const prevBox6Val = prevBox4Val + prevBox5Val;
+
+  const prevBox7Val = prevBox3Val - prevBox6Val;
+  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; // मागील महिन्याचा नफा
+
+  const cumulativeProfitVal = prevNetProfitVal + ledgerNetProfit; // एकूण नफा
 
   return (
     <div className="space-y-6 transition-colors duration-300">
@@ -611,139 +722,194 @@ export default function Reports() {
             </div>
 
             <div className="mb-8">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-6">6. Magic Chart Analytics & Sandbox Simulation</h3>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print:text-black uppercase border-b border-slate-200 dark:border-slate-800 print:border-gray-300 pb-2 mb-6 flex items-center gap-2"><Wand2 size={18} className="no-print" /> 6. Magic Chart Ledger Analytics & Sandbox</h3>
               
               {loading ? (
                 <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling simulated charts...</p>
               ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 print-magic-grid">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl p-6 space-y-8 overflow-hidden print:border-none print:shadow-none">
                   
-                  {/* 1. Automated Magic Chart */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-2">
-                      <h4 className="font-black text-slate-800 dark:text-white text-sm uppercase">1. Automated Magic Chart</h4>
-                      <span className="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400 bg-blue-100/50 dark:bg-blue-900/30 px-2 py-0.5 rounded-md print:border">System Cal</span>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex justify-between items-center">
-                      <div><span className="text-[10px] font-bold text-slate-400 block uppercase">Box 1</span><span className="font-semibold text-slate-800 dark:text-slate-200">Total Sales Amount</span></div>
-                      <span className="text-lg font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/10 px-3 py-1.5 rounded-lg">{formatRs(magicChartData.box1)}</span>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex justify-between items-center">
-                      <div><span className="text-[10px] font-bold text-slate-400 block uppercase">Box 2</span><span className="font-semibold text-slate-800 dark:text-slate-200">Closing Stock Value</span></div>
-                      <span className="text-lg font-black text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-900/10 px-3 py-1.5 rounded-lg">{formatRs(magicChartData.box2)}</span>
-                    </div>
-
-                    <div className="bg-slate-800 dark:bg-slate-900 rounded-xl p-4 flex justify-between items-center text-white">
-                      <div><span className="text-[10px] font-bold text-indigo-300 block uppercase">Box 3</span><span className="font-semibold">Sum (Box 1 + 2)</span></div>
-                      <span className="text-lg font-black text-indigo-400">{formatRs(magicChartData.box3)}</span>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex justify-between items-center">
-                      <div><span className="text-[10px] font-bold text-slate-400 block uppercase">Box 4</span><span className="font-semibold text-slate-800 dark:text-slate-200">Opening Stock Value</span></div>
-                      <span className="text-lg font-black text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-50 dark:bg-fuchsia-900/10 px-3 py-1.5 rounded-lg">{formatRs(magicChartData.box4)}</span>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex justify-between items-center">
-                      <div><span className="text-[10px] font-bold text-slate-400 block uppercase">Box 5</span><span className="font-semibold text-slate-800 dark:text-slate-200">Total Purchases</span></div>
-                      <span className="text-lg font-black text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/10 px-3 py-1.5 rounded-lg">{formatRs(magicChartData.box5)}</span>
-                    </div>
-
-                    <div className="bg-slate-800 dark:bg-slate-900 rounded-xl p-4 flex justify-between items-center text-white">
-                      <div><span className="text-[10px] font-bold text-violet-300 block uppercase">Box 6</span><span className="font-semibold">Sum (Box 4 + 5)</span></div>
-                      <span className="text-lg font-black text-violet-400">{formatRs(magicChartData.box6)}</span>
-                    </div>
-
-                    <div className={`rounded-xl p-4 border-2 flex justify-between items-center ${magicChartData.box7 >= 0 ? 'bg-emerald-50/70 border-emerald-300 text-emerald-800 dark:bg-emerald-950/20 dark:border-emerald-800 dark:text-emerald-200' : 'bg-red-50/70 border-red-300 text-red-800 dark:bg-red-950/20 dark:border-red-800 dark:text-red-200'}`}>
-                      <div><span className="text-[10px] font-bold block uppercase">Box 7</span><span className="font-bold">Gross Profit (Box 3 - 6)</span></div>
-                      <span className="text-xl font-black">{formatRs(magicChartData.box7)}</span>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 text-sm space-y-2 text-slate-700 dark:text-slate-300">
-                      <div className="flex justify-between"><span>Gross Profit:</span><span className="font-bold">{formatRs(magicChartData.box7)}</span></div>
-                      <div className="flex justify-between text-red-500"><span>Expenses:</span><span className="font-bold">- {formatRs(magicChartData.currExp)}</span></div>
-                      <div className="flex justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-base font-black">
-                        <span>Net Profit:</span><span className={magicChartData.currNetProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}>{formatRs(magicChartData.currNetProfit)}</span>
-                      </div>
-                    </div>
+                  {/* माहे LABEL (LEDGER HEADER) */}
+                  <div className="text-center">
+                    <h3 className="text-lg font-black text-slate-700 dark:text-slate-300 tracking-widest uppercase">
+                      *** माहे {startDate.toLocaleDateString('mr-IN', { month: 'long' })} {startDate.getFullYear()} ***
+                    </h3>
                   </div>
 
-                  {/* 2. Manual Sandbox Chart */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-2">
-                      <h4 className="font-black text-slate-800 dark:text-white text-sm uppercase">2. Manual Magic Chart</h4>
-                      <span className="text-[10px] font-bold uppercase text-indigo-600 dark:text-indigo-400 bg-indigo-100/50 dark:bg-indigo-900/30 px-2 py-0.5 rounded-md print:border">Sandbox</span>
-                    </div>
+                  {/* 1. MAIN 7-COLUMN TABLE */}
+                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl print:border-collapse">
+                    <table className="w-full text-center border-collapse" style={{ minWidth: '900px' }}>
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                            चालू महिन्याची विक्री <br /> (Total Sales)
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                            आखेर शिल्लक माल <br /> (Closing Stock)
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
+                            रकाना 1 + 2 ची बेरीज <br /> (Sum 1 + 2)
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                            सुरुवातीची शिल्लक <br /> (Opening Stock)
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                            चालू महिन्याची खरेदी <br /> (Total Purchases)
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
+                            रकाना 4 + 5 ची बेरीज <br /> (Sum 4 + 5)
+                          </th>
+                          <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[16%]">
+                            रकाना 3 - 6 <br /> ढोबळ नफा - तोटा
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="border-b border-slate-300 dark:border-slate-700 h-16">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
+                            {formatRs(ledgerBox1)}
+                          </td>
+                          
+                          <td className="border-r border-slate-300 dark:border-slate-700 p-0">
+                            <input 
+                              type="number"
+                              disabled={!isEditing}
+                              value={manualClosing}
+                              onChange={(e) => setManualClosing(e.target.value)}
+                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
+                              style={{ minHeight: '64px' }}
+                              placeholder="0"
+                            />
+                          </td>
 
-                    {/* EDITABLE BOX 1 */}
-                    <div className="bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-900/40 rounded-xl p-4 flex justify-between items-center">
-                      <div><span className="text-[10px] font-bold text-indigo-500 block uppercase">Box 1 (Manual)</span><span className="font-semibold text-slate-800 dark:text-slate-200">Total Sales Amount</span></div>
-                      <div className="flex items-center bg-indigo-50 dark:bg-indigo-900/10 rounded-lg px-3 py-1.5 focus-within:ring-2 focus-within:ring-indigo-500/15 border border-transparent">
-                        <span className="text-lg font-black text-indigo-600 dark:text-indigo-400 mr-0.5">₹</span>
-                        <input 
-                          type="number" 
-                          value={manualSales} 
-                          onChange={(e) => setManualSales(e.target.value)} 
-                          className="w-24 bg-transparent border-none outline-none text-right font-black text-indigo-600 dark:text-indigo-400 text-lg p-0 focus:ring-0 no-print"
-                        />
-                        <span className="hidden print:inline text-lg font-black text-indigo-600 dark:text-indigo-400">{mSalesVal.toLocaleString('en-IN')}</span>
-                      </div>
-                    </div>
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
+                            {formatRs(ledgerBox3)}
+                          </td>
 
-                    {/* BOX 2 */}
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex justify-between items-center opacity-75">
-                      <div><span className="text-[10px] font-bold text-slate-400 block uppercase">Box 2 (Auto)</span><span className="font-semibold text-slate-800 dark:text-slate-200">Closing Stock Value</span></div>
-                      <span className="text-lg font-black text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-900/10 px-3 py-1.5 rounded-lg">{formatRs(mBox2Val)}</span>
-                    </div>
+                          <td className="border-r border-slate-300 dark:border-slate-700 p-0">
+                            <input 
+                              type="number"
+                              disabled={!isEditing}
+                              value={manualOpening}
+                              onChange={(e) => setManualOpening(e.target.value)}
+                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
+                              style={{ minHeight: '64px' }}
+                              placeholder="0"
+                            />
+                          </td>
 
-                    {/* BOX 3 */}
-                    <div className="bg-slate-800 dark:bg-slate-900 rounded-xl p-4 flex justify-between items-center text-white">
-                      <div><span className="text-[10px] font-bold text-indigo-300 block uppercase">Box 3 (Manual)</span><span className="font-semibold">Sum (Box 1 + 2)</span></div>
-                      <span className="text-lg font-black text-indigo-400">{formatRs(mBox3Val)}</span>
-                    </div>
+                          <td className="border-r border-slate-300 dark:border-slate-700 p-0">
+                            <input 
+                              type="number"
+                              disabled={!isEditing}
+                              value={manualPurchases}
+                              onChange={(e) => setManualPurchases(e.target.value)}
+                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
+                              style={{ minHeight: '64px' }}
+                              placeholder="0"
+                            />
+                          </td>
 
-                    {/* BOX 4 */}
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex justify-between items-center opacity-75">
-                      <div><span className="text-[10px] font-bold text-slate-400 block uppercase">Box 4 (Auto)</span><span className="font-semibold text-slate-800 dark:text-slate-200">Opening Stock Value</span></div>
-                      <span className="text-lg font-black text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-50 dark:bg-fuchsia-900/10 px-3 py-1.5 rounded-lg">{formatRs(mBox4Val)}</span>
-                    </div>
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
+                            {formatRs(ledgerBox6)}
+                          </td>
 
-                    {/* EDITABLE BOX 5 */}
-                    <div className="bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-900/40 rounded-xl p-4 flex justify-between items-center">
-                      <div><span className="text-[10px] font-bold text-indigo-500 block uppercase">Box 5 (Manual)</span><span className="font-semibold text-slate-800 dark:text-slate-200">Total Purchases</span></div>
-                      <div className="flex items-center bg-indigo-50 dark:bg-indigo-900/10 rounded-lg px-3 py-1.5 focus-within:ring-2 focus-within:ring-indigo-500/15 border border-transparent">
-                        <span className="text-lg font-black text-indigo-600 dark:text-indigo-400 mr-0.5">₹</span>
-                        <input 
-                          type="number" 
-                          value={manualPurchases} 
-                          onChange={(e) => setManualPurchases(e.target.value)} 
-                          className="w-24 bg-transparent border-none outline-none text-right font-black text-indigo-600 dark:text-indigo-400 text-lg p-0 focus:ring-0 no-print"
-                        />
-                        <span className="hidden print:inline text-lg font-black text-indigo-600 dark:text-indigo-400">{mPurchasesVal.toLocaleString('en-IN')}</span>
-                      </div>
-                    </div>
+                          <td className={`font-black text-xl ${ledgerBox7 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                            {formatRs(ledgerBox7)}
+                          </td>
+                        </tr>
+                        
+                        <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 font-bold">
+                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">1</td>
+                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">2</td>
+                          <td className="py-1 border-r border-slate-300 dark:border-slate-700 bg-indigo-50/10 dark:bg-indigo-950/5">3</td>
+                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">4</td>
+                          <td className="py-1 border-r border-slate-300 dark:border-slate-700">5</td>
+                          <td className="py-1 border-r border-slate-300 dark:border-slate-700 bg-indigo-50/10 dark:bg-indigo-950/5">6</td>
+                          <td className="py-1">7</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
 
-                    {/* BOX 6 */}
-                    <div className="bg-slate-800 dark:bg-slate-900 rounded-xl p-4 flex justify-between items-center text-white">
-                      <div><span className="text-[10px] font-bold text-violet-300 block uppercase">Box 6 (Manual)</span><span className="font-semibold">Sum (Box 4 + 5)</span></div>
-                      <span className="text-lg font-black text-violet-400">{formatRs(mBox6Val)}</span>
-                    </div>
+                  {/* 2. SETTLEMENT TABLE (ढोबळ नफा - खर्च) */}
+                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
+                    <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
+                            एकूण ढोबळ नफा - चालू महिन्याचा खर्च <br /> (Gross Profit - Expenses)
+                          </th>
+                          <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
+                            एकूण चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="h-16">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-700 dark:text-slate-300 text-lg">
+                            {formatRs(ledgerBox7)} - {formatRs(magicChartData.currExp)}
+                          </td>
+                          <td className={`font-black text-2xl ${ledgerNetProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                            {formatRs(ledgerNetProfit)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
 
-                    {/* BOX 7 */}
-                    <div className={`rounded-xl p-4 border-2 flex justify-between items-center ${mBox7Val >= 0 ? 'bg-emerald-50/70 border-emerald-300 text-emerald-800 dark:bg-emerald-950/20 dark:border-emerald-800 dark:text-emerald-200' : 'bg-red-50/70 border-red-300 text-red-800 dark:bg-red-950/20 dark:border-red-800 dark:text-red-200'}`}>
-                      <div><span className="text-[10px] font-bold block uppercase">Box 7 (Manual)</span><span className="font-bold">Gross Profit (Box 3 - 6)</span></div>
-                      <span className="text-xl font-black">{formatRs(mBox7Val)}</span>
-                    </div>
+                  {/* 3. CUMULATIVE TABLE (एकूण नफा / संचयी) */}
+                  <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
+                    <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
+                            मागील महिन्याचा नफा (+) <br /> (Previous Month Net Profit)
+                          </th>
+                          <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
+                            चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                          </th>
+                          <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5">
+                            एकूण नफा <br /> (Total Net Profit)
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="h-16">
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg">
+                            {formatRs(prevNetProfitVal)}
+                          </td>
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg">
+                            {formatRs(ledgerNetProfit)}
+                          </td>
+                          <td className="font-black text-2xl text-white bg-indigo-600 dark:bg-indigo-700/80">
+                            {formatRs(cumulativeProfitVal)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
 
-                    {/* MANUAL SETTLEMENT SUMMARY */}
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 text-sm space-y-2 text-slate-700 dark:text-slate-300">
-                      <div className="flex justify-between"><span>Gross Profit:</span><span className="font-bold">{formatRs(mBox7Val)}</span></div>
-                      <div className="flex justify-between text-red-500"><span>Expenses:</span><span className="font-bold">- {formatRs(magicChartData.currExp)}</span></div>
-                      <div className="flex justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-base font-black">
-                        <span>Net Profit:</span><span className={mNetProfitVal >= 0 ? 'text-emerald-600' : 'text-red-600'}>{formatRs(mNetProfitVal)}</span>
-                      </div>
-                    </div>
+                  {/* ACTIONS FOOTER */}
+                  <div className="flex justify-end items-center gap-3 pt-2 no-print">
+                    {!isEditing && (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-xl border border-slate-200 dark:border-slate-700 transition-colors shadow-sm cursor-pointer"
+                      >
+                        <Edit2 size={16} />
+                        <span>Edit Ledger</span>
+                      </button>
+                    )}
+                    <button 
+                      onClick={handleSaveMagicChart}
+                      disabled={saving || !isEditing}
+                      className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-black text-sm rounded-xl shadow-md transition-colors cursor-pointer"
+                    >
+                      <Save size={16} />
+                      {saving ? 'Saving...' : 'Save Configuration'}
+                    </button>
                   </div>
 
                 </div>

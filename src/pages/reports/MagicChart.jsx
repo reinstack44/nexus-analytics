@@ -1,7 +1,7 @@
 import { useState, useEffect, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Wand2, Calendar, Sigma, MinusCircle, Wallet, ChevronDown, ArrowRight } from 'lucide-react';
+import { Wand2, Calendar, ChevronDown, Save, Edit2 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -37,31 +37,32 @@ const getLocalDateObj = (dateInput) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 };
 
+// भारतीय रुपया फॉर्मेट करने के लिए ग्लोबल हेल्पर फंक्शन
+const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
+
 export default function MagicChart() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const saved = sessionStorage.getItem('mc_selectedMonth');
     return saved ? new Date(saved) : new Date();
   });
 
-  const [chartData, setChartData] = useState({
-    box1: 0,
-    box2: 0,
-    box3: 0,
-    box4: 0,
-    box5: 0,
-    box6: 0,
-    box7: 0,
-    currExp: 0,
-    currNetProfit: 0,
-    prevNetProfit: 0,
-    totalProfit: 0
-  });
+  // ऑटोमेटेड स्टेट्स (चालू और पिछले महीने के लिए)
+  const [salesAmount, setSalesAmount] = useState(0);
+  const [expensesAmount, setExpensesAmount] = useState(0);
+  const [prevMonthSales, setPrevMonthSales] = useState(0);
+  const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
 
-  // मैनुअल सिमुलेशन के लिए स्टेट्स
-  const [manualSales, setManualSales] = useState('0');
-  const [manualPurchases, setManualPurchases] = useState('0');
+  // पिछले महीने का सहेजा हुआ डेटा
+  const [prevSavedData, setPrevSavedData] = useState(null);
+
+  // मैनुअल इनपुट स्टेट्स
+  const [manualClosing, setManualClosing] = useState('');
+  const [manualOpening, setManualOpening] = useState('');
+  const [manualPurchases, setManualPurchases] = useState('');
 
   // Selected Month को sessionStorage में सिंक करने के लिए हुक
   useEffect(() => {
@@ -88,204 +89,207 @@ export default function MagicChart() {
       const currEndStr = formatDateForDB(currEndObj);
       const prevStartStr = formatDateForDB(prevStartObj);
 
-      // 'T23:59:59' जोड़कर आखिरी दिन की प्रविष्टियों को टाइमस्टैम्प होने पर भी शामिल किया गया है
-      const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: traderTx } ] = await Promise.all([
-        supabase.from('brands').select('*'),
-        supabase.from('daily_stock').select('*').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
-        supabase.from('expenses').select('amount, date').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59'),
-        supabase.from('trader_transactions').select('purchase_amount, date').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59')
-      ]);
+      const monthYearStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
+      const prevMonthYearStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
 
-      if (!isMounted) return;
+      try {
+        const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: savedRecord }, { data: prevRecord } ] = await Promise.all([
+          supabase.from('brands').select('*'),
+          supabase.from('daily_stock').select('*').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
+          supabase.from('expenses').select('amount, date').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59'),
+          supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
+          supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle()
+        ]);
 
-      // 1. Calculate Expenses
-      let prevExp = 0, currExp = 0;
-      allExpenses?.forEach(e => {
-        const eDate = getLocalDateObj(e.date);
-        if (eDate) {
-          if (eDate >= prevStartObj && eDate <= prevEndObj) prevExp += parseFloat(e.amount || 0);
-          if (eDate >= currStartObj && eDate <= currEndObj) currExp += parseFloat(e.amount || 0);
+        if (!isMounted) return;
+
+        // Expenses कैलकुलेशन (चालू और पिछला महीना)
+        let currExp = 0;
+        let prevExp = 0;
+        allExpenses?.forEach(e => {
+          const eDate = getLocalDateObj(e.date);
+          if (eDate) {
+            if (eDate >= currStartObj && eDate <= currEndObj) currExp += parseFloat(e.amount || 0);
+            if (eDate >= prevStartObj && eDate <= prevEndObj) prevExp += parseFloat(e.amount || 0);
+          }
+        });
+
+        // FIFO Sales सिमुलेशन
+        const calculateFifoSales = async (startObj, endObj) => {
+          let totalSales = 0;
+          const prevClosings = {};
+          
+          const startStr = formatDateForDB(startObj);
+          const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
+          beforeStock?.forEach(s => {
+              if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
+                  prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
+              }
+          });
+
+          const stockByDate = {};
+          allStock?.forEach(s => {
+              const sDate = getLocalDateObj(s.date);
+              if (sDate && sDate >= startObj && sDate <= endObj) {
+                  const dateKey = formatDateForDB(sDate);
+                  if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
+                  stockByDate[dateKey].push(s);
+              }
+          });
+
+          const sortedDates = Object.keys(stockByDate).sort();
+          let runningStates = {};
+          brands?.forEach(b => {
+              const pc = prevClosings[b.id];
+              runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
+          });
+
+          sortedDates.forEach(date => {
+              stockByDate[date].forEach(row => {
+                  const brand = brands?.find(b => b.id === row.brand_id);
+                  if (!brand) return;
+
+                  const state = runningStates[brand.id];
+                  const baseOpening = state.closing;
+                  const carriedPrice = state.price;
+
+                  const opening = parseInt(row.opening_balance || 0);
+                  const purchaseQty = Math.max(0, opening - baseOpening);
+                  const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
+                  const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
+
+                  if (closing !== '') {
+                      const sQty = Math.max(0, opening - closing);
+                      let rem = sQty;
+                      let sAmt = 0;
+
+                      const qtyOld = Math.min(rem, baseOpening);
+                      sAmt += qtyOld * carriedPrice;
+                      rem -= qtyOld;
+
+                      if (rem > 0 && purchaseQty > 0) {
+                          sAmt += Math.min(rem, purchaseQty) * pPrice;
+                      }
+                      totalSales += sAmt;
+                      runningStates[brand.id] = { closing: closing, price: pPrice };
+                  }
+              });
+          });
+          return totalSales;
+        };
+
+        const currSales = await calculateFifoSales(currStartObj, currEndObj);
+        const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
+
+        if (!isMounted) return;
+
+        setSalesAmount(currSales);
+        setExpensesAmount(currExp);
+        setPrevMonthSales(prevSales);
+        setPrevMonthExpenses(prevExp);
+        setPrevSavedData(prevRecord);
+
+        // डेटा लोड प्रबंधन और एडिट/रीड-ओनली मोड सेट करना
+        if (savedRecord) {
+          setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : '');
+          setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : '');
+          setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : '');
+          setIsEditing(false); // डेटा पहले से मौजूद है तो व्यू मोड में खोलें
+        } else {
+          setManualClosing('');
+          setManualPurchases('');
+          setIsEditing(true); // डेटा नहीं है तो सीधे एडिट मोड में खोलें
+          if (prevRecord && prevRecord.closing_stock !== null) {
+            setManualOpening(String(prevRecord.closing_stock));
+          } else {
+            setManualOpening('');
+          }
         }
-      });
 
-      // 2. Calculate Purchases (trader_transactions से)
-      let prevPurchases = 0, currPurchases = 0;
-      traderTx?.forEach(tx => {
-        const txDate = getLocalDateObj(tx.date);
-        if (txDate) {
-          if (txDate >= prevStartObj && txDate <= prevEndObj) prevPurchases += parseFloat(tx.purchase_amount || 0);
-          if (txDate >= currStartObj && txDate <= currEndObj) currPurchases += parseFloat(tx.purchase_amount || 0);
-        }
-      });
-
-      // Extract exact Opening & Closing Stocks
-      const extractStockValuations = (startObj, endObj) => {
-        let openingVal = 0;
-        let closingVal = 0;
-        const stockByBrand = {};
-        
-        allStock?.forEach(s => {
-            const sDate = getLocalDateObj(s.date);
-            if (sDate && sDate >= startObj && sDate <= endObj) {
-                if (!stockByBrand[s.brand_id]) stockByBrand[s.brand_id] = [];
-                stockByBrand[s.brand_id].push(s);
-            }
-        });
-
-        brands?.forEach(b => {
-            const bStock = stockByBrand[b.id];
-            if (bStock && bStock.length > 0) {
-                const firstEntry = bStock[0];
-                const openPrice = firstEntry.unit_price ? parseFloat(firstEntry.unit_price) : parseFloat(b.selling_price);
-                openingVal += (parseInt(firstEntry.opening_balance || 0) * openPrice);
-
-                const lastEntry = bStock[bStock.length - 1];
-                const closeQty = lastEntry.closing_balance !== null ? parseInt(lastEntry.closing_balance) : 0;
-                const closePrice = lastEntry.unit_price ? parseFloat(lastEntry.unit_price) : parseFloat(b.selling_price);
-                closingVal += (closeQty * closePrice);
-            }
-        });
-        return { openingVal, closingVal };
-      };
-
-      const currStockVals = extractStockValuations(currStartObj, currEndObj);
-      const prevStockVals = extractStockValuations(prevStartObj, prevEndObj);
-
-      // Simulate DailyStock FIFO Sales
-      const calculateFifoSales = async (startObj, endObj) => {
-        let totalSales = 0;
-        const prevClosings = {};
-        
-        const startStr = formatDateForDB(startObj);
-        const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
-        beforeStock?.forEach(s => {
-            if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
-                prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
-            }
-        });
-
-        const stockByDate = {};
-        allStock?.forEach(s => {
-            const sDate = getLocalDateObj(s.date);
-            if (sDate && sDate >= startObj && sDate <= endObj) {
-                const dateKey = formatDateForDB(sDate);
-                if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
-                stockByDate[dateKey].push(s);
-            }
-        });
-
-        const sortedDates = Object.keys(stockByDate).sort();
-        let runningStates = {};
-        brands?.forEach(b => {
-            const pc = prevClosings[b.id];
-            runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
-        });
-
-        sortedDates.forEach(date => {
-            stockByDate[date].forEach(row => {
-                const brand = brands?.find(b => b.id === row.brand_id);
-                if (!brand) return;
-
-                const state = runningStates[brand.id];
-                const baseOpening = state.closing;
-                const carriedPrice = state.price;
-
-                const opening = parseInt(row.opening_balance || 0);
-                const purchaseQty = Math.max(0, opening - baseOpening);
-                const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
-                const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
-
-                if (closing !== '') {
-                    const sQty = Math.max(0, opening - closing);
-                    let rem = sQty;
-                    let sAmt = 0;
-
-                    const qtyOld = Math.min(rem, baseOpening);
-                    sAmt += qtyOld * carriedPrice;
-                    rem -= qtyOld;
-
-                    if (rem > 0 && purchaseQty > 0) {
-                        sAmt += Math.min(rem, purchaseQty) * pPrice;
-                    }
-                    totalSales += sAmt;
-                    runningStates[brand.id] = { closing: closing, price: pPrice };
-                }
-            });
-        });
-        return totalSales;
-      };
-
-      const currSales = await calculateFifoSales(currStartObj, currEndObj);
-      const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
-
-      if (!isMounted) return;
-
-      const currBox3 = currSales + currStockVals.closingVal;
-      const currBox6 = currStockVals.openingVal + currPurchases;
-      const currBox7 = currBox3 - currBox6;
-      const currentNetProfit = currBox7 - currExp;
-
-      const prevBox3 = prevSales + prevStockVals.closingVal;
-      const prevBox6 = prevStockVals.openingVal + prevPurchases;
-      const prevBox7 = prevBox3 - prevBox6;
-      const previousNetProfit = prevBox7 - prevExp;
-
-      setChartData({ 
-        box1: currSales, 
-        box2: currStockVals.closingVal, 
-        box3: currBox3, 
-        box4: currStockVals.openingVal, 
-        box5: currPurchases, 
-        box6: currBox6, 
-        box7: currBox7, 
-        currExp, 
-        currNetProfit: currentNetProfit, 
-        prevNetProfit: previousNetProfit, 
-        totalProfit: previousNetProfit + currentNetProfit 
-      });
-
-      // लोड होने पर मैनुअल इनपुट फ़ील्ड्स को ऑटोमेटेड वैल्यूज़ से प्री-फिल करना
-      setManualSales(String(Math.round(currSales)));
-      setManualPurchases(String(Math.round(currPurchases)));
-      
-      setLoading(false);
+      } catch (error) {
+        console.error("Error loading magic data:", error);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
     };
 
     fetchAndCalculateMagicData();
     return () => { isMounted = false; };
   }, [selectedMonth, user]);
 
-  const formatRs = (num) => '₹' + Math.round(num).toLocaleString('en-IN');
+  const handleSave = async () => {
+    if (!user) return;
+    setSaving(true);
 
-  // --- MANUAL CHART REALTIME CALCULATIONS ---
-  const mSalesVal = parseFloat(manualSales) || 0;
-  const mPurchasesVal = parseFloat(manualPurchases) || 0;
-  const mBox2Val = chartData.box2; // Closing Stock
-  const mBox3Val = mSalesVal + mBox2Val; // (Box 1 + Box 2)
-  const mBox4Val = chartData.box4; // Opening Stock
-  const mBox6Val = mBox4Val + mPurchasesVal; // (Box 4 + Box 5)
-  const mBox7Val = mBox3Val - mBox6Val; // मैनुअल ग्रॉस प्रॉफिट/लॉस
-  const mNetProfitVal = mBox7Val - chartData.currExp; // मैनुअल नेट प्रॉफिट
-  const mTotalProfit = chartData.prevNetProfit + mNetProfitVal; // कुल मैनुअल संचयी लाभ
+    const currYear = selectedMonth.getFullYear();
+    const currMonth = selectedMonth.getMonth();
+    const monthYearStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
+
+    const payload = {
+      user_id: user.id,
+      month_year: monthYearStr,
+      closing_stock: manualClosing === '' ? null : parseFloat(manualClosing),
+      opening_stock: manualOpening === '' ? null : parseFloat(manualOpening),
+      total_purchases: manualPurchases === '' ? null : parseFloat(manualPurchases),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      const { error } = await supabase
+        .from('magic_chart_saves')
+        .upsert(payload, { onConflict: 'user_id, month_year' });
+
+      if (error) throw error;
+      setIsEditing(false);
+      alert('Magic Chart saved successfully.');
+    } catch (err) {
+      console.error('Error saving magic chart:', err);
+      alert('Error saving: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // --- CALCULATIONS FOR CURRENT MONTH ---
+  const box1Val = salesAmount;
+  const box2Val = parseFloat(manualClosing) || 0;
+  const box3Val = box1Val + box2Val;
+
+  const box4Val = parseFloat(manualOpening) || 0;
+  const box5Val = parseFloat(manualPurchases) || 0;
+  const box6Val = box4Val + box5Val;
+
+  const box7Val = box3Val - box6Val; // चालू ग्रॉस प्रॉफिट
+  const netProfitVal = box7Val - expensesAmount; // चालू नेट प्रॉफिट
+
+  // --- CALCULATIONS FOR PREVIOUS MONTH ---
+  const prevBox1Val = prevMonthSales;
+  const prevBox2Val = prevSavedData ? parseFloat(prevSavedData.closing_stock) || 0 : 0;
+  const prevBox3Val = prevBox1Val + prevBox2Val;
+
+  const prevBox4Val = prevSavedData ? parseFloat(prevSavedData.opening_stock) || 0 : 0;
+  const prevBox5Val = prevSavedData ? parseFloat(prevSavedData.total_purchases) || 0 : 0;
+  const prevBox6Val = prevBox4Val + prevBox5Val;
+
+  const prevBox7Val = prevBox3Val - prevBox6Val;
+  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; // मागील महिन्याचा नफा
+
+  const cumulativeProfitVal = prevNetProfitVal + netProfitVal; // एकूण नफा
 
   return (
-    <div className="space-y-6 transition-colors duration-300">
+    <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300">
       <style dangerouslySetInnerHTML={{ __html: `
         .react-datepicker-popper { z-index: 99999 !important; }
         .react-datepicker { background-color: #ffffff !important; border-radius: 1.2rem !important; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1) !important; font-family: inherit !important; padding: 0.8rem !important; border: none !important; }
         .dark .react-datepicker { background-color: #1e293b !important; border: 1px solid #334155 !important; }
-        
         .react-datepicker__triangle { display: none !important; }
-        
         .react-datepicker__header { background-color: transparent !important; border-bottom: 1px solid #f1f5f9 !important; border-radius: 1rem 1rem 0 0 !important; padding-bottom: 0.8rem !important; }
         .dark .react-datepicker__header { border-bottom: 1px solid #334155 !important; }
-        
         .react-datepicker__month-text--keyboard-selected, .react-datepicker__month-text--selected { background-color: #4f46e5 !important; color: white !important; font-weight: bold; border-radius: 0.5rem !important; }
         .react-datepicker__month-text:hover { background-color: #e0e7ff !important; border-radius: 0.5rem !important; color: #4f46e5 !important; font-weight: bold; }
         .dark .react-datepicker__month-text:hover { background-color: #334155 !important; color: white !important; }
         .react-datepicker__month-text { padding: 0.5rem !important; margin: 0.2rem !important; color: #475569 !important; font-weight: 600 !important; transition: all 0.2s; }
         .dark .react-datepicker__month-text { color: #cbd5e1 !important; }
-        
         .react-datepicker__year-dropdown-container--select { margin: 0 !important; display: flex; justify-content: center; }
         .react-datepicker__year-select {
           background-color: #f8fafc !important;
@@ -304,13 +308,6 @@ export default function MagicChart() {
           background-size: 1.2em !important;
           text-align: center !important;
         }
-        
-        .dark .react-datepicker__year-select {
-          background-color: #0f172a !important;
-          border-color: #334155 !important;
-          color: #f8fafc !important;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23cbd5e1'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E") !important;
-        }
         .dark .react-datepicker__year-select option {
           background-color: #0f172a !important;
           color: #f8fafc !important;
@@ -324,12 +321,12 @@ export default function MagicChart() {
             <Wand2 size={28} />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-slate-800 dark:text-white tracking-tight">Magic Chart Sandbox</h2>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">Automated accounting & manual simulation mapping side-by-side.</p>
+            <h2 className="text-2xl font-black text-slate-800 dark:text-white tracking-tight">Magic Chart Ledger</h2>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">Physical ledger layout redesigned for structured accounting.</p>
           </div>
         </div>
         
-        <div className="shrink-0 relative">
+        <div className="shrink-0 relative flex items-center gap-3">
           <DatePicker 
             selected={selectedMonth} 
             onChange={date => setSelectedMonth(date)} 
@@ -340,7 +337,6 @@ export default function MagicChart() {
             renderCustomHeader={({ date, changeYear }) => {
               const currentYear = new Date().getFullYear();
               const years = Array.from({ length: currentYear - 2019 + 1 }, (_, i) => 2020 + i);
-              
               return (
                 <div className="flex justify-center pb-2 pt-1 border-b border-slate-100 dark:border-slate-800 mb-2">
                   <div className="relative">
@@ -365,285 +361,205 @@ export default function MagicChart() {
       {loading ? (
         <div className="flex flex-col items-center justify-center min-h-[50vh] bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800">
           <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-          <p className="text-slate-500 font-medium">Reconciling thousands of entries dynamically...</p>
+          <p className="text-slate-500 font-medium">Reconciling ledger entries...</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 animate-in fade-in zoom-in-95 duration-500">
+        <div className="space-y-8 animate-in fade-in duration-300">
           
-          {/* ================= 1. AUTOMATED MAGIC CHART ================= */}
-          <div className="space-y-6 border-r border-slate-100 dark:border-slate-800/60 xl:pr-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-black text-slate-800 dark:text-white flex items-center gap-2">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30 text-xs font-black text-blue-600 dark:text-blue-400">1</span>
-                Automated Magic Chart
+          {/* LEDGER SHEETS CONTAINER */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-2xl p-6 space-y-8 overflow-hidden">
+            
+            {/* माहे LABEL (LEDGER HEADER) */}
+            <div className="text-center">
+              <h3 className="text-xl font-black text-slate-700 dark:text-slate-300 tracking-widest uppercase">
+                *** माहे {selectedMonth.toLocaleDateString('mr-IN', { month: 'long' })} {selectedMonth.getFullYear()} ***
               </h3>
-              <span className="bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-xs font-bold px-2.5 py-1 rounded-full">System Calculated</span>
             </div>
 
-            <div className="space-y-4">
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group hover:border-blue-400 transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Box 1</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Total Sales Amount</h3>
-                  <p className="text-xs text-slate-400 mt-1">चालू महिन्याची अखेर विक्री</p>
-                </div>
-                <div className="text-2xl font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-4 py-2 rounded-xl">
-                  {formatRs(chartData.box1)}
-                </div>
-              </div>
+            {/* 1. MAIN 7-COLUMN TABLE */}
+            <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
+              <table className="w-full text-center border-collapse" style={{ minWidth: '900px' }}>
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                      चालू महिन्याची विक्री <br /> (Total Sales)
+                    </th>
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                      आखेर शिल्लक माल <br /> (Closing Stock)
+                    </th>
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
+                      रकाना 1 + 2 ची बेरीज <br /> (Sum 1 + 2)
+                    </th>
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                      सुरुवातीची शिल्लक <br /> (Opening Stock)
+                    </th>
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
+                      चालू महिन्याची खरेदी <br /> (Total Purchases)
+                    </th>
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
+                      रकाना 4 + 5 ची बेरीज <br /> (Sum 4 + 5)
+                    </th>
+                    <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[16%]">
+                      रकाना 3 - 6 <br /> ढोबळ नफा - तोटा
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-slate-300 dark:border-slate-700 h-16">
+                    {/* रकाना 1 */}
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
+                      {formatRs(box1Val)}
+                    </td>
+                    
+                    {/* रकाना 2 */}
+                    <td className="border-r border-slate-300 dark:border-slate-700 p-0">
+                      <input 
+                        type="number"
+                        disabled={!isEditing}
+                        value={manualClosing}
+                        onChange={(e) => setManualClosing(e.target.value)}
+                        className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
+                        style={{ minHeight: '64px' }}
+                        placeholder="0"
+                      />
+                    </td>
 
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group hover:border-cyan-400 transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Box 2</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Closing Stock Value</h3>
-                  <p className="text-xs text-slate-400 mt-1">शिल्लक माल</p>
-                </div>
-                <div className="text-2xl font-black text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-900/20 px-4 py-2 rounded-xl">
-                  {formatRs(chartData.box2)}
-                </div>
-              </div>
+                    {/* रकाना 3 */}
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
+                      {formatRs(box3Val)}
+                    </td>
 
-              <div className="bg-slate-800 dark:bg-slate-950 rounded-2xl p-5 border border-slate-700/50 shadow-md flex justify-between items-center relative overflow-hidden">
-                <div className="absolute right-0 top-0 opacity-5 transform translate-x-1/4 -translate-y-1/4"><Sigma size={100} /></div>
-                <div className="relative z-10">
-                  <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider mb-1">Box 3</p>
-                  <h3 className="text-lg font-bold text-white">Sum (Box 1 + 2)</h3>
-                  <p className="text-xs text-indigo-200 mt-1">रकाना 1+2 ची बेरीज</p>
-                </div>
-                <div className="text-2xl font-black text-indigo-400 relative z-10">
-                  {formatRs(chartData.box3)}
-                </div>
-              </div>
+                    {/* रकाना 4 */}
+                    <td className="border-r border-slate-300 dark:border-slate-700 p-0">
+                      <input 
+                        type="number"
+                        disabled={!isEditing}
+                        value={manualOpening}
+                        onChange={(e) => setManualOpening(e.target.value)}
+                        className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
+                        style={{ minHeight: '64px' }}
+                        placeholder="0"
+                      />
+                    </td>
 
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group hover:border-fuchsia-400 transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Box 4</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Opening Stock Value</h3>
-                  <p className="text-xs text-slate-400 mt-1">चालू महिन्याची सुरुवातीची शिल्लक</p>
-                </div>
-                <div className="text-2xl font-black text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-50 dark:bg-fuchsia-900/20 px-4 py-2 rounded-xl">
-                  {formatRs(chartData.box4)}
-                </div>
-              </div>
+                    {/* रकाना 5 */}
+                    <td className="border-r border-slate-300 dark:border-slate-700 p-0">
+                      <input 
+                        type="number"
+                        disabled={!isEditing}
+                        value={manualPurchases}
+                        onChange={(e) => setManualPurchases(e.target.value)}
+                        className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
+                        style={{ minHeight: '64px' }}
+                        placeholder="0"
+                      />
+                    </td>
 
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group hover:border-purple-400 transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Box 5</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Total Purchases</h3>
-                  <p className="text-xs text-slate-400 mt-1">चालू महिन्याची खरेदी</p>
-                </div>
-                <div className="text-2xl font-black text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 px-4 py-2 rounded-xl">
-                  {formatRs(chartData.box5)}
-                </div>
-              </div>
+                    {/* रकाना 6 */}
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
+                      {formatRs(box6Val)}
+                    </td>
 
-              <div className="bg-slate-800 dark:bg-slate-950 rounded-2xl p-5 border border-slate-700/50 shadow-md flex justify-between items-center relative overflow-hidden">
-                <div className="absolute right-0 top-0 opacity-5 transform translate-x-1/4 -translate-y-1/4"><Sigma size={100} /></div>
-                <div className="relative z-10">
-                  <p className="text-xs font-bold text-violet-300 uppercase tracking-wider mb-1">Box 6</p>
-                  <h3 className="text-lg font-bold text-white">Sum (Box 4 + 5)</h3>
-                  <p className="text-xs text-violet-200 mt-1">रकाना 4+5 ची बेरीज</p>
-                </div>
-                <div className="text-2xl font-black text-violet-400 relative z-10">
-                  {formatRs(chartData.box6)}
-                </div>
-              </div>
+                    {/* रकाना 7 */}
+                    <td className={`font-black text-xl ${box7Val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                      {formatRs(box7Val)}
+                    </td>
+                  </tr>
+                  
+                  {/* Row Indices */}
+                  <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 font-bold">
+                    <td className="py-1 border-r border-slate-300 dark:border-slate-700">1</td>
+                    <td className="py-1 border-r border-slate-300 dark:border-slate-700">2</td>
+                    <td className="py-1 border-r border-slate-300 dark:border-slate-700 bg-indigo-50/10 dark:bg-indigo-950/5">3</td>
+                    <td className="py-1 border-r border-slate-300 dark:border-slate-700">4</td>
+                    <td className="py-1 border-r border-slate-300 dark:border-slate-700">5</td>
+                    <td className="py-1 border-r border-slate-300 dark:border-slate-700 bg-indigo-50/10 dark:bg-indigo-950/5">6</td>
+                    <td className="py-1">7</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
 
-            {/* GROSS PROFIT HIGHLIGHT (BOX 7) */}
-            <div className={`rounded-2xl p-6 border-2 shadow-md flex justify-between items-center relative overflow-hidden transition-colors ${chartData.box7 >= 0 ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800' : 'bg-red-50/70 dark:bg-red-950/20 border-red-300 dark:border-red-800'}`}>
-              <div className="relative z-10">
-                <p className={`text-xs font-bold uppercase tracking-wider mb-1 ${chartData.box7 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                  Box 7
-                </p>
-                <h3 className={`text-lg font-bold ${chartData.box7 >= 0 ? 'text-emerald-800 dark:text-emerald-200' : 'text-red-800 dark:text-red-200'}`}>
-                  Gross {chartData.box7 >= 0 ? 'Profit' : 'Loss'} (Box 3 - 6)
-                </h3>
-              </div>
-              <div className={`text-3xl font-black relative z-10 ${chartData.box7 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                {formatRs(chartData.box7)}
-              </div>
+            {/* 2. SETTLEMENT TABLE (ढोबळ नफा - खर्च) */}
+            <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
+              <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
+                      एकूण ढोबळ नफा - चालू महिन्याचा खर्च <br /> (Gross Profit - Expenses)
+                    </th>
+                    <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
+                      एकूण चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="h-16">
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-700 dark:text-slate-300 text-lg">
+                      {formatRs(box7Val)} - {formatRs(expensesAmount)}
+                    </td>
+                    <td className={`font-black text-2xl ${netProfitVal >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                      {formatRs(netProfitVal)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
 
-            {/* AUTOMATED SETTLEMENT */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 border-b border-slate-200 dark:border-slate-800">
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-2"><Wallet size={16} className="text-blue-500" /> Settlement & Profit History</h4>
-              </div>
-              <div className="p-5 space-y-3.5 text-sm">
-                <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
-                  <span>Gross Profit</span>
-                  <span className="font-bold">{formatRs(chartData.box7)}</span>
-                </div>
-                <div className="flex justify-between items-center text-red-500 border-b border-slate-100 dark:border-slate-800 pb-3">
-                  <span className="flex items-center gap-1.5"><MinusCircle size={15}/> Business Expenses</span>
-                  <span className="font-bold">- {formatRs(chartData.currExp)}</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5">
-                  <span className="font-bold text-slate-800 dark:text-white">Current Month Net Profit</span>
-                  <span className={`font-black text-xl ${chartData.currNetProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {formatRs(chartData.currNetProfit)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center pt-3 border-t border-slate-100 dark:border-slate-800/80">
-                  <span className="font-bold text-slate-800 dark:text-white">Total Cumulative Profit</span>
-                  <div className="flex items-center gap-2">
-                    <ArrowRight size={18} className="text-slate-300 dark:text-slate-600" />
-                    <span className="bg-indigo-600 text-white font-black px-4 py-1.5 rounded-lg text-lg">
-                      {formatRs(chartData.totalProfit)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ================= 2. MANUAL MAGIC CHART (EDITABLE) ================= */}
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-black text-slate-800 dark:text-white flex items-center gap-2">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-xs font-black text-indigo-600 dark:text-indigo-400">2</span>
-                Manual Magic Chart
-              </h3>
-              <span className="bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 text-xs font-bold px-2.5 py-1 rounded-full">Custom Sandbox</span>
+            {/* 3. CUMULATIVE TABLE (एकूण नफा / संचयी) */}
+            <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
+              <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
+                      मागील महिन्याचा नफा (+) <br /> (Previous Month Net Profit)
+                    </th>
+                    <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
+                      चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                    </th>
+                    <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5">
+                      एकूण नफा <br /> (Total Net Profit)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="h-16">
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg">
+                      {formatRs(prevNetProfitVal)}
+                    </td>
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg">
+                      {formatRs(netProfitVal)}
+                    </td>
+                    <td className="font-black text-2xl text-white bg-indigo-600 dark:bg-indigo-700/80">
+                      {formatRs(cumulativeProfitVal)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
 
-            <div className="space-y-4">
-              {/* EDITABLE BOX 1 (Total Sales) */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group hover:border-indigo-400 transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1">Box 1 (Manual)</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Total Sales Amount</h3>
-                  <p className="text-xs text-slate-400 mt-1">मैनुअल विक्री रक्कम बदला</p>
-                </div>
-                <div className="flex items-center bg-indigo-50 dark:bg-indigo-900/20 rounded-xl px-4 py-2 border border-transparent focus-within:border-indigo-500/30 focus-within:ring-2 focus-within:ring-indigo-500/15 transition-all">
-                  <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 select-none mr-0.5">₹</span>
-                  <input 
-                    type="number"
-                    value={manualSales}
-                    onChange={(e) => setManualSales(e.target.value)}
-                    className="w-36 sm:w-44 bg-transparent border-none outline-none text-right font-black text-indigo-600 dark:text-indigo-400 text-2xl p-0 focus:ring-0"
-                    placeholder="0"
-                  />
-                </div>
-              </div>
-
-              {/* AUTOMATED BOX 2 */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Box 2 (Auto)</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Closing Stock Value</h3>
-                  <p className="text-xs text-slate-400 mt-1">शिल्लक माल</p>
-                </div>
-                <div className="text-2xl font-black text-cyan-600 dark:text-cyan-400 bg-cyan-50 dark:bg-cyan-900/20 px-4 py-2 rounded-xl">
-                  {formatRs(mBox2Val)}
-                </div>
-              </div>
-
-              {/* MANUAL SUM BOX 3 */}
-              <div className="bg-slate-800 dark:bg-slate-950 rounded-2xl p-5 border border-slate-700/50 shadow-md flex justify-between items-center relative overflow-hidden">
-                <div className="absolute right-0 top-0 opacity-5 transform translate-x-1/4 -translate-y-1/4"><Sigma size={100} /></div>
-                <div className="relative z-10">
-                  <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider mb-1">Box 3 (Manual)</p>
-                  <h3 className="text-lg font-bold text-white">Sum (Box 1 + 2)</h3>
-                  <p className="text-xs text-indigo-200 mt-1">रकाना 1+2 ची बेरीज</p>
-                </div>
-                <div className="text-2xl font-black text-indigo-400 relative z-10">
-                  {formatRs(mBox3Val)}
-                </div>
-              </div>
-
-              {/* AUTOMATED BOX 4 */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Box 4 (Auto)</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Opening Stock Value</h3>
-                  <p className="text-xs text-slate-400 mt-1">चालू महिन्याची सुरुवातीची शिल्लक</p>
-                </div>
-                <div className="text-2xl font-black text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-50 dark:bg-fuchsia-900/20 px-4 py-2 rounded-xl">
-                  {formatRs(mBox4Val)}
-                </div>
-              </div>
-
-              {/* EDITABLE BOX 5 (Total Purchases) */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center group hover:border-indigo-400 transition-colors">
-                <div>
-                  <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1">Box 5 (Manual)</p>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Total Purchases</h3>
-                  <p className="text-xs text-slate-400 mt-1">मैनुअल खरेदी रक्कम बदला</p>
-                </div>
-                <div className="flex items-center bg-indigo-50 dark:bg-indigo-900/20 rounded-xl px-4 py-2 border border-transparent focus-within:border-indigo-500/30 focus-within:ring-2 focus-within:ring-indigo-500/15 transition-all">
-                  <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 select-none mr-0.5">₹</span>
-                  <input 
-                    type="number"
-                    value={manualPurchases}
-                    onChange={(e) => setManualPurchases(e.target.value)}
-                    className="w-36 sm:w-44 bg-transparent border-none outline-none text-right font-black text-indigo-600 dark:text-indigo-400 text-2xl p-0 focus:ring-0"
-                    placeholder="0"
-                  />
-                </div>
-              </div>
-
-              {/* MANUAL SUM BOX 6 */}
-              <div className="bg-slate-800 dark:bg-slate-950 rounded-2xl p-5 border border-slate-700/50 shadow-md flex justify-between items-center relative overflow-hidden">
-                <div className="absolute right-0 top-0 opacity-5 transform translate-x-1/4 -translate-y-1/4"><Sigma size={100} /></div>
-                <div className="relative z-10">
-                  <p className="text-xs font-bold text-violet-300 uppercase tracking-wider mb-1">Box 6 (Manual)</p>
-                  <h3 className="text-lg font-bold text-white">Sum (Box 4 + 5)</h3>
-                  <p className="text-xs text-violet-200 mt-1">रकाना 4+5 ची बेरीज</p>
-                </div>
-                <div className="text-2xl font-black text-violet-400 relative z-10">
-                  {formatRs(mBox6Val)}
-                </div>
-              </div>
+            {/* ACTIONS FOOTER */}
+            <div className="flex justify-end items-center gap-3 pt-2">
+              {!isEditing && (
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(true)}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-xl border border-slate-200 dark:border-slate-700 transition-colors shadow-sm cursor-pointer"
+                >
+                  <Edit2 size={16} />
+                  <span>Edit Ledger</span>
+                </button>
+              )}
+              <button 
+                onClick={handleSave}
+                disabled={saving || !isEditing}
+                className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-black text-sm rounded-xl shadow-md transition-colors cursor-pointer"
+              >
+                <Save size={16} />
+                {saving ? 'Saving...' : 'Save Configuration'}
+              </button>
             </div>
 
-            {/* MANUAL GROSS PROFIT HIGHLIGHT (BOX 7) */}
-            <div className={`rounded-2xl p-6 border-2 shadow-md flex justify-between items-center relative overflow-hidden transition-colors ${mBox7Val >= 0 ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800' : 'bg-red-50/70 dark:bg-red-950/20 border-red-300 dark:border-red-800'}`}>
-              <div className="relative z-10">
-                <p className={`text-xs font-bold uppercase tracking-wider mb-1 ${mBox7Val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                  Box 7 (Manual)
-                </p>
-                <h3 className={`text-lg font-bold ${mBox7Val >= 0 ? 'text-emerald-800 dark:text-emerald-200' : 'text-red-800 dark:text-red-200'}`}>
-                  Gross {mBox7Val >= 0 ? 'Profit' : 'Loss'} (Box 3 - 6)
-                </h3>
-              </div>
-              <div className={`text-3xl font-black relative z-10 ${mBox7Val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                {formatRs(mBox7Val)}
-              </div>
-            </div>
-
-            {/* MANUAL SETTLEMENT */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 border-b border-slate-200 dark:border-slate-800">
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-2"><Wallet size={16} className="text-indigo-500" /> Manual Sandbox Settlement</h4>
-              </div>
-              <div className="p-5 space-y-3.5 text-sm">
-                <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
-                  <span>Gross Profit</span>
-                  <span className="font-bold">{formatRs(mBox7Val)}</span>
-                </div>
-                <div className="flex justify-between items-center text-red-500 border-b border-slate-100 dark:border-slate-800 pb-3">
-                  <span className="flex items-center gap-1.5"><MinusCircle size={15}/> Business Expenses</span>
-                  <span className="font-bold">- {formatRs(chartData.currExp)}</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5">
-                  <span className="font-bold text-slate-800 dark:text-white">Current Month Net Profit</span>
-                  <span className={`font-black text-xl ${mNetProfitVal >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {formatRs(mNetProfitVal)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center pt-3 border-t border-slate-100 dark:border-slate-800/80">
-                  <span className="font-bold text-slate-800 dark:text-white">Total Cumulative Profit</span>
-                  <div className="flex items-center gap-2">
-                    <ArrowRight size={18} className="text-slate-300 dark:text-slate-600" />
-                    <span className="bg-indigo-600 text-white font-black px-4 py-1.5 rounded-lg text-lg">
-                      {formatRs(mTotalProfit)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
 
         </div>
