@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, forwardRef, useCallback } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw, Coffee, CalendarOff, Info, Lock, ArrowRightLeft } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, Coffee, CalendarOff, Info, Lock, ArrowRightLeft } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -488,27 +488,6 @@ export default function DailyStock() {
     setCollectionForm(prev => ({ ...prev, date: endDate || startDate }));
     setEditingExpenseId(null);
     setEditingCollectionId(null);
-  };
-
-  const openResetConfirm = () => {
-    setConfirmModal({
-      isOpen: true,
-      title: 'Reset Daily Entries?',
-      message: 'Are you sure you want to reset all manual entries for this period? This will clear all added purchases and closing balances.',
-      isDanger: true,
-      onConfirm: () => {
-        setStockRows(prevRows => {
-          const resetRows = prevRows.map(row => {
-            let updatedRow = { ...row, purchase_qty: 0, purchase_price: row.carried_price, purchase_mrp: row.carried_mrp, opening_balance: row.base_opening, closing_balance: '' };
-            updatedRow = recalculateRow(updatedRow);
-            return updatedRow;
-          });
-          setDailySummary(prev => ({ ...prev, totalSalesQty: 0, totalRevenue: 0, totalMrpRevenue: 0 }));
-          return resetRows;
-        });
-        closeConfirm();
-      }
-    });
   };
 
   const openHolidayConfirm = () => {
@@ -1006,10 +985,6 @@ export default function DailyStock() {
 
             <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
               <Landmark size={18} /> Expenses & Cash
-            </button>
-            
-            <button onClick={openResetConfirm} disabled={isHolidaySelected || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 rounded-xl text-sm font-bold hover:bg-amber-100 hover:text-amber-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-              <RotateCcw size={18} /> Reset
             </button>
 
             <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
