@@ -87,16 +87,18 @@ export default function MagicChart() {
       const currEndStr = formatDateForDB(currEndObj);
       const prevStartStr = formatDateForDB(prevStartObj);
 
+      const firstDayStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
       const monthYearStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
       const prevMonthYearStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
 
       try {
-        const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: savedRecord }, { data: prevRecord } ] = await Promise.all([
+        const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: savedRecord }, { data: prevRecord }, { data: traderTxData } ] = await Promise.all([
           supabase.from('brands').select('*'),
           supabase.from('daily_stock').select('*').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
           supabase.from('expenses').select('amount, date').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59'),
           supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
-          supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle()
+          supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle(),
+          supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', firstDayStr).lte('date', currEndStr)
         ]);
 
         if (!isMounted) return;
@@ -184,7 +186,7 @@ export default function MagicChart() {
         const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
 
         // ----------------------------------------------------
-        // 3. AUTO-FETCH OPENING/CLOSING & TOTAL PURCHASES (MRP-BASED)
+        // 3. AUTO-FETCH OPENING/CLOSING & TOTAL PURCHASES
         // ----------------------------------------------------
         const stockByDateStr = {};
         allStock?.forEach(s => {
@@ -193,7 +195,6 @@ export default function MagicChart() {
         });
 
         // A. Opening Stock MRP Total (First Day of the Month)
-        const firstDayStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
         let computedOpeningStockMrp = 0;
         const firstDayRecords = stockByDateStr[firstDayStr] || {};
         brands?.forEach(b => {
@@ -206,9 +207,8 @@ export default function MagicChart() {
         });
 
         // B. Closing Stock MRP Total (Last Day of the Month)
-        const lastDayStr = formatDateForDB(currEndObj);
         let computedClosingStockMrp = 0;
-        const lastDayRecords = stockByDateStr[lastDayStr] || {};
+        const lastDayRecords = stockByDateStr[currEndStr] || {};
         brands?.forEach(b => {
           const rec = lastDayRecords[b.id];
           if (rec) {
@@ -218,55 +218,10 @@ export default function MagicChart() {
           }
         });
 
-        // C. Monthly Total Purchases MRP (Cumulative daily purchase totals inside the month)
-        const prevMonthLastDayObj = new Date(currYear, currMonth, 0);
-        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
-        
-        const { data: prevStock } = await supabase
-          .from('daily_stock')
-          .select('*')
-          .eq('date', prevMonthLastDayStr);
-          
-        const prevStockMap = {};
-        prevStock?.forEach(s => { prevStockMap[s.brand_id] = s; });
-
-        let computedTotalPurchasesMrp = 0;
-        const runningPrevClosing = {};
-        brands?.forEach(b => {
-          const ps = prevStockMap[b.id];
-          runningPrevClosing[b.id] = ps && ps.closing_balance !== null ? parseInt(ps.closing_balance) : 0;
-        });
-
-        const monthDates = [];
-        let d = new Date(currYear, currMonth, 1);
-        while (d <= currEndObj) {
-          monthDates.push(formatDateForDB(d));
-          d.setDate(d.getDate() + 1);
-        }
-        monthDates.sort();
-
-        monthDates.forEach(dateStr => {
-          const dayRecords = stockByDateStr[dateStr] || {};
-          brands?.forEach(b => {
-            const rec = dayRecords[b.id];
-            const prevClose = runningPrevClosing[b.id] || 0;
-            
-            let opQty = 0;
-            let clQty = prevClose;
-            let mrp = parseFloat(b.mrp_price || 0);
-            
-            if (rec) {
-              opQty = parseInt(rec.opening_balance) || 0;
-              clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : opQty;
-              mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-            }
-            
-            const purchaseQty = Math.max(0, opQty - prevClose);
-            if (purchaseQty > 0) {
-              computedTotalPurchasesMrp += purchaseQty * mrp;
-            }
-            runningPrevClosing[b.id] = clQty;
-          });
+        // C. Monthly Total Purchases (Fetched directly from Purchase Manager Ledger)
+        let computedTotalPurchasesTraders = 0;
+        traderTxData?.forEach(tx => {
+          computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
         });
 
         if (!isMounted) return;
@@ -277,16 +232,16 @@ export default function MagicChart() {
         setPrevMonthExpenses(prevExp);
         setPrevSavedData(prevRecord);
 
-        // डेटा लोड प्रबंधन (अवेलेबल हो तो सुरक्षित डेटा लें अन्यथा सीधे कम्प्यूटेड MRP वैल्यू लें)
+        // डेटा लोड प्रबंधन (अवेलेबल हो तो सुरक्षित डेटा लें अन्यथा सीधे कम्प्यूटेड वैल्यू लें)
         if (savedRecord) {
           setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : String(Math.round(computedClosingStockMrp)));
           setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : String(Math.round(computedOpeningStockMrp)));
-          setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(computedTotalPurchasesMrp)));
+          setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(computedTotalPurchasesTraders)));
           setIsEditing(false);
         } else {
           setManualClosing(String(Math.round(computedClosingStockMrp)));
           setManualOpening(String(Math.round(computedOpeningStockMrp)));
-          setManualPurchases(String(Math.round(computedTotalPurchasesMrp)));
+          setManualPurchases(String(Math.round(computedTotalPurchasesTraders)));
           setIsEditing(true);
         }
 

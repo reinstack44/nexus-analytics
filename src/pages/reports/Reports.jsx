@@ -126,6 +126,7 @@ export default function Reports() {
       const prevEndObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
       const prevStartStr = formatDateForDB(prevStartObj);
 
+      const firstDayStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
       const monthYearStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
       const prevMonthYearStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
 
@@ -134,8 +135,24 @@ export default function Reports() {
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
         const expQueryStart = showMagicChart ? prevStartStr : startStr;
-        const { data: expData } = await supabase.from('expenses').select('*').gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date');
-        
+        const stockQueryStart = showMagicChart ? prevStartStr : startStr;
+
+        const [ 
+          { data: expData }, 
+          { data: withData }, 
+          { data: stockData }, 
+          { data: allTraderTxData }, 
+          { data: traderRangeTxData } 
+        ] = await Promise.all([
+          supabase.from('expenses').select('*').gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date'),
+          supabase.from('owner_withdrawals').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date'),
+          supabase.from('daily_stock').select('*').gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true }),
+          supabase.from('trader_transactions').select('*, traders(trader_name)').lte('date', endStr + 'T23:59:59').order('date').order('created_at'),
+          supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
+        ]);
+
+        if (!isMounted) return; 
+
         let tExpenses = 0;
         expData?.forEach(e => {
           if (e.date >= startStr && e.date <= endStr + 'T23:59:59') {
@@ -143,18 +160,9 @@ export default function Reports() {
           }
         });
         
-        const { data: withData } = await supabase.from('owner_withdrawals').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date');
         const tWithdrawals = withData?.reduce((sum, w) => sum + parseFloat(w.amount), 0) || 0;
 
-        const { data: purchData } = await supabase.from('purchases').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59');
-        const purchaseQtyMap = {}; 
-        purchData?.forEach(p => {
-          const key = `${p.date}_${p.brand_id}`; purchaseQtyMap[key] = (purchaseQtyMap[key] || 0) + (p.quantity || 0);
-        });
-
-        const { data: allTraderTxData } = await supabase.from('trader_transactions').select('*, traders(trader_name)').lte('date', endStr + 'T23:59:59').order('date').order('created_at');
         const txList = []; const balances = {};
-
         allTraderTxData?.forEach(tx => {
           const traderId = tx.trader_id; const pAmt = parseFloat(tx.purchase_amount) || 0; const paidAmt = parseFloat(tx.paid_amount) || 0;
           if (!balances[traderId]) balances[traderId] = 0;
@@ -166,11 +174,6 @@ export default function Reports() {
           }
         });
 
-        const stockQueryStart = showMagicChart ? prevStartStr : startStr;
-        const { data: stockData } = await supabase.from('daily_stock').select('*').gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true });
-        
-        if (!isMounted) return; 
-
         setExpenseList(expData?.filter(e => e.date >= startStr) || []);
         setCollectionList(withData || []);
         setTraderTransactions(txList);
@@ -179,9 +182,8 @@ export default function Reports() {
         const validStockData = stockData?.filter(stock => stock.date >= startStr && stock.closing_balance !== null) || [];
         
         validStockData.forEach(stock => {
-          const key = `${stock.date}_${stock.brand_id}`; const purchQty = purchaseQtyMap[key] || 0;
           const openBal = parseInt(stock.opening_balance) || 0; const closeBal = parseInt(stock.closing_balance) || 0;
-          let saleQty = openBal + purchQty - closeBal; saleQty = saleQty < 0 ? 0 : saleQty;
+          let saleQty = openBal - closeBal; saleQty = saleQty < 0 ? 0 : saleQty;
           const brand = brandMap[stock.brand_id]; const sellingPrice = parseFloat(stock.unit_price) || (brand ? parseFloat(brand.selling_price) : 0);
           const saleRev = saleQty * sellingPrice; tSales += saleRev;
 
@@ -236,7 +238,7 @@ export default function Reports() {
           }
         });
 
-        // Calculate purchases from daily_stock to retrieve correct unit_price and unit_mrp
+        // Compute total purchases from Purchase Manager totals (Sale) and daily stock (MRP Valuation)
         const prevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
         const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
         
@@ -250,6 +252,11 @@ export default function Reports() {
 
         let rangePurchasesSale = 0;
         let rangePurchasesMrp = 0;
+
+        // Cumulative purchases in trader transactions (PurchaseManager)
+        traderRangeTxData?.forEach(tx => {
+          rangePurchasesSale += parseFloat(tx.purchase_amount || 0);
+        });
 
         const runningPrevClosing = {};
         brandsData?.forEach(b => {
@@ -272,19 +279,16 @@ export default function Reports() {
             
             let opQty = 0;
             let clQty = prevClose;
-            let salePrice = parseFloat(b.selling_price || 0);
             let mrpPrice = parseFloat(b.mrp_price || 0);
             
             if (rec) {
               opQty = parseInt(rec.opening_balance) || 0;
               clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : opQty;
-              salePrice = parseFloat(rec.unit_price || b.selling_price || 0);
               mrpPrice = parseFloat(rec.unit_mrp || b.mrp_price || 0);
             }
             
             const purchaseQty = Math.max(0, opQty - prevClose);
             if (purchaseQty > 0) {
-              rangePurchasesSale += purchaseQty * salePrice;
               rangePurchasesMrp += purchaseQty * mrpPrice;
             }
             runningPrevClosing[b.id] = clQty;
@@ -311,9 +315,10 @@ export default function Reports() {
         // MAGIC CHART (SECTION 6) AUTO-FETCH ENGINE
         // ----------------------------------------------------
         if (showMagicChart && user) {
-          const [ { data: savedRecord }, { data: prevRecord } ] = await Promise.all([
+          const [ { data: savedRecord }, { data: prevRecord }, { data: traderTxData } ] = await Promise.all([
             supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
-            supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle()
+            supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle(),
+            supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', firstDayStr).lte('date', endStr)
           ]);
 
           let currExpVal = 0;
@@ -391,6 +396,11 @@ export default function Reports() {
           const currSales = await calculateFifoSales(startObj, endObj);
           const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
 
+          let computedTotalPurchasesTraders = 0;
+          traderTxData?.forEach(tx => {
+            computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
+          });
+
           setPrevSavedData(prevRecord);
           setPrevMonthSales(prevSales);
           setPrevMonthExpenses(prevExpVal);
@@ -402,19 +412,19 @@ export default function Reports() {
             box1: currSales,
             box2: closingMrpVal,
             box4: openingMrpVal,
-            box5: rangePurchasesMrp,
+            box5: computedTotalPurchasesTraders,
             currExp: currExpVal
           }));
 
           if (savedRecord) {
             setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : String(Math.round(closingMrpVal)));
             setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : String(Math.round(openingMrpVal)));
-            setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(rangePurchasesMrp)));
+            setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(computedTotalPurchasesTraders)));
             setIsEditing(false); 
           } else {
             setManualClosing(String(Math.round(closingMrpVal)));
             setManualOpening(String(Math.round(openingMrpVal)));
-            setManualPurchases(String(Math.round(rangePurchasesMrp)));
+            setManualPurchases(String(Math.round(computedTotalPurchasesTraders)));
             setIsEditing(true); 
           }
         }
@@ -775,6 +785,37 @@ export default function Reports() {
                 <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">Cash Left in Hand</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 print-text-emerald">₹{summary.retainedCash.toLocaleString()}</h3>
               </div>
             </div>
+
+            {/* NEW ADDITION: MRP & SALE PRICE VALUATION DETAIL GRID */}
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-slate-100 dark:border-slate-800 pt-6">
+              <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
+                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Opening Stock Valuation</p>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500 font-medium">MRP Total:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.openingMrp.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500 font-medium">Sale Total:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.openingSale.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
+                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Closing Stock Valuation</p>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500 font-medium">MRP Total:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.closingMrp.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500 font-medium">Sale Total:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.closingSale.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="mb-8">
@@ -979,7 +1020,7 @@ export default function Reports() {
                             <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{tx.traders?.trader_name || 'N/A'}</td>
                             <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
                             <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
-                            <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-black text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
