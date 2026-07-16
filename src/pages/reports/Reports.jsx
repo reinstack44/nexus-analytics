@@ -387,6 +387,26 @@ export default function Reports() {
   const traderTotalPaid = traderTransactions.reduce((acc, tx) => acc + tx.paid_amount, 0);
   const traderTotalRemaining = traderTransactions.length > 0 ? traderTransactions[traderTransactions.length - 1].remaining_amount : 0;
 
+  // Grouping trader transactions by trader ID for individual ledgers
+  const groupedTraderData = traderTransactions.reduce((acc, tx) => {
+    const traderId = tx.trader_id;
+    const name = tx.traders?.trader_name || 'N/A';
+    if (!acc[traderId]) {
+      acc[traderId] = {
+        name,
+        transactions: [],
+        totalPurchases: 0,
+        totalPaid: 0,
+        remainingBalance: 0
+      };
+    }
+    acc[traderId].transactions.push(tx);
+    acc[traderId].totalPurchases += parseFloat(tx.purchase_amount || 0);
+    acc[traderId].totalPaid += parseFloat(tx.paid_amount || 0);
+    acc[traderId].remainingBalance = tx.remaining_amount; // Sets the final remaining balance after last transaction
+    return acc;
+  }, {});
+
   const ledgerBox1 = magicChartData.box1; 
   const ledgerBox2 = parseFloat(manualClosing) || 0; 
   const ledgerBox3 = ledgerBox1 + ledgerBox2;
@@ -787,38 +807,116 @@ export default function Reports() {
              <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
              <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
           </div>
+          
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Users size={18} className="no-print" /> 5. Trader Purchases & Payment Ledger</h3>
-            <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
-              <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
-                <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
-                  <tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Trader Name</th><th className="px-4 py-3 text-right text-amber-600 print:text-black">Purchase Amount (₹)</th><th className="px-4 py-3 text-right text-indigo-600 print:text-black">Paid Amount (₹)</th><th className="px-4 py-3 text-right text-slate-900 dark:text-white print:text-black">Remaining Balance (₹)</th></tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {loading ? <tr><td colSpan="5" className="px-4 py-8 text-center">Compiling trader data...</td></tr> : traderTransactions.map((tx, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 print:hover:bg-transparent">
-                      <td className="px-4 py-3 font-medium">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{tx.traders?.trader_name || 'N/A'}</td>
-                      <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
-                      <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
-                      <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                {traderTransactions.length > 0 && !loading && (
-                  <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
-                    <tr>
-                      <td colSpan="2" className="px-4 py-4 text-right">
-                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TRADER TOTALS</div>
-                      </td>
-                      <td className="px-4 py-4 text-right font-black text-amber-600 dark:text-amber-400">₹{traderTotalPurchases.toLocaleString()}</td>
-                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{traderTotalPaid.toLocaleString()}</td>
-                      <td className="px-4 py-4 text-right font-black text-slate-900 dark:text-white">₹{traderTotalRemaining.toLocaleString()}</td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-6 flex items-center gap-2">
+              <Users size={18} className="no-print" /> 5. Trader Purchases & Payment Ledger
+            </h3>
+
+            {loading ? (
+              <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling trader data...</p>
+            ) : (
+              <div className="space-y-10">
+                
+                {/* A. SEPARATE INDIVIDUAL TRADER TABLES */}
+                <div>
+                  <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-indigo-400 pl-2">
+                    A. Individual Trader Ledgers (व्यक्तिगत व्यापारी खाते)
+                  </h4>
+                  
+                  {Object.keys(groupedTraderData).length === 0 ? (
+                    <p className="text-sm text-slate-500 dark:text-slate-400 pl-2">No transaction recorded for this period.</p>
+                  ) : (
+                    <div className="space-y-8">
+                      {Object.values(groupedTraderData).map((trader, tIdx) => (
+                        <div key={tIdx} className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none break-inside-avoid">
+                          
+                          {/* Trader Header */}
+                          <div className="bg-slate-50/50 dark:bg-slate-800/30 px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
+                            <span className="font-extrabold text-slate-800 dark:text-slate-100 text-base">{trader.name}</span>
+                            <span className="text-xs font-semibold bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400 px-2 py-1 rounded-md">Trader Accounts</span>
+                          </div>
+
+                          {/* Table */}
+                          <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
+                            <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[10px] tracking-wider border-b border-slate-100 dark:border-slate-700">
+                              <tr>
+                                <th className="px-4 py-2.5">Date</th>
+                                <th className="px-4 py-2.5 text-right text-amber-600 print:text-black">Purchase Amount (₹)</th>
+                                <th className="px-4 py-2.5 text-right text-indigo-600 print:text-black">Paid Amount (₹)</th>
+                                <th className="px-4 py-2.5 text-right text-slate-900 dark:text-white print:text-black">Remaining Balance (₹)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                              {trader.transactions.map((tx, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                  <td className="px-4 py-2.5 font-medium">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot className="bg-slate-100/50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-700">
+                              <tr className="font-black">
+                                <td className="px-4 py-3 text-right text-xs uppercase text-slate-500 dark:text-slate-400">Total ({trader.name})</td>
+                                <td className="px-4 py-3 text-right text-amber-600 dark:text-amber-400">₹{trader.totalPurchases.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{trader.totalPaid.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-900 dark:text-white">₹{trader.remainingBalance.toLocaleString()}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* B. CONSOLIDATED LEDGER (MIXED) */}
+                <div className="pt-4 break-inside-avoid">
+                  <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-slate-400 pl-2">
+                    B. Consolidated Ledger (एकत्रित सर्व व्यापारी खाते)
+                  </h4>
+                  <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
+                    <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
+                      <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
+                        <tr>
+                          <th className="px-4 py-3">Date</th>
+                          <th className="px-4 py-3">Trader Name</th>
+                          <th className="px-4 py-3 text-right text-amber-600 print:text-black">Purchase Amount (₹)</th>
+                          <th className="px-4 py-3 text-right text-indigo-600 print:text-black">Paid Amount (₹)</th>
+                          <th className="px-4 py-3 text-right text-slate-900 dark:text-white print:text-black">Remaining Balance (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {traderTransactions.map((tx, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 print:hover:bg-transparent">
+                            <td className="px-4 py-3 font-medium">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                            <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{tx.traders?.trader_name || 'N/A'}</td>
+                            <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
+                            <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
+                            <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      {traderTransactions.length > 0 && (
+                        <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
+                          <tr>
+                            <td colSpan="2" className="px-4 py-4 text-right">
+                               <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TRADER TOTALS</div>
+                            </td>
+                            <td className="px-4 py-4 text-right font-black text-amber-600 dark:text-amber-400">₹{traderTotalPurchases.toLocaleString()}</td>
+                            <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{traderTotalPaid.toLocaleString()}</td>
+                            <td className="px-4 py-4 text-right font-black text-slate-900 dark:text-white">₹{traderTotalRemaining.toLocaleString()}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+            )}
           </div>
         </div>
 
