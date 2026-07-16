@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, forwardRef, useCallback } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw, Coffee, CalendarOff, Info, Lock } from 'lucide-react';
+import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, RotateCcw, Coffee, CalendarOff, Info, Lock, ArrowRightLeft } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -76,6 +76,7 @@ export default function DailyStock() {
 
   // --- PIPELINE LOCK STATE ---
   const [pipelineWarning, setPipelineWarning] = useState(null);
+  const [customRangeMode, setCustomRangeMode] = useState(false);
 
   // --- CLOUD STATES (Holidays & Filled Dates) ---
   const [markedHolidays, setMarkedHolidays] = useState([]);
@@ -119,8 +120,10 @@ export default function DailyStock() {
   };
 
   const selectedDates = getDatesInRange(startDate, endDate);
-  const isHolidaySelected = selectedDates.some(d => markedHolidays.includes(d));
   const isMultiDayRange = startDate && endDate && formatDateForDB(startDate) !== formatDateForDB(endDate);
+  const isHolidaySelected = isMultiDayRange 
+    ? selectedDates.every(d => markedHolidays.includes(d)) 
+    : selectedDates.some(d => markedHolidays.includes(d));
   
   const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
 
@@ -170,6 +173,7 @@ export default function DailyStock() {
 
   // --- AUTO EXPAND EFFECT ON LOAD/UPDATE ---
   useEffect(() => {
+    if (customRangeMode) return; // Bypass if custom range view mode is active
     if (filledDates.length > 0 && startDate) {
       const range = findFilledRangeOfDate(startDate);
       if (range) {
@@ -184,7 +188,7 @@ export default function DailyStock() {
         }
       }
     }
-  }, [filledDates, firstEverDate, startDate, endDate, findFilledRangeOfDate]);
+  }, [filledDates, firstEverDate, startDate, endDate, findFilledRangeOfDate, customRangeMode]);
 
   // --- STRICT DATE SELECTION LOGIC ---
   const handleStartDateChange = (date) => {
@@ -194,11 +198,13 @@ export default function DailyStock() {
       return;
     }
     
-    const existingRange = findFilledRangeOfDate(date);
-    if (existingRange) {
-      setStartDate(existingRange.start);
-      setEndDate(existingRange.end);
-      return;
+    if (!customRangeMode) {
+      const existingRange = findFilledRangeOfDate(date);
+      if (existingRange) {
+        setStartDate(existingRange.start);
+        setEndDate(existingRange.end);
+        return;
+      }
     }
 
     setStartDate(date);
@@ -217,21 +223,23 @@ export default function DailyStock() {
       return;
     }
 
-    const existingRange = findFilledRangeOfDate(date);
-    if (existingRange) {
-      setEndDate(existingRange.end);
-      return;
-    }
-
-    if (formatDateForDB(date) !== formatDateForDB(startDate)) {
-      const range = getDatesInRange(startDate, date);
-      if (range.some(d => markedHolidays.includes(d))) {
-        setAlertModal({ isOpen: true, title: "Invalid Selection", message: "Your selected range contains a holiday. Please select a clear working period." });
+    if (!customRangeMode) {
+      const existingRange = findFilledRangeOfDate(date);
+      if (existingRange) {
+        setEndDate(existingRange.end);
         return;
       }
-      if (range.some(d => filledDates.includes(d))) {
-        setAlertModal({ isOpen: true, title: "Data Conflict", message: "You cannot form a date range over days that already have recorded entries. Please select a fresh period or view them individually." });
-        return;
+
+      if (formatDateForDB(date) !== formatDateForDB(startDate)) {
+        const range = getDatesInRange(startDate, date);
+        if (range.some(d => markedHolidays.includes(d))) {
+          setAlertModal({ isOpen: true, title: "Invalid Selection", message: "Your selected range contains a holiday. Please select a clear working period." });
+          return;
+        }
+        if (range.some(d => filledDates.includes(d))) {
+          setAlertModal({ isOpen: true, title: "Data Conflict", message: "You cannot form a date range over days that already have recorded entries. Please select a fresh period or view them individually." });
+          return;
+        }
       }
     }
     setEndDate(date);
@@ -274,27 +282,36 @@ export default function DailyStock() {
       }
       const prevDateStr = formatDateForDB(targetPrevDate);
 
-      // 2. CHECK PIPELINE INTEGRITY
-      let isPipelineBroken = false;
-      const { data: earliestRecord } = await supabase.from('daily_stock').select('date').order('date', {ascending: true}).limit(1);
-      const firstEverDateStr = earliestRecord?.[0]?.date;
-      if (firstEverDateStr && isMounted) {
-        setFirstEverDate(firstEverDateStr);
-      }
+      // 2. CHECK PIPELINE INTEGRITY (Only active in Reconcile Mode)
+      if (!customRangeMode) {
+        const { data: earliestRecord } = await supabase.from('daily_stock').select('date').order('date', {ascending: true}).limit(1);
+        const firstEverDateStr = earliestRecord?.[0]?.date;
+        if (firstEverDateStr && isMounted) {
+          setFirstEverDate(firstEverDateStr);
+        }
 
-      if (firstEverDateStr && startStr > firstEverDateStr && prevDateStr >= firstEverDateStr) {
-        const { data: pData } = await supabase.from('daily_stock').select('closing_balance').eq('date', prevDateStr);
-        if (!pData || pData.length === 0 || pData.some(r => r.closing_balance === null)) {
-            isPipelineBroken = true;
-            setPipelineWarning(prevDateStr);
+        if (firstEverDateStr && startStr > firstEverDateStr && prevDateStr >= firstEverDateStr) {
+          const { data: pData } = await supabase.from('daily_stock').select('closing_balance').eq('date', prevDateStr);
+          if (!pData || pData.length === 0 || pData.some(r => r.closing_balance === null)) {
+              setPipelineWarning(prevDateStr);
+          }
         }
       }
 
-      const { data: brandsData } = await supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true });
-      const { data: stockData } = await supabase.from('daily_stock').select('*').eq('date', endStr);
-      const { data: prevStockData } = await supabase.from('daily_stock').select('*').eq('date', prevDateStr);
-      const { data: expData } = await supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr);
-      const { data: collData } = await supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr);
+      // Fetch consolidated range data
+      const [
+        { data: brandsData },
+        { data: rangeStockData },
+        { data: prevStockData },
+        { data: expData },
+        { data: collData }
+      ] = await Promise.all([
+        supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
+        supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr).order('date', { ascending: true }),
+        supabase.from('daily_stock').select('*').eq('date', prevDateStr),
+        supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr),
+        supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr)
+      ]);
 
       if (!isMounted) return;
 
@@ -302,73 +319,85 @@ export default function DailyStock() {
       let tColl = 0; if (collData) collData.forEach(c => tColl += parseFloat(c.amount));
 
       if (brandsData) {
-        const stockMap = {};
-        if (stockData) stockData.forEach(s => stockMap[s.brand_id] = s);
         const prevStockMap = {};
-        if (prevStockData) prevStockData.forEach(s => prevStockMap[s.brand_id] = s);
+        prevStockData?.forEach(s => prevStockMap[s.brand_id] = s);
+
+        // Group range stock records by brand ID
+        const stockByBrandAndDate = {};
+        rangeStockData?.forEach(s => {
+          if (!stockByBrandAndDate[s.brand_id]) stockByBrandAndDate[s.brand_id] = [];
+          stockByBrandAndDate[s.brand_id].push(s);
+        });
 
         let totalQty = 0;
         let totalRev = 0;
         let totalMrpRev = 0;
 
         const rows = brandsData.map(brand => {
-          const existingStock = stockMap[brand.id];
+          const brandLogs = stockByBrandAndDate[brand.id] || [];
           const prevStock = prevStockMap[brand.id];
-          
+
           let baseOpening = 0;
           let carriedPrice = parseFloat(brand.selling_price);
           let carriedMrp = parseFloat(brand.mrp_price || 0);
 
-          if (!isPipelineBroken && prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
+          if (prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
             baseOpening = prevStock.closing_balance;
             if (prevStock.unit_price) carriedPrice = parseFloat(prevStock.unit_price);
             if (prevStock.unit_mrp) carriedMrp = parseFloat(prevStock.unit_mrp);
           }
 
-          let purchaseQty = 0; 
-          let opening = baseOpening;
-          let closing = '';
-          let pPrice = carriedPrice; 
-          let pMrp = carriedMrp;
+          let totalPurchasesQty = 0;
+          let currentPrevClosing = baseOpening;
+          
+          let latestUnitPrice = carriedPrice;
+          let latestUnitMrp = carriedMrp;
 
-          if (existingStock) {
-            let recordedPurchase = 0;
-            if (existingStock.opening_balance !== null && existingStock.opening_balance !== undefined) {
-              recordedPurchase = existingStock.opening_balance - baseOpening;
-            }
-            if (recordedPurchase > 0) purchaseQty = recordedPurchase;
-            opening = baseOpening + purchaseQty;
-            
-            if (existingStock.closing_balance !== null && existingStock.closing_balance !== undefined) {
-              closing = existingStock.closing_balance;
-              if (closing > opening) closing = opening;
-            }
-            if (existingStock.unit_price) pPrice = parseFloat(existingStock.unit_price);
-            if (existingStock.unit_mrp) pMrp = parseFloat(existingStock.unit_mrp);
-          }
+          let rangeSalesQty = 0;
+          let rangeSalesAmt = 0;
+          let rangeSalesMrpAmt = 0;
 
-          let sQty = 0;
-          let sAmt = 0;
-          let sMrpAmt = 0;
-          if (closing !== '') {
-            sQty = opening - parseInt(closing);
-            sQty = sQty < 0 ? 0 : sQty; 
-            
-            let remainingSales = sQty;
-            const qtyFromOld = Math.min(remainingSales, baseOpening);
-            sAmt += qtyFromOld * carriedPrice; 
-            sMrpAmt += qtyFromOld * carriedMrp;
-            remainingSales -= qtyFromOld;
-            
-            if (remainingSales > 0 && purchaseQty > 0) {
-              const qtyFromNew = Math.min(remainingSales, purchaseQty);
-              sAmt += qtyFromNew * pPrice;
-              sMrpAmt += qtyFromNew * pMrp;
+          // Day by day timeline math to calculate absolute FIFO over any custom range
+          brandLogs.forEach(log => {
+            const opBal = parseInt(log.opening_balance) || 0;
+            const clBal = log.closing_balance !== null ? parseInt(log.closing_balance) : null;
+            const dayUnitPrice = log.unit_price ? parseFloat(log.unit_price) : latestUnitPrice;
+            const dayUnitMrp = log.unit_mrp ? parseFloat(log.unit_mrp) : latestUnitMrp;
+
+            const dailyPurchase = Math.max(0, opBal - currentPrevClosing);
+            totalPurchasesQty += dailyPurchase;
+
+            if (clBal !== null) {
+              let dailySaleQty = Math.max(0, opBal - clBal);
+              rangeSalesQty += dailySaleQty;
+
+              let rem = dailySaleQty;
+              const fromOld = Math.min(rem, currentPrevClosing);
+              rangeSalesAmt += fromOld * latestUnitPrice;
+              rangeSalesMrpAmt += fromOld * latestUnitMrp;
+              rem -= fromOld;
+
+              if (rem > 0 && dailyPurchase > 0) {
+                const fromNew = Math.min(rem, dailyPurchase);
+                rangeSalesAmt += fromNew * dayUnitPrice;
+                rangeSalesMrpAmt += fromNew * dayUnitMrp;
+              }
+              currentPrevClosing = clBal;
+            } else {
+              currentPrevClosing = opBal;
             }
-            totalQty += sQty;
-            totalRev += sAmt;
-            totalMrpRev += sMrpAmt;
-          }
+
+            latestUnitPrice = dayUnitPrice;
+            latestUnitMrp = dayUnitMrp;
+          });
+
+          const finalClosing = brandLogs.length > 0 && brandLogs[brandLogs.length - 1].closing_balance !== null 
+            ? String(brandLogs[brandLogs.length - 1].closing_balance) 
+            : '';
+
+          totalQty += rangeSalesQty;
+          totalRev += rangeSalesAmt;
+          totalMrpRev += rangeSalesMrpAmt;
 
           return { 
             brand_id: brand.id, 
@@ -378,15 +407,15 @@ export default function DailyStock() {
             mrp_price: brand.mrp_price,
             carried_price: carriedPrice, 
             carried_mrp: carriedMrp,
-            purchase_price: pPrice, 
-            purchase_mrp: pMrp,
+            purchase_price: latestUnitPrice, 
+            purchase_mrp: latestUnitMrp,
             base_opening: baseOpening, 
-            purchase_qty: purchaseQty, 
-            opening_balance: opening, 
-            closing_balance: closing, 
-            sales_qty: sQty, 
-            sales_amount: sAmt,
-            sales_mrp_amount: sMrpAmt
+            purchase_qty: totalPurchasesQty, 
+            opening_balance: baseOpening + totalPurchasesQty, 
+            closing_balance: finalClosing, 
+            sales_qty: rangeSalesQty, 
+            sales_amount: rangeSalesAmt,
+            sales_mrp_amount: rangeSalesMrpAmt
           };
         });
 
@@ -403,7 +432,7 @@ export default function DailyStock() {
     }
     
     return () => { isMounted = false; };
-  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user]);
+  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode]);
 
   const fetchPopupData = async (dateToFetch) => {
     const dateStr = formatDateForDB(dateToFetch);
@@ -717,7 +746,6 @@ export default function DailyStock() {
   };
 
   const tableTotalOpeningQty = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
-  const tableTotalPurchasesQty = stockRows.reduce((acc, row) => acc + (parseInt(row.purchase_qty) || 0), 0);
   const tableTotalClosingQty = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
 
   // Exact valuation (Selling Price)
@@ -725,10 +753,6 @@ export default function DailyStock() {
     const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_price || 0);
     const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0);
     return acc + baseVal + purchaseVal;
-  }, 0);
-
-  const tableTotalPurchasesAmount = stockRows.reduce((acc, row) => {
-    return acc + ((parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0));
   }, 0);
 
   const tableTotalClosingAmount = stockRows.reduce((acc, row) => {
@@ -756,10 +780,6 @@ export default function DailyStock() {
     const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_mrp || 0);
     const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_mrp || 0);
     return acc + baseVal + purchaseVal;
-  }, 0);
-
-  const tableTotalPurchasesMrpAmount = stockRows.reduce((acc, row) => {
-    return acc + ((parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_mrp || 0));
   }, 0);
 
   const tableTotalClosingMrpAmount = stockRows.reduce((acc, row) => {
@@ -973,6 +993,17 @@ export default function DailyStock() {
               <Coffee size={18} /> Mark Holiday
             </button>
             
+            <button 
+              onClick={() => {
+                setCustomRangeMode(!customRangeMode);
+                setStartDate(new Date());
+                setEndDate(new Date());
+              }} 
+              className={`shrink-0 flex items-center gap-1.5 h-10.5 px-3 rounded-xl text-sm font-bold border transition-all shadow-sm ${customRangeMode ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+            >
+              <ArrowRightLeft size={16} /> {customRangeMode ? 'Reconcile Mode' : 'Custom View'}
+            </button>
+
             <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
               <Landmark size={18} /> Expenses & Cash
             </button>
@@ -1082,20 +1113,35 @@ export default function DailyStock() {
                         </td>
 
                         <td className="px-4 py-4 text-center">
-                          <input type="number" value={row.opening_balance} onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500`} />
+                          <input 
+                            type="number" 
+                            disabled={customRangeMode}
+                            value={row.opening_balance} 
+                            onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} 
+                            className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
+                          />
                         </td>
                         
                         <td className="px-4 py-4 text-center">
                           <button 
+                            disabled={customRangeMode}
                             onClick={() => openPurchaseModal(row)}
-                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${customRangeMode ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
                           >
                             {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
                           </button>
                         </td>
 
                         <td className="px-4 py-4 text-center">
-                          <input type="number" min="0" placeholder="Qty" value={row.closing_balance} onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500`} />
+                          <input 
+                            type="number" 
+                            min="0" 
+                            placeholder="Qty" 
+                            disabled={customRangeMode}
+                            value={row.closing_balance} 
+                            onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} 
+                            className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
+                          />
                         </td>
                         <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400 text-lg">
                           {row.closing_balance === '' ? '-' : row.sales_qty}
@@ -1124,9 +1170,7 @@ export default function DailyStock() {
                       </td>
                       
                       <td className="px-4 py-4 text-center">
-                        <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalPurchasesQty}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: ₹{tableTotalPurchasesMrpAmount.toLocaleString()}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{tableTotalPurchasesAmount.toLocaleString()}</div>
+                        {/* Purchases totals removed */}
                       </td>
                       
                       <td className="px-4 py-4 text-center">
@@ -1137,7 +1181,8 @@ export default function DailyStock() {
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</div>
-                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">Sale: ₹{dailySummary.totalRevenue.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">MRP: ₹{dailySummary.totalMrpRevenue.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{dailySummary.totalRevenue.toLocaleString()}</div>
                       </td>
                       <td className="px-6 py-4 text-right align-top pt-6 font-black text-purple-600 dark:text-purple-400 text-xl">₹{tableTotalMrpRevenue.toLocaleString()}</td>
                       <td className="px-6 py-4 text-right align-top pt-6 font-black text-emerald-600 dark:text-emerald-400 text-xl">₹{dailySummary.totalRevenue.toLocaleString()}</td>

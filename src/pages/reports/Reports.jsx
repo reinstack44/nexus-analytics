@@ -3,7 +3,7 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { 
   FileText, Download, FileSpreadsheet, Printer, Calendar, ChevronDown, 
-  TrendingUp, Users, Receipt, Landmark, Sigma, Wand2, Save, Edit2 
+  TrendingUp, Users, Receipt, Landmark, Sigma, Wand2 
 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -73,8 +73,6 @@ const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
 export default function Reports() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
   const [startDate, setStartDate] = useState(() => getInitialDate('report_start_date'));
   const [endDate, setEndDate] = useState(() => getInitialDate('report_end_date'));
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
@@ -91,13 +89,14 @@ export default function Reports() {
   const [magicChartData, setMagicChartData] = useState({
     box1: 0, box2: 0, box3: 0, box4: 0, box5: 0, box6: 0, box7: 0, currExp: 0, currNetProfit: 0, prevNetProfit: 0, cumulativeProfit: 0
   });
-  const [manualClosing, setManualClosing] = useState('');
-  const [manualOpening, setManualOpening] = useState('');
-  const [manualPurchases, setManualPurchases] = useState('');
 
-  const [prevSavedData, setPrevSavedData] = useState(null);
   const [prevMonthSales, setPrevMonthSales] = useState(0);
   const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
+
+  // लाइव कम्प्यूटेड प्रीवियस मंथ स्टॉक
+  const [prevMonthOpening, setPrevMonthOpening] = useState(0);
+  const [prevMonthClosing, setPrevMonthClosing] = useState(0);
+  const [prevMonthPurchases, setPrevMonthPurchases] = useState(0);
 
   const selectedMonth = startDate;
 
@@ -127,8 +126,6 @@ export default function Reports() {
       const prevStartStr = formatDateForDB(prevStartObj);
 
       const firstDayStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
-      const monthYearStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
-      const prevMonthYearStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
 
       try {
         const { data: brandsData } = await supabase.from('brands').select('*');
@@ -315,9 +312,7 @@ export default function Reports() {
         // MAGIC CHART (SECTION 6) AUTO-FETCH ENGINE
         // ----------------------------------------------------
         if (showMagicChart && user) {
-          const [ { data: savedRecord }, { data: prevRecord }, { data: traderTxData } ] = await Promise.all([
-            supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
-            supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle(),
+          const [ { data: traderTxData } ] = await Promise.all([
             supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', firstDayStr).lte('date', endStr)
           ]);
 
@@ -401,32 +396,112 @@ export default function Reports() {
             computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
           });
 
-          setPrevSavedData(prevRecord);
+          // A. Opening Stock MRP Total calculation with First Month Fallback
+          let computedOpeningStockMrp = 0;
+          if (prevStock && prevStock.length > 0) {
+            prevStock.forEach(s => {
+              const brand = brandMap[s.brand_id];
+              const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
+              const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+              computedOpeningStockMrp += clQty * mrp;
+            });
+          } else {
+            const firstDayRecords = stockByDateStr[firstDayStr] || {};
+            brandsData?.forEach(b => {
+              const rec = firstDayRecords[b.id];
+              if (rec) {
+                const opQty = parseInt(rec.opening_balance) || 0;
+                const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+                computedOpeningStockMrp += opQty * mrp;
+              }
+            });
+          }
+
+          // B. Closing Stock MRP Total
+          let computedClosingStockMrp = 0;
+          const lastDayRecords = stockByDateStr[endStr] || {};
+          brandsData?.forEach(b => {
+            const rec = lastDayRecords[b.id];
+            if (rec) {
+              const clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : 0;
+              const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+              computedClosingStockMrp += clQty * mrp;
+            }
+          });
+
+          // C. Previous Month complete auto-fetch
+          const prevPrevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 0);
+          const prevPrevMonthLastDayStr = formatDateForDB(prevPrevMonthLastDayObj);
+          
+          const { data: prevPrevStock } = await supabase
+            .from('daily_stock')
+            .select('*')
+            .eq('date', prevPrevMonthLastDayStr);
+
+          let computedPrevOpeningMrp = 0;
+          if (prevPrevStock && prevPrevStock.length > 0) {
+            prevPrevStock.forEach(s => {
+              const brand = brandMap[s.brand_id];
+              const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
+              const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+              computedPrevOpeningMrp += clQty * mrp;
+            });
+          } else {
+            const prevFirstDayRecords = {};
+            stockData?.forEach(s => {
+              if (s.date === prevStartStr) {
+                prevFirstDayRecords[s.brand_id] = s;
+              }
+            });
+            brandsData?.forEach(b => {
+              const rec = prevFirstDayRecords[b.id];
+              if (rec) {
+                const opQty = parseInt(rec.opening_balance) || 0;
+                const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+                computedPrevOpeningMrp += opQty * mrp;
+              }
+            });
+          }
+
+          let computedPrevClosingMrp = 0;
+          if (prevStock && prevStock.length > 0) {
+            prevStock.forEach(s => {
+              const brand = brandMap[s.brand_id];
+              const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : 0;
+              const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+              computedPrevClosingMrp += clQty * mrp;
+            });
+          }
+
+          const { data: prevTraderTxData } = await supabase
+            .from('trader_transactions')
+            .select('purchase_amount')
+            .eq('user_id', user.id)
+            .gte('date', formatDateForDB(prevStartObj))
+            .lte('date', formatDateForDB(prevEndObj));
+
+          let computedPrevTotalPurchasesTraders = 0;
+          prevTraderTxData?.forEach(tx => {
+            computedPrevTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
+          });
+
           setPrevMonthSales(prevSales);
           setPrevMonthExpenses(prevExpVal);
+
+          setPrevMonthOpening(computedPrevOpeningMrp);
+          setPrevMonthClosing(computedPrevClosingMrp);
+          setPrevMonthPurchases(computedPrevTotalPurchasesTraders);
 
           if (!isMounted) return;
 
           setMagicChartData(prev => ({
             ...prev,
             box1: currSales,
-            box2: closingMrpVal,
-            box4: openingMrpVal,
+            box2: computedClosingStockMrp,
+            box4: computedOpeningStockMrp,
             box5: computedTotalPurchasesTraders,
             currExp: currExpVal
           }));
-
-          if (savedRecord) {
-            setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : String(Math.round(closingMrpVal)));
-            setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : String(Math.round(openingMrpVal)));
-            setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(computedTotalPurchasesTraders)));
-            setIsEditing(false); 
-          } else {
-            setManualClosing(String(Math.round(closingMrpVal)));
-            setManualOpening(String(Math.round(openingMrpVal)));
-            setManualPurchases(String(Math.round(computedTotalPurchasesTraders)));
-            setIsEditing(true); 
-          }
         }
 
       } catch (error) { console.error("Error generating report:", error); }
@@ -436,38 +511,6 @@ export default function Reports() {
     fetchReportData();
     return () => { isMounted = false; };
   }, [startDate, endDate, showMagicChart, user]);
-
-  const handleSaveMagicChart = async () => {
-    if (!user) return;
-    setSaving(true);
-
-    const startObj = getLocalDateObj(startDate);
-    const monthYearStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
-
-    const payload = {
-      user_id: user.id,
-      month_year: monthYearStr,
-      closing_stock: manualClosing === '' ? null : parseFloat(manualClosing),
-      opening_stock: manualOpening === '' ? null : parseFloat(manualOpening),
-      total_purchases: manualPurchases === '' ? null : parseFloat(manualPurchases),
-      updated_at: new Date().toISOString()
-    };
-
-    try {
-      const { error } = await supabase
-        .from('magic_chart_saves')
-        .upsert(payload, { onConflict: 'user_id, month_year' });
-
-      if (error) throw error;
-      setIsEditing(false);
-      alert('Magic Chart saved successfully.');
-    } catch (err) {
-      console.error('Error saving magic chart:', err);
-      alert('Error saving: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const exportToCSV = () => {
     window.alert("Exporting CSV is optimized for specific fields. PDF is recommended for full multi-page reporting.");
@@ -502,21 +545,21 @@ export default function Reports() {
   }, {});
 
   const ledgerBox1 = magicChartData.box1; 
-  const ledgerBox2 = parseFloat(manualClosing) || 0; 
+  const ledgerBox2 = magicChartData.box2; 
   const ledgerBox3 = ledgerBox1 + ledgerBox2;
 
-  const ledgerBox4 = parseFloat(manualOpening) || 0; 
-  const ledgerBox5 = parseFloat(manualPurchases) || 0; 
+  const ledgerBox4 = magicChartData.box4; 
+  const ledgerBox5 = magicChartData.box5; 
   const ledgerBox6 = ledgerBox4 + ledgerBox5;
 
   const ledgerBox7 = ledgerBox3 - ledgerBox6; 
   const ledgerNetProfit = ledgerBox7 - magicChartData.currExp; 
 
-  const prevBox2Val = prevSavedData ? parseFloat(prevSavedData.closing_stock) || 0 : 0;
+  const prevBox2Val = prevMonthClosing;
   const prevBox3Val = prevMonthSales + prevBox2Val;
 
-  const prevBox4Val = prevSavedData ? parseFloat(prevSavedData.opening_stock) || 0 : 0;
-  const prevBox5Val = prevSavedData ? parseFloat(prevSavedData.total_purchases) || 0 : 0;
+  const prevBox4Val = prevMonthOpening;
+  const prevBox5Val = prevMonthPurchases;
   const prevBox6Val = prevBox4Val + prevBox5Val;
 
   const prevBox7Val = prevBox3Val - prevBox6Val;
@@ -798,6 +841,20 @@ export default function Reports() {
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500 font-medium">Sale Total:</span>
                     <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.openingSale.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
+                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Total Purchases Valuation</p>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500 font-medium">MRP Total:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.purchasesMrp.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500 font-medium">Sale Total:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.purchasesSale.toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -1102,41 +1159,20 @@ export default function Reports() {
                             {formatRs(ledgerBox1)}
                           </td>
                           
-                          <td className="border-r border-slate-300 dark:border-slate-700 p-0">
-                            <input 
-                              type="number"
-                              disabled={!isEditing}
-                              value={manualClosing}
-                              onChange={(e) => setManualClosing(e.target.value)}
-                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90 min-h-16 print:min-h-0 print:py-1"
-                              placeholder="0"
-                            />
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
+                            {formatRs(ledgerBox2)}
                           </td>
 
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5 print:text-xs print:bg-indigo-50 print-text-indigo">
                             {formatRs(ledgerBox3)}
                           </td>
 
-                          <td className="border-r border-slate-300 dark:border-slate-700 p-0">
-                            <input 
-                              type="number"
-                              disabled={!isEditing}
-                              value={manualOpening}
-                              onChange={(e) => setManualOpening(e.target.value)}
-                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90 min-h-16 print:min-h-0 print:py-1"
-                              placeholder="0"
-                            />
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
+                            {formatRs(ledgerBox4)}
                           </td>
 
-                          <td className="border-r border-slate-300 dark:border-slate-700 p-0">
-                            <input 
-                              type="number"
-                              disabled={!isEditing}
-                              value={manualPurchases}
-                              onChange={(e) => setManualPurchases(e.target.value)}
-                              className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90 min-h-16 print:min-h-0 print:py-1"
-                              placeholder="0"
-                            />
+                          <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
+                            {formatRs(ledgerBox5)}
                           </td>
 
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5 print:text-xs print:bg-indigo-50 print-text-indigo">
@@ -1218,28 +1254,6 @@ export default function Reports() {
                         </tr>
                       </tbody>
                     </table>
-                  </div>
-
-                  {/* ACTIONS FOOTER */}
-                  <div className="flex justify-end items-center gap-3 pt-2 no-print">
-                    {!isEditing && (
-                      <button
-                        type="button"
-                        onClick={() => setIsEditing(true)}
-                        className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-xl border border-slate-200 dark:border-slate-700 transition-colors shadow-sm cursor-pointer"
-                      >
-                        <Edit2 size={16} />
-                        <span>Edit Ledger</span>
-                      </button>
-                    )}
-                    <button 
-                      onClick={handleSaveMagicChart}
-                      disabled={saving || !isEditing}
-                      className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-black text-sm rounded-xl shadow-md transition-colors cursor-pointer"
-                    >
-                      <Save size={16} />
-                      {saving ? 'Saving...' : 'Save Configuration'}
-                    </button>
                   </div>
 
                 </div>

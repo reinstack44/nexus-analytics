@@ -1,7 +1,7 @@
 import { useState, useEffect, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Wand2, Calendar, ChevronDown, Save, Edit2 } from 'lucide-react';
+import { Wand2, Calendar, ChevronDown } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -41,8 +41,6 @@ const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
 export default function MagicChart() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const saved = sessionStorage.getItem('mc_selectedMonth');
     return saved ? new Date(saved) : new Date();
@@ -54,13 +52,15 @@ export default function MagicChart() {
   const [prevMonthSales, setPrevMonthSales] = useState(0);
   const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
 
-  // पिछले महीने का सहेजा हुआ डेटा
-  const [prevSavedData, setPrevSavedData] = useState(null);
+  // लाइव कम्प्यूटेड लेड्जर वैल्यूज
+  const [ledgerOpening, setLedgerOpening] = useState(0);
+  const [ledgerClosing, setLedgerClosing] = useState(0);
+  const [ledgerPurchases, setLedgerPurchases] = useState(0);
 
-  // मैनुअल / ऑटो-फ़ेच इनपुट स्टेट्स
-  const [manualClosing, setManualClosing] = useState('');
-  const [manualOpening, setManualOpening] = useState('');
-  const [manualPurchases, setManualPurchases] = useState('');
+  // पिछले महीने की ऑटोमेटेड गणनाएँ
+  const [prevMonthOpening, setPrevMonthOpening] = useState(0);
+  const [prevMonthClosing, setPrevMonthClosing] = useState(0);
+  const [prevMonthPurchases, setPrevMonthPurchases] = useState(0);
 
   // Selected Month को sessionStorage में सिंक करने के लिए हुक
   useEffect(() => {
@@ -88,16 +88,12 @@ export default function MagicChart() {
       const prevStartStr = formatDateForDB(prevStartObj);
 
       const firstDayStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
-      const monthYearStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
-      const prevMonthYearStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
 
       try {
-        const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: savedRecord }, { data: prevRecord }, { data: traderTxData } ] = await Promise.all([
+        const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: traderTxData } ] = await Promise.all([
           supabase.from('brands').select('*'),
           supabase.from('daily_stock').select('*').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
           supabase.from('expenses').select('amount, date').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59'),
-          supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', monthYearStr).maybeSingle(),
-          supabase.from('magic_chart_saves').select('closing_stock, opening_stock, total_purchases').eq('user_id', user.id).eq('month_year', prevMonthYearStr).maybeSingle(),
           supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', firstDayStr).lte('date', currEndStr)
         ]);
 
@@ -106,13 +102,13 @@ export default function MagicChart() {
         // ----------------------------------------------------
         // 1. EXPENSES CALCULATION
         // ----------------------------------------------------
-        let currExp = 0;
-        let prevExp = 0;
+        let currExpVal = 0;
+        let prevExpVal = 0;
         allExpenses?.forEach(e => {
           const eDate = getLocalDateObj(e.date);
           if (eDate) {
-            if (eDate >= currStartObj && eDate <= currEndObj) currExp += parseFloat(e.amount || 0);
-            if (eDate >= prevStartObj && eDate <= prevEndObj) prevExp += parseFloat(e.amount || 0);
+            if (eDate >= currStartObj && eDate <= currEndObj) currExpVal += parseFloat(e.amount || 0);
+            if (eDate >= prevStartObj && eDate <= prevEndObj) prevExpVal += parseFloat(e.amount || 0);
           }
         });
 
@@ -194,17 +190,37 @@ export default function MagicChart() {
           stockByDateStr[s.date][s.brand_id] = s;
         });
 
-        // A. Opening Stock MRP Total (First Day of the Month)
+        // A. Closing Stock of Previous Month = Opening Stock of Current Month (MRP Total)
+        const prevMonthLastDayObj = new Date(currYear, currMonth, 0);
+        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
+        
+        const { data: prevStock } = await supabase
+          .from('daily_stock')
+          .select('*')
+          .eq('date', prevMonthLastDayStr);
+          
+        const prevStockMap = {};
+        prevStock?.forEach(s => { prevStockMap[s.brand_id] = s; });
+
         let computedOpeningStockMrp = 0;
-        const firstDayRecords = stockByDateStr[firstDayStr] || {};
-        brands?.forEach(b => {
-          const rec = firstDayRecords[b.id];
-          if (rec) {
-            const opQty = parseInt(rec.opening_balance) || 0;
-            const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-            computedOpeningStockMrp += opQty * mrp;
-          }
-        });
+        if (prevStock && prevStock.length > 0) {
+          prevStock.forEach(s => {
+            const brand = brands?.find(b => b.id === s.brand_id);
+            const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
+            const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+            computedOpeningStockMrp += clQty * mrp;
+          });
+        } else {
+          const firstDayRecords = stockByDateStr[firstDayStr] || {};
+          brands?.forEach(b => {
+            const rec = firstDayRecords[b.id];
+            if (rec) {
+              const opQty = parseInt(rec.opening_balance) || 0;
+              const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+              computedOpeningStockMrp += opQty * mrp;
+            }
+          });
+        }
 
         // B. Closing Stock MRP Total (Last Day of the Month)
         let computedClosingStockMrp = 0;
@@ -224,26 +240,82 @@ export default function MagicChart() {
           computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
         });
 
+        // ----------------------------------------------------
+        // 4. PREVIOUS MONTH COMPLETE AUTO-FETCH LOGIC
+        // ----------------------------------------------------
+        // Previous Month's Opening Stock (Closing of month before previous, i.e., 2 months ago)
+        const prevPrevMonthLastDayObj = new Date(currYear, currMonth - 1, 0);
+        const prevPrevMonthLastDayStr = formatDateForDB(prevPrevMonthLastDayObj);
+        
+        const { data: prevPrevStock } = await supabase
+          .from('daily_stock')
+          .select('*')
+          .eq('date', prevPrevMonthLastDayStr);
+
+        let computedPrevOpeningMrp = 0;
+        if (prevPrevStock && prevPrevStock.length > 0) {
+          prevPrevStock.forEach(s => {
+            const brand = brands?.find(b => b.id === s.brand_id);
+            const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
+            const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+            computedPrevOpeningMrp += clQty * mrp;
+          });
+        } else {
+          const prevStartStr = formatDateForDB(prevStartObj);
+          const prevFirstDayRecords = {};
+          allStock?.forEach(s => {
+            if (s.date === prevStartStr) {
+              prevFirstDayRecords[s.brand_id] = s;
+            }
+          });
+          brands?.forEach(b => {
+            const rec = prevFirstDayRecords[b.id];
+            if (rec) {
+              const opQty = parseInt(rec.opening_balance) || 0;
+              const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
+              computedPrevOpeningMrp += opQty * mrp;
+            }
+          });
+        }
+
+        // Previous Month's Closing Stock
+        let computedPrevClosingMrp = 0;
+        if (prevStock && prevStock.length > 0) {
+          prevStock.forEach(s => {
+            const brand = brands?.find(b => b.id === s.brand_id);
+            const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : 0;
+            const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+            computedPrevClosingMrp += clQty * mrp;
+          });
+        }
+
+        // Previous Month's Total Purchases from Trader Transactions
+        const { data: prevTraderTxData } = await supabase
+          .from('trader_transactions')
+          .select('purchase_amount')
+          .eq('user_id', user.id)
+          .gte('date', formatDateForDB(prevStartObj))
+          .lte('date', formatDateForDB(prevEndObj));
+
+        let computedPrevTotalPurchasesTraders = 0;
+        prevTraderTxData?.forEach(tx => {
+          computedPrevTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
+        });
+
         if (!isMounted) return;
 
         setSalesAmount(currSales);
-        setExpensesAmount(currExp);
+        setExpensesAmount(currExpVal);
         setPrevMonthSales(prevSales);
-        setPrevMonthExpenses(prevExp);
-        setPrevSavedData(prevRecord);
+        setPrevMonthExpenses(prevExpVal);
 
-        // डेटा लोड प्रबंधन (अवेलेबल हो तो सुरक्षित डेटा लें अन्यथा सीधे कम्प्यूटेड वैल्यू लें)
-        if (savedRecord) {
-          setManualClosing(savedRecord.closing_stock !== null ? String(savedRecord.closing_stock) : String(Math.round(computedClosingStockMrp)));
-          setManualOpening(savedRecord.opening_stock !== null ? String(savedRecord.opening_stock) : String(Math.round(computedOpeningStockMrp)));
-          setManualPurchases(savedRecord.total_purchases !== null ? String(savedRecord.total_purchases) : String(Math.round(computedTotalPurchasesTraders)));
-          setIsEditing(false);
-        } else {
-          setManualClosing(String(Math.round(computedClosingStockMrp)));
-          setManualOpening(String(Math.round(computedOpeningStockMrp)));
-          setManualPurchases(String(Math.round(computedTotalPurchasesTraders)));
-          setIsEditing(true);
-        }
+        setLedgerOpening(computedOpeningStockMrp);
+        setLedgerClosing(computedClosingStockMrp);
+        setLedgerPurchases(computedTotalPurchasesTraders);
+
+        setPrevMonthOpening(computedPrevOpeningMrp);
+        setPrevMonthClosing(computedPrevClosingMrp);
+        setPrevMonthPurchases(computedPrevTotalPurchasesTraders);
 
       } catch (error) {
         console.error("Error loading magic data:", error);
@@ -256,46 +328,13 @@ export default function MagicChart() {
     return () => { isMounted = false; };
   }, [selectedMonth, user]);
 
-  const handleSave = async () => {
-    if (!user) return;
-    setSaving(true);
-
-    const currYear = selectedMonth.getFullYear();
-    const currMonth = selectedMonth.getMonth();
-    const monthYearStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
-
-    const payload = {
-      user_id: user.id,
-      month_year: monthYearStr,
-      closing_stock: manualClosing === '' ? null : parseFloat(manualClosing),
-      opening_stock: manualOpening === '' ? null : parseFloat(manualOpening),
-      total_purchases: manualPurchases === '' ? null : parseFloat(manualPurchases),
-      updated_at: new Date().toISOString()
-    };
-
-    try {
-      const { error } = await supabase
-        .from('magic_chart_saves')
-        .upsert(payload, { onConflict: 'user_id, month_year' });
-
-      if (error) throw error;
-      setIsEditing(false);
-      alert('Magic Chart saved successfully.');
-    } catch (err) {
-      console.error('Error saving magic chart:', err);
-      alert('Error saving: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   // --- CALCULATIONS FOR CURRENT MONTH ---
   const box1Val = salesAmount;
-  const box2Val = parseFloat(manualClosing) || 0;
+  const box2Val = ledgerClosing;
   const box3Val = box1Val + box2Val;
 
-  const box4Val = parseFloat(manualOpening) || 0;
-  const box5Val = parseFloat(manualPurchases) || 0;
+  const box4Val = ledgerOpening;
+  const box5Val = ledgerPurchases;
   const box6Val = box4Val + box5Val;
 
   const box7Val = box3Val - box6Val; // चालू ग्रॉस प्रॉफिट
@@ -303,11 +342,11 @@ export default function MagicChart() {
 
   // --- CALCULATIONS FOR PREVIOUS MONTH ---
   const prevBox1Val = prevMonthSales;
-  const prevBox2Val = prevSavedData ? parseFloat(prevSavedData.closing_stock) || 0 : 0;
+  const prevBox2Val = prevMonthClosing;
   const prevBox3Val = prevBox1Val + prevBox2Val;
 
-  const prevBox4Val = prevSavedData ? parseFloat(prevSavedData.opening_stock) || 0 : 0;
-  const prevBox5Val = prevSavedData ? parseFloat(prevSavedData.total_purchases) || 0 : 0;
+  const prevBox4Val = prevMonthOpening;
+  const prevBox5Val = prevMonthPurchases;
   const prevBox6Val = prevBox4Val + prevBox5Val;
 
   const prevBox7Val = prevBox3Val - prevBox6Val;
@@ -451,16 +490,8 @@ export default function MagicChart() {
                     </td>
                     
                     {/* रकाना 2 */}
-                    <td className="border-r border-slate-300 dark:border-slate-700 p-0">
-                      <input 
-                        type="number"
-                        disabled={!isEditing}
-                        value={manualClosing}
-                        onChange={(e) => setManualClosing(e.target.value)}
-                        className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
-                        style={{ minHeight: '64px' }}
-                        placeholder="0"
-                      />
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
+                      {formatRs(box2Val)}
                     </td>
 
                     {/* रकाना 3 */}
@@ -469,29 +500,13 @@ export default function MagicChart() {
                     </td>
 
                     {/* रकाना 4 */}
-                    <td className="border-r border-slate-300 dark:border-slate-700 p-0">
-                      <input 
-                        type="number"
-                        disabled={!isEditing}
-                        value={manualOpening}
-                        onChange={(e) => setManualOpening(e.target.value)}
-                        className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
-                        style={{ minHeight: '64px' }}
-                        placeholder="0"
-                      />
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
+                      {formatRs(box4Val)}
                     </td>
 
                     {/* रकाना 5 */}
-                    <td className="border-r border-slate-300 dark:border-slate-700 p-0">
-                      <input 
-                        type="number"
-                        disabled={!isEditing}
-                        value={manualPurchases}
-                        onChange={(e) => setManualPurchases(e.target.value)}
-                        className="w-full h-full text-center bg-transparent focus:bg-indigo-50 dark:focus:bg-indigo-950/30 text-lg font-black text-slate-800 dark:text-slate-100 border-none outline-none focus:ring-0 disabled:opacity-90"
-                        style={{ minHeight: '64px' }}
-                        placeholder="0"
-                      />
+                    <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
+                      {formatRs(box5Val)}
                     </td>
 
                     {/* रकाना 6 */}
@@ -554,7 +569,7 @@ export default function MagicChart() {
                       मागील महिन्याचा नफा (+) <br /> (Previous Month Net Profit)
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                      चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                      चालू महिन्याचा नफा <span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span>
                     </th>
                     <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5">
                       एकूण नफा <br /> (Total Net Profit)
@@ -575,28 +590,6 @@ export default function MagicChart() {
                   </tr>
                 </tbody>
               </table>
-            </div>
-
-            {/* ACTIONS FOOTER */}
-            <div className="flex justify-end items-center gap-3 pt-2">
-              {!isEditing && (
-                <button
-                  type="button"
-                  onClick={() => setIsEditing(true)}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-xl border border-slate-200 dark:border-slate-700 transition-colors shadow-sm cursor-pointer"
-                >
-                  <Edit2 size={16} />
-                  <span>Edit Ledger</span>
-                </button>
-              )}
-              <button 
-                onClick={handleSave}
-                disabled={saving || !isEditing}
-                className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-black text-sm rounded-xl shadow-md transition-colors cursor-pointer"
-              >
-                <Save size={16} />
-                {saving ? 'Saving...' : 'Save Configuration'}
-              </button>
             </div>
 
           </div>
