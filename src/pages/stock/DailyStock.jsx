@@ -173,7 +173,7 @@ export default function DailyStock() {
 
   // --- AUTO EXPAND EFFECT ON LOAD/UPDATE ---
   useEffect(() => {
-    if (customRangeMode) return; // Bypass if custom range view mode is active
+    if (customRangeMode) return; 
     if (filledDates.length > 0 && startDate) {
       const range = findFilledRangeOfDate(startDate);
       if (range) {
@@ -274,7 +274,7 @@ export default function DailyStock() {
       const startStr = formatDateForDB(startDate);
       const endStr = endDate ? formatDateForDB(endDate) : startStr;
 
-      // 1. STRICT PROPAGATION: Find EXACT Previous Working Day
+      // STRICT PROPAGATION: Find EXACT Previous Working Day
       let targetPrevDate = new Date(startDate);
       targetPrevDate.setDate(targetPrevDate.getDate() - 1);
       while (markedHolidays.includes(formatDateForDB(targetPrevDate))) {
@@ -282,7 +282,7 @@ export default function DailyStock() {
       }
       const prevDateStr = formatDateForDB(targetPrevDate);
 
-      // 2. CHECK PIPELINE INTEGRITY (Only active in Reconcile Mode)
+      // CHECK PIPELINE INTEGRITY (Only active in Reconcile Mode)
       if (!customRangeMode) {
         const { data: earliestRecord } = await supabase.from('daily_stock').select('date').order('date', {ascending: true}).limit(1);
         const firstEverDateStr = earliestRecord?.[0]?.date;
@@ -322,7 +322,6 @@ export default function DailyStock() {
         const prevStockMap = {};
         prevStockData?.forEach(s => prevStockMap[s.brand_id] = s);
 
-        // Group range stock records by brand ID
         const stockByBrandAndDate = {};
         rangeStockData?.forEach(s => {
           if (!stockByBrandAndDate[s.brand_id]) stockByBrandAndDate[s.brand_id] = [];
@@ -341,11 +340,17 @@ export default function DailyStock() {
           let carriedPrice = parseFloat(brand.selling_price);
           let carriedMrp = parseFloat(brand.mrp_price || 0);
 
+          // STRICT CHECK: Strict nullish verification
           if (prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
-            baseOpening = prevStock.closing_balance;
-            if (prevStock.unit_price) carriedPrice = parseFloat(prevStock.unit_price);
-            if (prevStock.unit_mrp) carriedMrp = parseFloat(prevStock.unit_mrp);
+          baseOpening = prevStock.closing_balance;
+          // Strict > 0 check lagaya gaya hai taaki legacy '0' values calculations ko ₹0 na karein
+          if (prevStock.unit_price && parseFloat(prevStock.unit_price) > 0) {
+            carriedPrice = parseFloat(prevStock.unit_price);
           }
+          if (prevStock.unit_mrp && parseFloat(prevStock.unit_mrp) > 0) {
+            carriedMrp = parseFloat(prevStock.unit_mrp);
+          }
+        }
 
           let totalPurchasesQty = 0;
           let currentPrevClosing = baseOpening;
@@ -357,12 +362,12 @@ export default function DailyStock() {
           let rangeSalesAmt = 0;
           let rangeSalesMrpAmt = 0;
 
-          // Day by day timeline math to calculate absolute FIFO over any custom range
           brandLogs.forEach(log => {
             const opBal = parseInt(log.opening_balance) || 0;
             const clBal = log.closing_balance !== null ? parseInt(log.closing_balance) : null;
-            const dayUnitPrice = log.unit_price ? parseFloat(log.unit_price) : latestUnitPrice;
-            const dayUnitMrp = log.unit_mrp ? parseFloat(log.unit_mrp) : latestUnitMrp;
+            
+            const dayUnitPrice = (log.unit_price && parseFloat(log.unit_price) > 0) ? parseFloat(log.unit_price) : latestUnitPrice;
+const dayUnitMrp = (log.unit_mrp && parseFloat(log.unit_mrp) > 0) ? parseFloat(log.unit_mrp) : latestUnitMrp;
 
             const dailyPurchase = Math.max(0, opBal - currentPrevClosing);
             totalPurchasesQty += dailyPurchase;
@@ -516,8 +521,8 @@ export default function DailyStock() {
                 user_id: user.id, date: dateStr, brand_id: row.brand_id,
                 opening_balance: parseInt(row.opening_balance) || 0,
                 closing_balance: parseInt(row.closing_balance) || 0,
-                unit_price: parseFloat(row.purchase_price) || 0,
-                unit_mrp: parseFloat(row.purchase_mrp) || 0
+                unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
+                unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
              }));
              return supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
           });
@@ -563,10 +568,23 @@ export default function DailyStock() {
       const updatedRows = prevRows.map(row => {
         if (row.brand_id === brandId) {
           let updatedRow = { ...row, [field]: numericValue };
+          
+          if (field === 'opening_balance') {
+            const newOpVal = numericValue === '' ? 0 : numericValue;
+            // SMART SYNC: conceptualizing modifications beyond base_opening as a purchase to ensure proper costing tiering
+            if (newOpVal >= updatedRow.base_opening) {
+              updatedRow.purchase_qty = newOpVal - updatedRow.base_opening;
+            } else {
+              updatedRow.base_opening = newOpVal;
+              updatedRow.purchase_qty = 0;
+            }
+          }
+          
           if (field === 'purchase_qty') {
             const currentPurchase = value === '' ? 0 : parseInt(value) || 0;
             updatedRow.opening_balance = updatedRow.base_opening + currentPurchase;
           }
+          
           updatedRow = recalculateRow(updatedRow);
           return updatedRow;
         }
@@ -646,8 +664,8 @@ export default function DailyStock() {
       user_id: user.id, date: endStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
-      unit_price: parseFloat(row.purchase_price) || 0,
-      unit_mrp: parseFloat(row.purchase_mrp) || 0
+      unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
+      unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
     }));
 
     const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
