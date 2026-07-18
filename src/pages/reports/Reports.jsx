@@ -69,7 +69,6 @@ const isFullCalendarMonth = (start, end) => {
 
 const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Literal Opening Stock MRP Total Calculation
 const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
   const firstDayRecords = allStock?.filter(s => {
     const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
@@ -114,7 +113,6 @@ const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
   return 0;
 };
 
-// FIFO Stock Valuation Helper to calculate exact true batch stock MRP totals
 const getFifoStockValuationMrp = (brands, allStock, targetDateStr) => {
   const brandBatches = {};
   const prevClosing = {};
@@ -187,7 +185,6 @@ export default function Reports() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const prevDatesRef = useRef({ start: null, end: null });
 
-  // 1-सेकंड पोलिंग सिंक हार्टबीट
   useEffect(() => {
     const interval = setInterval(() => {
       setRefreshTrigger(prev => prev + 1);
@@ -195,7 +192,6 @@ export default function Reports() {
     return () => clearInterval(interval);
   }, []);
 
-  // एकीकृत साझा कीज़ (Unified Session Storage)
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('global_startDate');
     return saved ? new Date(saved) : new Date();
@@ -220,12 +216,7 @@ export default function Reports() {
     box1: 0, box2: 0, box3: 0, box4: 0, box5: 0, box6: 0, box7: 0, currExp: 0, currNetProfit: 0, prevNetProfit: 0, cumulativeProfit: 0
   });
 
-  const [prevMonthSales, setPrevMonthSales] = useState(0);
-  const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
-
-  const [prevMonthOpening, setPrevMonthOpening] = useState(0);
-  const [prevMonthClosing, setPrevMonthClosing] = useState(0);
-  const [prevMonthPurchases, setPrevMonthPurchases] = useState(0);
+  const [prevMonthNetProfit, setPrevMonthNetProfit] = useState(0);
 
   const selectedMonth = startDate;
 
@@ -248,7 +239,6 @@ export default function Reports() {
 
   const showMagicChart = isFullCalendarMonth(startDate, endDate);
 
-  // REAL-TIME SYNC LISTENER
   useEffect(() => {
     const channel = supabase
       .channel('reports-realtime')
@@ -282,9 +272,7 @@ export default function Reports() {
       const startObj = getLocalDateObj(startDate);
       const endObj = getLocalDateObj(endDate);
 
-      const prevStartObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 1);
       const prevEndObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
-      const prevStartStr = formatDateForDB(prevStartObj);
       const prevEndStr = formatDateForDB(prevEndObj);
 
       const firstDayStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
@@ -293,8 +281,8 @@ export default function Reports() {
         const { data: brandsData } = await supabase.from('brands').select('*');
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
-        const expQueryStart = showMagicChart ? prevStartStr : startStr;
-        const stockQueryStart = showMagicChart ? prevStartStr : startStr;
+        const expQueryLimit = endStr + 'T23:59:59';
+        const stockQueryLimit = endStr + 'T23:59:59';
 
         const [ 
           { data: expData }, 
@@ -303,11 +291,11 @@ export default function Reports() {
           { data: allTraderTxData }, 
           { data: traderRangeTxData } 
         ] = await Promise.all([
-          supabase.from('expenses').select('*').eq('user_id', user.id).gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date'),
+          supabase.from('expenses').select('*').eq('user_id', user.id).lte('date', expQueryLimit).order('date'),
           supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date'),
-          supabase.from('daily_stock').select('*').eq('user_id', user.id).gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true }),
+          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', stockQueryLimit).order('date', { ascending: true }),
           supabase.from('trader_transactions').select('*, traders(trader_name)').eq('user_id', user.id).lte('date', endStr + 'T23:59:59').order('date').order('created_at'),
-          supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
+          supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', endStr)
         ]);
 
         if (!isMounted) return; 
@@ -360,14 +348,12 @@ export default function Reports() {
         });
         setSalesList(sortedSalesList);
 
-        // TRUE LITERAL MRP STOCK VALUATIONS (DIRECT FETCH & ACCURATE FIFO INTEGRATION)
         const prevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
         const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
         
         const openingMrpVal = getTrueOpeningStockMrp(brandsData, stockData, firstDayStr, prevMonthLastDayStr);
         const closingMrpVal = getFifoStockValuationMrp(brandsData, stockData, endStr);
 
-        // Standard Sale price multiplications for general stats page
         let openingSaleVal = 0;
         let closingSaleVal = 0;
         const stockByBrand = {};
@@ -395,7 +381,9 @@ export default function Reports() {
 
         let rangePurchasesSale = 0;
         traderRangeTxData?.forEach(tx => {
-          rangePurchasesSale += parseFloat(tx.purchase_amount || 0);
+          if (tx.date >= startStr) {
+            rangePurchasesSale += parseFloat(tx.purchase_amount || 0);
+          }
         });
 
         let rangePurchasesMrp = 0;
@@ -411,8 +399,10 @@ export default function Reports() {
 
         const stockByDateStr = {};
         stockData?.forEach(s => {
-          if (!stockByDateStr[s.date]) stockByDateStr[s.date] = {};
-          stockByDateStr[s.date][s.brand_id] = s;
+          if (s.date >= startStr) {
+            if (!stockByDateStr[s.date]) stockByDateStr[s.date] = {};
+            stockByDateStr[s.date][s.brand_id] = s;
+          }
         });
 
         const rangeDates = getDatesInRange(startObj, endObj);
@@ -456,137 +446,162 @@ export default function Reports() {
           purchasesMrp: rangePurchasesMrp
         });
 
-        // ----------------------------------------------------
-        // MAGIC CHART (SECTION 6) AUTO-FETCH ENGINE
-        // ----------------------------------------------------
         if (showMagicChart && user) {
-          const [ { data: traderTxData } ] = await Promise.all([
-            supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', firstDayStr).lte('date', endStr)
-          ]);
+          const stockByDateStrAll = {};
+          stockData?.forEach(s => {
+            const dStr = s.date ? s.date.split('T')[0] : '';
+            if (dStr) {
+              if (!stockByDateStrAll[dStr]) stockByDateStrAll[dStr] = [];
+              stockByDateStrAll[dStr].push(s);
+            }
+          });
+          const sortedDates = Object.keys(stockByDateStrAll).sort();
 
-          let currExpVal = 0;
-          let prevExpVal = 0;
-          expData?.forEach(e => {
-            const eDate = getLocalDateObj(e.date);
-            if (eDate) {
-              if (eDate >= startObj && eDate <= endObj) currExpVal += parseFloat(e.amount || 0);
-              if (eDate >= prevStartObj && eDate <= prevEndObj) prevExpVal += parseFloat(e.amount || 0);
+          const monthlyProfits = {};
+
+          const brandStates = {}; 
+          const brandBatches = {};
+          brandsData?.forEach(b => {
+            brandStates[b.id] = { closing: 0, price: parseFloat(b.selling_price) || 0 };
+            brandBatches[b.id] = [];
+          });
+
+          sortedDates.forEach((dateStr, dIdx) => {
+            const yearMonthKey = dateStr.substring(0, 7); 
+            if (!monthlyProfits[yearMonthKey]) {
+              monthlyProfits[yearMonthKey] = { sales: 0, purchases: 0, expenses: 0, openingMrp: 0, closingMrp: 0 };
+            }
+
+            const dayRecords = stockByDateStrAll[dateStr];
+            dayRecords.forEach(row => {
+              const brandId = row.brand_id;
+              const brand = brandMap[brandId];
+              if (!brand) return;
+
+              const state = brandStates[brandId];
+              const baseOpening = state.closing;
+              const carriedPrice = state.price;
+
+              const opening = parseInt(row.opening_balance || 0);
+              const purchaseQty = Math.max(0, opening - baseOpening);
+              const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
+              const pMrp = row.unit_mrp ? parseFloat(row.unit_mrp) : (parseFloat(brand.mrp_price) || 0);
+
+              if (purchaseQty > 0) {
+                brandBatches[brandId].push({ qty: purchaseQty, price: pPrice, mrp: pMrp });
+              }
+
+              const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : null;
+              if (closing !== null) {
+                const sQty = Math.max(0, opening - closing);
+                let rem = sQty;
+                let sAmt = 0;
+
+                const qtyOld = Math.min(rem, baseOpening);
+                sAmt += qtyOld * carriedPrice;
+                rem -= qtyOld;
+
+                if (rem > 0 && purchaseQty > 0) {
+                  sAmt += Math.min(rem, purchaseQty) * pPrice;
+                }
+
+                let sellRem = sQty;
+                while (sellRem > 0 && brandBatches[brandId].length > 0) {
+                  if (brandBatches[brandId][0].qty <= sellRem) {
+                    sellRem -= brandBatches[brandId][0].qty;
+                    brandBatches[brandId].shift();
+                  } else {
+                    brandBatches[brandId][0].qty -= sellRem;
+                    sellRem = 0;
+                  }
+                }
+
+                monthlyProfits[yearMonthKey].sales += sAmt;
+                brandStates[brandId] = { closing: closing, price: pPrice };
+              } else {
+                brandStates[brandId] = { closing: opening, price: pPrice };
+              }
+            });
+
+            const nextDateStr = sortedDates[dIdx + 1];
+            const isLastDayOfM = !nextDateStr || nextDateStr.substring(0, 7) !== yearMonthKey;
+            if (isLastDayOfM) {
+              let totalMrpValuation = 0;
+              brandsData?.forEach(b => {
+                const queue = brandBatches[b.id] || [];
+                queue.forEach(batch => {
+                  totalMrpValuation += batch.qty * batch.mrp;
+                });
+              });
+              monthlyProfits[yearMonthKey].closingMrp = totalMrpValuation;
             }
           });
 
-          // ----------------------------------------------------
-          // 2. FIFO SALES SIMULATION (DEFINED BEFORE INVOCATION)
-          // ----------------------------------------------------
-          const calculateFifoSales = async (startObjRange, endObjRange) => {
-            let totalSales = 0;
-            const prevClosings = {};
-            const startRangeStr = formatDateForDB(startObjRange);
-            const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startRangeStr).order('date', { ascending: false });
-            beforeStock?.forEach(s => {
-              if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
-                prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
-              }
-            });
+          expData?.forEach(e => {
+            const eDateStr = e.date ? e.date.split('T')[0] : '';
+            const yearMonthKey = eDateStr.substring(0, 7);
+            if (monthlyProfits[yearMonthKey]) {
+              monthlyProfits[yearMonthKey].expenses += parseFloat(e.amount || 0);
+            }
+          });
 
-            const stockByDate = {};
-            stockData?.forEach(s => {
-              const sDate = getLocalDateObj(s.date);
-              if (sDate && sDate >= startObjRange && sDate <= endObjRange) {
-                const dateKey = formatDateForDB(sDate);
-                if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
-                stockByDate[dateKey].push(s);
-              }
-            });
+          traderRangeTxData?.forEach(tx => {
+            const txDateStr = tx.date ? tx.date.split('T')[0] : '';
+            const yearMonthKey = txDateStr.substring(0, 7);
+            if (monthlyProfits[yearMonthKey]) {
+              monthlyProfits[yearMonthKey].purchases += parseFloat(tx.purchase_amount || 0);
+            }
+          });
 
-            const sortedDates = Object.keys(stockByDate).sort();
-            let runningStates = {};
-            brandsData?.forEach(b => {
-              const pc = prevClosings[b.id];
-              runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
-            });
-
-            sortedDates.forEach(date => {
-              stockByDate[date].forEach(row => {
-                const brand = brandMap[row.brand_id];
-                if (!brand) return;
-
-                const state = runningStates[brand.id];
-                const baseOpening = state.closing;
-                const carriedPrice = state.price;
-
-                const opening = parseInt(row.opening_balance || 0);
-                const purchaseQty = Math.max(0, opening - baseOpening);
-                const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
-                const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
-
-                if (closing !== '') {
-                  const sQty = Math.max(0, opening - closing);
-                  let rem = sQty;
-                  let sAmt = 0;
-
-                  const qtyOld = Math.min(rem, baseOpening);
-                  sAmt += qtyOld * carriedPrice;
-                  rem -= qtyOld;
-
-                  if (rem > 0 && purchaseQty > 0) {
-                    sAmt += Math.min(rem, purchaseQty) * pPrice;
-                  }
-                  totalSales += sAmt;
-                  runningStates[brand.id] = { closing: closing, price: pPrice };
-                }
+          const sortedMonths = Object.keys(monthlyProfits).sort();
+          sortedMonths.forEach((mKey, mIdx) => {
+            if (mIdx === 0) {
+              const firstDateStr = sortedDates.find(d => d.startsWith(mKey));
+              const firstDayRecords = stockByDateStrAll[firstDateStr] || [];
+              let totalOpMrp = 0;
+              firstDayRecords.forEach(s => {
+                const brand = brandMap[s.brand_id];
+                const opQty = parseInt(s.opening_balance) || 0;
+                const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+                totalOpMrp += opQty * mrp;
               });
-            });
-            return totalSales;
-          };
-
-          const currSales = await calculateFifoSales(startObj, endObj);
-          const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
-
-          let computedTotalPurchasesTraders = 0;
-          traderTxData?.forEach(tx => {
-            computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
+              monthlyProfits[mKey].openingMrp = totalOpMrp;
+            } else {
+              const prevMKey = sortedMonths[mIdx - 1];
+              monthlyProfits[mKey].openingMrp = monthlyProfits[prevMKey].closingMrp;
+            }
           });
 
-          // Accurate Literal MRP valuations computed live (DIRECT FETCH & ACCURATE FIFO INTEGRATION)
-          const computedOpeningStockMrp = getTrueOpeningStockMrp(brandsData, stockData, firstDayStr, prevEndStr);
-          const computedClosingStockMrp = getFifoStockValuationMrp(brandsData, stockData, endStr);
-
-          const prevFirstDayStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
-          const prevPrevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 0);
-          const prevPrevMonthLastDayStr = formatDateForDB(prevPrevMonthLastDayObj);
-          
-          const computedPrevOpeningMrp = getTrueOpeningStockMrp(brandsData, stockData, prevFirstDayStr, prevPrevMonthLastDayStr);
-          const computedPrevClosingMrp = computedOpeningStockMrp; // प्रिफिक्स सिंक
-
-          const { data: prevTraderTxData } = await supabase
-            .from('trader_transactions')
-            .select('purchase_amount')
-            .eq('user_id', user.id)
-            .gte('date', formatDateForDB(prevStartObj))
-            .lte('date', formatDateForDB(prevEndObj));
-
-          let computedPrevTotalPurchasesTraders = 0;
-          prevTraderTxData?.forEach(tx => {
-            computedPrevTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
+          sortedMonths.forEach(mKey => {
+            const mData = monthlyProfits[mKey];
+            const box3 = mData.sales + mData.closingMrp;
+            const box6 = mData.openingMrp + mData.purchases;
+            const box7 = box3 - box6;
+            mData.netProfit = box7 - mData.expenses;
           });
 
-          setPrevMonthSales(prevSales);
-          setPrevMonthExpenses(prevExpVal);
+          const currentMonthKey = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}`;
+          const currMonthData = monthlyProfits[currentMonthKey] || { sales: 0, closingMrp: 0, openingMrp: 0, purchases: 0, expenses: 0 };
 
-          setPrevMonthOpening(computedPrevOpeningMrp);
-          setPrevMonthClosing(computedPrevClosingMrp);
-          setPrevMonthPurchases(computedPrevTotalPurchasesTraders);
+          let computedPrevNetProfit = 0;
+          sortedMonths.forEach(mKey => {
+            if (mKey < currentMonthKey) {
+              computedPrevNetProfit += monthlyProfits[mKey]?.netProfit || 0;
+            }
+          });
 
-          if (!isMounted) return;
+          setPrevMonthNetProfit(computedPrevNetProfit);
 
-          setMagicChartData(prev => ({
-            ...prev,
-            box1: currSales,
-            box2: computedClosingStockMrp,
-            box4: computedOpeningStockMrp,
-            box5: computedTotalPurchasesTraders,
-            currExp: currExpVal
-          }));
+          setMagicChartData({
+            box1: currMonthData.sales,
+            box2: currMonthData.closingMrp,
+            box3: currMonthData.sales + currMonthData.closingMrp,
+            box4: currMonthData.openingMrp,
+            box5: currMonthData.purchases,
+            box6: currMonthData.openingMrp + currMonthData.purchases,
+            box7: (currMonthData.sales + currMonthData.closingMrp) - (currMonthData.openingMrp + currMonthData.purchases),
+            currExp: currMonthData.expenses
+          });
         }
 
       } catch (error) { console.error("Error generating report:", error); }
@@ -646,17 +661,7 @@ export default function Reports() {
   const ledgerBox7 = ledgerBox3 - ledgerBox6; 
   const ledgerNetProfit = ledgerBox7 - magicChartData.currExp; 
 
-  const prevBox2Val = prevMonthClosing;
-  const prevBox3Val = prevMonthSales + prevBox2Val;
-
-  const prevBox4Val = prevMonthOpening;
-  const prevBox5Val = prevMonthPurchases;
-  const prevBox6Val = prevBox4Val + prevBox5Val;
-
-  const prevBox7Val = prevBox3Val - prevBox6Val;
-  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; 
-
-  const cumulativeProfitVal = prevNetProfitVal + ledgerNetProfit; 
+  const cumulativeProfitVal = prevMonthNetProfit + ledgerNetProfit; 
 
   return (
     <div className="space-y-6 transition-colors duration-300">
@@ -1292,7 +1297,7 @@ export default function Reports() {
                       <tbody>
                         <tr className="h-16 print:h-auto">
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg print:text-xs">
-                            {formatRs(prevNetProfitVal)}
+                            {formatRs(prevMonthNetProfit)}
                           </td>
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-600 dark:text-slate-400 text-lg print:text-xs">
                             {formatRs(ledgerNetProfit)}
