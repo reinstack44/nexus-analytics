@@ -31,6 +31,57 @@ const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
 ));
 FormDateInput.displayName = "FormDateInput";
 
+const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// --- FIFO BATCH CALCULATION ENGINE ---
+const recalculateRow = (row) => {
+  let sQty = 0; let sAmt = 0; let sMrpAmt = 0;
+  let cAmt = 0; let cMrpAmt = 0;
+
+  let queue = Array.isArray(row.starting_batches) ? row.starting_batches.map(b => ({...b})) : [];
+  
+  if (parseInt(row.purchase_qty) > 0) {
+    queue.push({
+      qty: parseInt(row.purchase_qty),
+      price: parseFloat(row.purchase_price) || 0,
+      mrp: parseFloat(row.purchase_mrp) || 0
+    });
+  }
+
+  if (row.closing_balance !== '') {
+    sQty = Math.max(0, parseInt(row.opening_balance) - parseInt(row.closing_balance));
+    let salesRemaining = sQty;
+
+    while (salesRemaining > 0 && queue.length > 0) {
+      if (queue[0].qty <= salesRemaining) {
+        sAmt += queue[0].qty * queue[0].price;
+        sMrpAmt += queue[0].qty * queue[0].mrp;
+        salesRemaining -= queue[0].qty;
+        queue.shift(); 
+      } else {
+        sAmt += salesRemaining * queue[0].price;
+        sMrpAmt += salesRemaining * queue[0].mrp;
+        queue[0].qty -= salesRemaining; 
+        salesRemaining = 0;
+      }
+    }
+  }
+
+  queue.forEach(b => {
+    cAmt += b.qty * b.price;
+    cMrpAmt += b.qty * b.mrp;
+  });
+
+  return { 
+    ...row, 
+    sales_qty: sQty, 
+    sales_amount: sAmt, 
+    sales_mrp_amount: sMrpAmt,
+    closing_amount: cAmt,
+    closing_mrp_amount: cMrpAmt
+  };
+};
+
 export default function DailyStock() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -74,11 +125,17 @@ export default function DailyStock() {
     setIsSaving(false);
   };
 
-  // --- PIPELINE LOCK STATE ---
   const [pipelineWarning, setPipelineWarning] = useState(null);
   const [customRangeMode, setCustomRangeMode] = useState(false);
 
-  // --- CLOUD STATES (Holidays & Filled Dates) ---
+  // 1-सेकंड का पोलिंग सिंक इंटरवल
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRefreshTrigger(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [markedHolidays, setMarkedHolidays] = useState([]);
   const [filledDates, setFilledDates] = useState([]);
 
@@ -142,7 +199,6 @@ export default function DailyStock() {
   
   const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
 
-  // --- RECONCILE DYNAMIC RANGE FOR SPECIFIC DATE ---
   const findFilledRangeOfDate = useCallback((date) => {
     if (!date || filledDates.length === 0) return null;
     const dateStr = formatDateForDB(date);
@@ -186,7 +242,6 @@ export default function DailyStock() {
     return null;
   }, [filledDates, firstEverDate, markedHolidays]);
 
-  // --- AUTO EXPAND EFFECT ON LOAD/UPDATE ---
   useEffect(() => {
     if (customRangeMode) return; 
     if (filledDates.length > 0 && startDate) {
@@ -205,7 +260,6 @@ export default function DailyStock() {
     }
   }, [filledDates, firstEverDate, startDate, endDate, findFilledRangeOfDate, customRangeMode]);
 
-  // --- STRICT DATE SELECTION LOGIC ---
   const handleStartDateChange = (date) => {
     const dateStr = formatDateForDB(date);
     if (markedHolidays.includes(dateStr)) {
@@ -273,21 +327,30 @@ export default function DailyStock() {
 
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
+  const prevDatesRef = useRef({ start: null, end: null });
+  const hasLoadedRef = useRef(false);
 
-  // --- FETCH MAIN DAILY STOCK & ENFORCE PIPELINE ---
+    // --- FETCH MAIN DAILY STOCK & ENFORCE PIPELINE ---
+
   useEffect(() => {
     let isMounted = true;
 
     const fetchDailyData = async () => {
       await Promise.resolve(); 
       if (!isMounted) return;
-      
-      setLoading(true);
-      setSaveMessage(null);
-      setPipelineWarning(null);
 
       const startStr = formatDateForDB(startDate);
       const endStr = endDate ? formatDateForDB(endDate) : startStr;
+
+      // केवल तभी लोडिंग दिखाएं जब तारीख बदली हो या डेटा पहली बार आ रहा हो
+      const datesChanged = prevDatesRef.current.start !== startStr || prevDatesRef.current.end !== endStr;
+      if (datesChanged || !hasLoadedRef.current) {
+        setLoading(true);
+      }
+      prevDatesRef.current = { start: startStr, end: endStr };
+      
+      setSaveMessage(null);
+      setPipelineWarning(null);
 
       let targetPrevDate = new Date(startDate);
       targetPrevDate.setDate(targetPrevDate.getDate() - 1);
@@ -311,21 +374,16 @@ export default function DailyStock() {
         }
       }
 
-      // Look-back algorithm: ऐतिहासिक रूप से पिछली सबसे हालिया गैर-शून्य सक्रिय बैच कीमतें फ़ेच करना (User ID Filter Added)
       const [
         { data: brandsData },
-        { data: rangeStockData },
-        { data: prevStockData },
+        { data: allHistoricalStock },
         { data: expData },
-        { data: collData },
-        { data: historicalStockData }
+        { data: collData }
       ] = await Promise.all([
         supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
-        supabase.from('daily_stock').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr).order('date', { ascending: true }),
-        supabase.from('daily_stock').select('*').eq('user_id', user.id).eq('date', prevDateStr),
+        supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }),
         supabase.from('expenses').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
-        supabase.from('owner_withdrawals').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
-        supabase.from('daily_stock').select('brand_id, date, unit_price, unit_mrp').eq('user_id', user.id).lt('date', startStr).order('date', { ascending: false })
+        supabase.from('owner_withdrawals').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
       ]);
 
       if (!isMounted) return;
@@ -333,111 +391,80 @@ export default function DailyStock() {
       let tExp = 0; if (expData) expData.forEach(e => tExp += parseFloat(e.amount));
       let tColl = 0; if (collData) collData.forEach(c => tColl += parseFloat(c.amount));
 
-      // इन-मेमोरी "लास्ट एक्टिव बैच प्राइस" मैप बनाना (Independent Backwards Scan for Price & MRP)
-      const lastActivePrices = {};
-      historicalStockData?.forEach(record => {
-        if (!lastActivePrices[record.brand_id]) {
-          lastActivePrices[record.brand_id] = { unit_price: null, unit_mrp: null };
-        }
-        
-        const uPrice = parseFloat(record.unit_price) || 0;
-        const uMrp = parseFloat(record.unit_mrp) || 0;
-        
-        // MRP aur Price dono tab tak pichhe scan honge jab tak > 0 value nahi milti
-        if (uPrice > 0 && lastActivePrices[record.brand_id].unit_price === null) {
-          lastActivePrices[record.brand_id].unit_price = uPrice;
-        }
-        if (uMrp > 0 && lastActivePrices[record.brand_id].unit_mrp === null) {
-          lastActivePrices[record.brand_id].unit_mrp = uMrp;
-        }
-      });
-
       if (brandsData) {
-        const prevStockMap = {};
-        prevStockData?.forEach(s => prevStockMap[s.brand_id] = s);
+        const brandBatches = {};
+        const prevClosing = {};
+        
+        allHistoricalStock?.forEach(s => {
+            if (s.date < startStr) {
+                let queue = brandBatches[s.brand_id] || [];
+                const brand = brandsData.find(b => b.id === s.brand_id);
+                if (!brand) return;
 
-        const stockByBrandAndDate = {};
-        rangeStockData?.forEach(s => {
-          if (!stockByBrandAndDate[s.brand_id]) stockByBrandAndDate[s.brand_id] = [];
-          stockByBrandAndDate[s.brand_id].push(s);
+                const opBal = parseInt(s.opening_balance) || 0;
+                const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
+                const pPrice = parseFloat(s.unit_price) || parseFloat(brand.selling_price) || 0;
+                const pMrp = parseFloat(s.unit_mrp) || parseFloat(brand.mrp_price) || 0;
+
+                if (pQty > 0) {
+                    queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
+                }
+
+                const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+                
+                if (clBal !== null) {
+                    let sales = Math.max(0, opBal - clBal);
+                    while (sales > 0 && queue.length > 0) {
+                        if (queue[0].qty <= sales) {
+                            sales -= queue[0].qty;
+                            queue.shift();
+                        } else {
+                            queue[0].qty -= sales;
+                            sales = 0;
+                        }
+                    }
+                    prevClosing[s.brand_id] = clBal;
+                } else {
+                    prevClosing[s.brand_id] = opBal;
+                }
+                brandBatches[s.brand_id] = queue;
+            }
         });
 
-        let totalQty = 0;
-        let totalRev = 0;
-        let totalMrpRev = 0;
-
         const rows = brandsData.map(brand => {
-          const brandLogs = stockByBrandAndDate[brand.id] || [];
-          const prevStock = prevStockMap[brand.id];
-
-          let baseOpening = 0;
-          if (prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
-            baseOpening = prevStock.closing_balance;
-          }
-
-          // डिफॉल्ट मास्टर रेट
-          let carriedPrice = parseFloat(brand.selling_price);
-          let carriedMrp = parseFloat(brand.mrp_price || 0);
-
-          // ऐतिहासिक रीयल-टाइम एक्टिव परचेज़ मूल्य ओवरराइड
-          const lastActive = lastActivePrices[brand.id];
-          if (lastActive) {
-            if (lastActive.unit_price !== null && lastActive.unit_price > 0) carriedPrice = lastActive.unit_price;
-            if (lastActive.unit_mrp !== null && lastActive.unit_mrp > 0) carriedMrp = lastActive.unit_mrp;
-          }
-
-          let totalPurchasesQty = 0;
-          let currentPrevClosing = baseOpening;
+          const starting_batches = brandBatches[brand.id] || [];
+          const baseOpening = starting_batches.reduce((acc, b) => acc + b.qty, 0);
           
+          let carriedPrice = starting_batches.length > 0 ? starting_batches[0].price : parseFloat(brand.selling_price);
+          let carriedMrp = starting_batches.length > 0 ? starting_batches[0].mrp : parseFloat(brand.mrp_price || 0);
+
+          const brandRangeLogs = allHistoricalStock?.filter(s => s.brand_id === brand.id && s.date >= startStr && s.date <= endStr) || [];
+          
+          let totalPurchasesQty = 0;
           let latestUnitPrice = carriedPrice;
           let latestUnitMrp = carriedMrp;
-
-          let rangeSalesQty = 0;
-          let rangeSalesAmt = 0;
-          let rangeSalesMrpAmt = 0;
-
-          brandLogs.forEach(log => {
-            const opBal = parseInt(log.opening_balance) || 0;
-            const clBal = log.closing_balance !== null ? parseInt(log.closing_balance) : null;
-            const dayUnitPrice = (log.unit_price !== undefined && log.unit_price !== null && parseFloat(log.unit_price) !== 0) ? parseFloat(log.unit_price) : latestUnitPrice;
-            const dayUnitMrp = (log.unit_mrp !== undefined && log.unit_mrp !== null && parseFloat(log.unit_mrp) !== 0) ? parseFloat(log.unit_mrp) : latestUnitMrp;
-
-            const dailyPurchase = Math.max(0, opBal - currentPrevClosing);
-            totalPurchasesQty += dailyPurchase;
-
-            if (clBal !== null) {
-              let dailySaleQty = Math.max(0, opBal - clBal);
-              rangeSalesQty += dailySaleQty;
-
-              let rem = dailySaleQty;
-              const fromOld = Math.min(rem, currentPrevClosing);
-              rangeSalesAmt += fromOld * latestUnitPrice;
-              rangeSalesMrpAmt += fromOld * latestUnitMrp;
-              rem -= fromOld;
-
-              if (rem > 0 && dailyPurchase > 0) {
-                const fromNew = Math.min(rem, dailyPurchase);
-                rangeSalesAmt += fromNew * dayUnitPrice;
-                rangeSalesMrpAmt += fromNew * dayUnitMrp;
-              }
-              currentPrevClosing = clBal;
-            } else {
-              currentPrevClosing = opBal;
-            }
-
-            latestUnitPrice = dayUnitPrice;
-            latestUnitMrp = dayUnitMrp;
+          let currentPrevClosing = baseOpening;
+          
+          brandRangeLogs.forEach(log => {
+             const opBal = parseInt(log.opening_balance) || 0;
+             const pQty = Math.max(0, opBal - currentPrevClosing);
+             totalPurchasesQty += pQty;
+             
+             if (log.unit_price) latestUnitPrice = parseFloat(log.unit_price);
+             if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
+             
+             if (log.closing_balance !== null) {
+                 currentPrevClosing = parseInt(log.closing_balance);
+             } else {
+                 currentPrevClosing = opBal;
+             }
           });
 
-          const finalClosing = brandLogs.length > 0 && brandLogs[brandLogs.length - 1].closing_balance !== null 
-            ? String(brandLogs[brandLogs.length - 1].closing_balance) 
+          const finalClosing = brandRangeLogs.length > 0 && brandRangeLogs[brandRangeLogs.length - 1].closing_balance !== null 
+            ? String(brandRangeLogs[brandRangeLogs.length - 1].closing_balance) 
             : '';
 
-          totalQty += rangeSalesQty;
-          totalRev += rangeSalesAmt;
-          totalMrpRev += rangeSalesMrpAmt;
-
-          return { 
+          let initialRow = { 
             brand_id: brand.id, 
             brand_name: brand.brand_name, 
             bottle_size: brand.bottle_size, 
@@ -450,15 +477,25 @@ export default function DailyStock() {
             base_opening: baseOpening, 
             purchase_qty: totalPurchasesQty, 
             opening_balance: baseOpening + totalPurchasesQty, 
-            closing_balance: finalClosing, 
-            sales_qty: rangeSalesQty, 
-            sales_amount: rangeSalesAmt,
-            sales_mrp_amount: rangeSalesMrpAmt
+            closing_balance: finalClosing,
+            starting_batches: starting_batches
           };
+
+          return recalculateRow(initialRow);
+        });
+
+        let tQty = 0; let tRev = 0; let tMrpRev = 0;
+        rows.forEach(r => { 
+          if (r.closing_balance !== '') {
+            tQty += r.sales_qty; 
+            tRev += r.sales_amount; 
+            tMrpRev += r.sales_mrp_amount;
+          }
         });
 
         setStockRows(rows);
-        setDailySummary({ totalSalesQty: totalQty, totalRevenue: totalRev, totalExpenses: tExp, totalCollections: tColl, totalMrpRevenue: totalMrpRev });
+        hasLoadedRef.current = true;
+        setDailySummary({ totalSalesQty: tQty, totalRevenue: tRev, totalExpenses: tExp, totalCollections: tColl, totalMrpRevenue: tMrpRev });
       }
       setLoading(false);
     };
@@ -497,28 +534,6 @@ export default function DailyStock() {
     return () => { isMounted = false; };
   }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date, user.id]);
 
-  // --- FIFO CALCULATION ENGINE ---
-  const recalculateRow = (row) => {
-    let sQty = 0; let sAmt = 0; let sMrpAmt = 0;
-    if (row.closing_balance !== '') {
-      sQty = Math.max(0, parseInt(row.opening_balance) - parseInt(row.closing_balance));
-      let remainingSales = sQty;
-      
-      const qtyFromOld = Math.min(remainingSales, parseInt(row.base_opening));
-      sAmt += qtyFromOld * parseFloat(row.carried_price); 
-      sMrpAmt += qtyFromOld * parseFloat(row.carried_mrp);
-      remainingSales -= qtyFromOld;
-
-      if (remainingSales > 0 && parseInt(row.purchase_qty) > 0) {
-        const qtyFromNew = Math.min(remainingSales, parseInt(row.purchase_qty));
-        sAmt += qtyFromNew * parseFloat(row.purchase_price);
-        sMrpAmt += qtyFromNew * parseFloat(row.purchase_mrp);
-      }
-    }
-    return { ...row, sales_qty: sQty, sales_amount: sAmt, sales_mrp_amount: sMrpAmt };
-  };
-
-  // --- HANDLERS ---
   const handleOpenBankDeposit = () => {
     setIsBankDepositOpen(true);
     setPopupDate(endDate || startDate);
@@ -680,7 +695,6 @@ export default function DailyStock() {
     setSaveMessage(null);
     const endStr = formatDateForDB(endDate || startDate);
 
-    // Absolute Latest Pricing Logic (Strict Carry Forward)
     const upsertData = stockRows.map(row => ({
       user_id: user.id, date: endStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
@@ -693,7 +707,6 @@ export default function DailyStock() {
     if (error) {
       setAlertModal({ isOpen: true, title: "Database Error", message: "Failed to save stock: " + error.message });
     } else {
-      // Live Sync Latest Prices back to Brand Master Catalog & Price History
       try {
         const brandUpdates = stockRows.map(async (row) => {
           const activePrice = parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0;
@@ -702,13 +715,11 @@ export default function DailyStock() {
           if ((activePrice > 0 && activePrice !== parseFloat(row.selling_price)) || 
               (activeMrp > 0 && activeMrp !== parseFloat(row.mrp_price))) {
             
-            // Update master brands table
             await supabase
               .from('brands')
               .update({ selling_price: activePrice, mrp_price: activeMrp })
               .eq('id', row.brand_id);
 
-            // Add log entry to brand price history
             if (activePrice !== parseFloat(row.selling_price)) {
               await supabase.from('brand_price_history').insert([{
                 brand_id: row.brand_id,
@@ -732,7 +743,6 @@ export default function DailyStock() {
     setIsSaving(false);
   };
 
-  // --- EXPENSE/COLLECTION LOGIC ---
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -798,58 +808,26 @@ export default function DailyStock() {
   const tableTotalOpeningQty = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
   const tableTotalClosingQty = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
 
-  // Exact valuation (Selling Price)
   const tableTotalOpeningAmount = stockRows.reduce((acc, row) => {
-    const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_price || 0);
+    const baseVal = row.starting_batches ? row.starting_batches.reduce((sum, b) => sum + (b.qty * b.price), 0) : 0;
     const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0);
     return acc + baseVal + purchaseVal;
   }, 0);
 
   const tableTotalClosingAmount = stockRows.reduce((acc, row) => {
     if (row.closing_balance === '' || row.closing_balance === null) return acc;
-    const closingQty = parseInt(row.closing_balance);
-    const baseQty = parseInt(row.base_opening) || 0;
-    const purchaseQty = parseInt(row.purchase_qty) || 0;
-    
-    let amt = 0;
-    let remClosing = closingQty;
-
-    const fromNew = Math.min(remClosing, purchaseQty);
-    amt += fromNew * parseFloat(row.purchase_price || 0);
-    remClosing -= fromNew;
-
-    if (remClosing > 0) {
-      amt += Math.min(remClosing, baseQty) * parseFloat(row.carried_price || 0);
-    }
-    
-    return acc + amt;
+    return acc + (row.closing_amount || 0);
   }, 0);
 
-  // Exact valuation (MRP Price)
   const tableTotalOpeningMrpAmount = stockRows.reduce((acc, row) => {
-    const baseVal = (parseInt(row.base_opening) || 0) * parseFloat(row.carried_mrp || 0);
+    const baseVal = row.starting_batches ? row.starting_batches.reduce((sum, b) => sum + (b.qty * b.mrp), 0) : 0;
     const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_mrp || 0);
     return acc + baseVal + purchaseVal;
   }, 0);
 
   const tableTotalClosingMrpAmount = stockRows.reduce((acc, row) => {
     if (row.closing_balance === '' || row.closing_balance === null) return acc;
-    const closingQty = parseInt(row.closing_balance);
-    const baseQty = parseInt(row.base_opening) || 0;
-    const purchaseQty = parseInt(row.purchase_qty) || 0;
-    
-    let amt = 0;
-    let remClosing = closingQty;
-
-    const fromNew = Math.min(remClosing, purchaseQty);
-    amt += fromNew * parseFloat(row.purchase_mrp || 0);
-    remClosing -= fromNew;
-
-    if (remClosing > 0) {
-      amt += Math.min(remClosing, baseQty) * parseFloat(row.carried_mrp || 0);
-    }
-    
-    return acc + amt;
+    return acc + (row.closing_mrp_amount || 0);
   }, 0);
 
   const tableTotalMrpRevenue = stockRows.reduce((acc, row) => {
@@ -1107,13 +1085,13 @@ export default function DailyStock() {
             <div className="bg-linear-to-br from-emerald-500 to-emerald-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
               <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Generated Revenue (Auto)</p>
-              <h3 className="text-4xl font-black relative z-10">₹{dailySummary.totalRevenue.toLocaleString()}</h3>
+              <h3 className="text-4xl font-black relative z-10">{formatRs(dailySummary.totalRevenue)}</h3>
             </div>
 
             <div className="bg-linear-to-br from-red-500 to-red-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Receipt size={120} /></div>
               <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Expenses (Auto)</p>
-              <h3 className="text-4xl font-black relative z-10">₹{dailySummary.totalExpenses.toLocaleString()}</h3>
+              <h3 className="text-4xl font-black relative z-10">{formatRs(dailySummary.totalExpenses)}</h3>
             </div>
           </div>
 
@@ -1148,12 +1126,12 @@ export default function DailyStock() {
                             <span>{row.bottle_size} |</span>
                             {row.purchase_qty > 0 ? (
                               <span className="inline-flex items-center gap-1.5 ml-1 flex-wrap">
-                                <span>Old: {row.base_opening} (MRP: ₹{row.carried_mrp} | Sale: ₹{row.carried_price})</span>
+                                <span>Old: {row.base_opening} (MRP: {formatRs(row.carried_mrp)} | Sale: {formatRs(row.carried_price)})</span>
                                 <span className="text-slate-300 dark:text-slate-600">•</span>
-                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} (MRP: ₹{row.purchase_mrp} | Sale: ₹{row.purchase_price})</span>
+                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} (MRP: {formatRs(row.purchase_mrp)} | Sale: {formatRs(row.purchase_price)})</span>
                               </span>
                             ) : (
-                              <span className="ml-1">MRP: ₹{row.purchase_mrp || row.carried_mrp || row.mrp_price} | Sale: ₹{row.purchase_price || row.carried_price || row.selling_price}</span>
+                              <span className="ml-1">MRP: {formatRs(row.purchase_mrp || row.carried_mrp || row.mrp_price)} | Sale: {formatRs(row.purchase_price || row.carried_price || row.selling_price)}</span>
                             )}
                           </div>
                         </td>
@@ -1193,10 +1171,10 @@ export default function DailyStock() {
                           {row.closing_balance === '' ? '-' : row.sales_qty}
                         </td>
                         <td className="px-6 py-4 text-right font-black text-purple-600 dark:text-purple-400 text-lg">
-                          {row.closing_balance === '' ? '-' : `₹${row.sales_mrp_amount.toLocaleString()}`}
+                          {row.closing_balance === '' ? '-' : formatRs(row.sales_mrp_amount)}
                         </td>
                         <td className="px-6 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 text-lg">
-                          {row.closing_balance === '' ? '-' : `₹${row.sales_amount.toLocaleString()}`}
+                          {row.closing_balance === '' ? '-' : formatRs(row.sales_amount)}
                         </td>
                       </tr>
                     ))
@@ -1211,40 +1189,39 @@ export default function DailyStock() {
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalOpeningQty}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: ₹{tableTotalOpeningMrpAmount.toLocaleString()}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{tableTotalOpeningAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: {formatRs(tableTotalOpeningMrpAmount)}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: {formatRs(tableTotalOpeningAmount)}</div>
                       </td>
                       
                       <td className="px-4 py-4 text-center">
-                        {/* Purchases totals removed */}
                       </td>
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-slate-800 dark:text-slate-200">{tableTotalClosingQty}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: ₹{tableTotalClosingMrpAmount.toLocaleString()}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{tableTotalClosingAmount.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-500 mt-1">MRP: {formatRs(tableTotalClosingMrpAmount)}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: {formatRs(tableTotalClosingAmount)}</div>
                       </td>
                       
                       <td className="px-4 py-4 text-center">
                         <div className="font-black text-lg text-indigo-600 dark:text-indigo-400">{dailySummary.totalSalesQty}</div>
-                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">MRP: ₹{dailySummary.totalMrpRevenue.toLocaleString()}</div>
-                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: ₹{dailySummary.totalRevenue.toLocaleString()}</div>
+                        <div className="text-[11px] font-bold text-indigo-400 dark:text-indigo-500 mt-1">MRP: {formatRs(dailySummary.totalMrpRevenue)}</div>
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sale: {formatRs(dailySummary.totalRevenue)}</div>
                       </td>
-                      <td className="px-6 py-4 text-right align-top pt-6 font-black text-purple-600 dark:text-purple-400 text-xl">₹{tableTotalMrpRevenue.toLocaleString()}</td>
-                      <td className="px-6 py-4 text-right align-top pt-6 font-black text-emerald-600 dark:text-emerald-400 text-xl">₹{dailySummary.totalRevenue.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-right align-top pt-6 font-black text-purple-600 dark:text-purple-400 text-xl">{formatRs(tableTotalMrpRevenue)}</td>
+                      <td className="px-6 py-4 text-right align-top pt-6 font-black text-emerald-600 dark:text-emerald-400 text-xl">{formatRs(dailySummary.totalRevenue)}</td>
                     </tr>
                     <tr>
                       <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
-                      <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalExpenses.toLocaleString()}</td>
+                      <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- {formatRs(dailySummary.totalExpenses)}</td>
                     </tr>
                     <tr>
                       <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
-                      <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- ₹{dailySummary.totalCollections.toLocaleString()}</td>
+                      <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- {formatRs(dailySummary.totalCollections)}</td>
                     </tr>
                     <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
                       <td colSpan="7" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
                       <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
-                        ₹{(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections).toLocaleString()}
+                        {formatRs(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections)}
                       </td>
                     </tr>
                   </tfoot>
@@ -1260,7 +1237,6 @@ export default function DailyStock() {
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" style={{ zIndex: 90000 }}>
           <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
             
-            {/* Header (Responsive spacing) */}
             <div className="flex justify-between items-center px-5 py-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 shrink-0">
               <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Package size={20} className="text-blue-500" /> Record New Purchase
@@ -1274,7 +1250,6 @@ export default function DailyStock() {
               </button>
             </div>
             
-            {/* Scrollable Form Body */}
             <form onSubmit={handlePurchaseSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 sm:space-y-5 custom-scrollbar">
               
               <div className="bg-blue-50 dark:bg-blue-900/20 p-3.5 sm:p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">

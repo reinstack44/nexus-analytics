@@ -1,4 +1,4 @@
-import { useState, useEffect, forwardRef } from 'react';
+import { useState, useEffect, forwardRef, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { 
@@ -67,12 +67,133 @@ const isFullCalendarMonth = (start, end) => {
   return sameYear && sameMonth && isFirstDay && isLastDay;
 };
 
-const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
+const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Literal Opening Stock MRP Total Calculation
+const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
+  const firstDayRecords = allStock?.filter(s => {
+    const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
+    return cleanDate === currentMonthStartStr;
+  }) || [];
+  
+  if (firstDayRecords.length > 0) {
+    let totalMrp = 0;
+    firstDayRecords.forEach(s => {
+      const brand = brands?.find(b => b.id === s.brand_id);
+      const opQty = parseInt(s.opening_balance) || 0;
+      const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+      totalMrp += opQty * mrp;
+    });
+    return totalMrp;
+  }
+
+  const currentMonthYearPrefix = currentMonthStartStr.substring(0, 7);
+  const currentMonthRecords = allStock?.filter(s => {
+    const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
+    return cleanDate.startsWith(currentMonthYearPrefix);
+  }) || [];
+
+  if (currentMonthRecords.length > 0) {
+    const uniqueDates = [...new Set(currentMonthRecords.map(r => {
+      return r.date ? r.date.split('T')[0].split(' ')[0] : '';
+    }))].sort();
+    const earliestDateStr = uniqueDates[0];
+    const earliestRecords = currentMonthRecords.filter(r => {
+      const cleanDate = r.date ? r.date.split('T')[0].split(' ')[0] : '';
+      return cleanDate === earliestDateStr;
+    });
+    let totalMrp = 0;
+    earliestRecords.forEach(s => {
+      const brand = brands?.find(b => b.id === s.brand_id);
+      const opQty = parseInt(s.opening_balance) || 0;
+      const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+      totalMrp += opQty * mrp;
+    });
+    return totalMrp;
+  }
+  return 0;
+};
+
+// FIFO Stock Valuation Helper to calculate exact true batch stock MRP totals
+const getFifoStockValuationMrp = (brands, allStock, targetDateStr) => {
+  const brandBatches = {};
+  const prevClosing = {};
+
+  const sortedStock = [...(allStock || [])]
+    .filter(s => {
+      const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
+      return cleanDate <= targetDateStr;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  sortedStock.forEach(s => {
+    if (!brandBatches[s.brand_id]) {
+      brandBatches[s.brand_id] = [];
+    }
+    let queue = brandBatches[s.brand_id];
+    const brand = brands?.find(b => b.id === s.brand_id);
+    if (!brand) return;
+
+    const opBal = parseInt(s.opening_balance) || 0;
+    const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
+    const pPrice = parseFloat(s.unit_price) || parseFloat(brand.selling_price) || 0;
+    const pMrp = parseFloat(s.unit_mrp) || parseFloat(brand.mrp_price) || 0;
+
+    if (pQty > 0) {
+      queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
+    }
+
+    const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+    if (clBal !== null) {
+      let sales = Math.max(0, opBal - clBal);
+      while (sales > 0 && queue.length > 0) {
+        if (queue[0].qty <= sales) {
+          sales -= queue[0].qty;
+          queue.shift();
+        } else {
+          queue[0].qty -= sales;
+          sales = 0;
+        }
+      }
+      prevClosing[s.brand_id] = clBal;
+    } else {
+      prevClosing[s.brand_id] = opBal;
+    }
+    brandBatches[s.brand_id] = queue;
+  });
+
+  let totalMrpValuation = 0;
+  brands?.forEach(b => {
+    const queue = brandBatches[b.id] || [];
+    queue.forEach(batch => {
+      totalMrpValuation += batch.qty * batch.mrp;
+    });
+  });
+
+  return totalMrpValuation;
+};
+
+const getTrueOpeningStockMrp = (brands, allStock, currentMonthStartStr, prevMonthEndStr) => {
+  const prevMonthEndValuation = getFifoStockValuationMrp(brands, allStock, prevMonthEndStr);
+  if (prevMonthEndValuation > 0) {
+    return prevMonthEndValuation;
+  }
+  return getOpeningStockMrp(brands, allStock, currentMonthStartStr);
+};
 
 export default function Reports() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const prevDatesRef = useRef({ start: null, end: null });
+
+  // 1-सेकंड पोलिंग सिंक हार्टबीट
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRefreshTrigger(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // एकीकृत साझा कीज़ (Unified Session Storage)
   const [startDate, setStartDate] = useState(() => {
@@ -127,7 +248,7 @@ export default function Reports() {
 
   const showMagicChart = isFullCalendarMonth(startDate, endDate);
 
-  // 🔴 100% REAL-TIME SYNC LISTENER
+  // REAL-TIME SYNC LISTENER
   useEffect(() => {
     const channel = supabase
       .channel('reports-realtime')
@@ -135,7 +256,7 @@ export default function Reports() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1)) // Track Price/MRP Changes
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
       .subscribe();
 
     return () => {
@@ -148,15 +269,23 @@ export default function Reports() {
 
     const fetchReportData = async () => {
       if (!startDate || !endDate) return;
+
+      const startStr = formatDateForDB(startDate);
+      const endStr = formatDateForDB(endDate);
+
+      const datesChanged = prevDatesRef.current.start !== startStr || prevDatesRef.current.end !== endStr;
+      if (datesChanged) {
+        setLoading(true);
+      }
+      prevDatesRef.current = { start: startStr, end: endStr };
       
       const startObj = getLocalDateObj(startDate);
       const endObj = getLocalDateObj(endDate);
-      const startStr = formatDateForDB(startObj); 
-      const endStr = formatDateForDB(endObj);
 
       const prevStartObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 1);
       const prevEndObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
       const prevStartStr = formatDateForDB(prevStartObj);
+      const prevEndStr = formatDateForDB(prevEndObj);
 
       const firstDayStr = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}-01`;
 
@@ -174,10 +303,10 @@ export default function Reports() {
           { data: allTraderTxData }, 
           { data: traderRangeTxData } 
         ] = await Promise.all([
-          supabase.from('expenses').select('*').gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date'),
-          supabase.from('owner_withdrawals').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date'),
-          supabase.from('daily_stock').select('*').gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true }),
-          supabase.from('trader_transactions').select('*, traders(trader_name)').lte('date', endStr + 'T23:59:59').order('date').order('created_at'),
+          supabase.from('expenses').select('*').eq('user_id', user.id).gte('date', expQueryStart).lte('date', endStr + 'T23:59:59').order('date'),
+          supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date'),
+          supabase.from('daily_stock').select('*').eq('user_id', user.id).gte('date', stockQueryStart).lte('date', endStr + 'T23:59:59').order('date', { ascending: true }),
+          supabase.from('trader_transactions').select('*, traders(trader_name)').eq('user_id', user.id).lte('date', endStr + 'T23:59:59').order('date').order('created_at'),
           supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
         ]);
 
@@ -231,11 +360,16 @@ export default function Reports() {
         });
         setSalesList(sortedSalesList);
 
-        let openingSaleVal = 0;
-        let openingMrpVal = 0;
-        let closingSaleVal = 0;
-        let closingMrpVal = 0;
+        // TRUE LITERAL MRP STOCK VALUATIONS (DIRECT FETCH & ACCURATE FIFO INTEGRATION)
+        const prevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
+        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
+        
+        const openingMrpVal = getTrueOpeningStockMrp(brandsData, stockData, firstDayStr, prevMonthLastDayStr);
+        const closingMrpVal = getFifoStockValuationMrp(brandsData, stockData, endStr);
 
+        // Standard Sale price multiplications for general stats page
+        let openingSaleVal = 0;
+        let closingSaleVal = 0;
         const stockByBrand = {};
         stockData?.forEach(s => {
           const sDate = getLocalDateObj(s.date);
@@ -250,44 +384,30 @@ export default function Reports() {
           if (bStock && bStock.length > 0) {
             const firstEntry = bStock[0];
             const openPrice = firstEntry.unit_price ? parseFloat(firstEntry.unit_price) : parseFloat(b.selling_price);
-            const openMrp = firstEntry.unit_mrp ? parseFloat(firstEntry.unit_mrp) : parseFloat(b.mrp_price || 0);
-            
             openingSaleVal += (parseInt(firstEntry.opening_balance || 0) * openPrice);
-            openingMrpVal += (parseInt(firstEntry.opening_balance || 0) * openMrp);
 
             const lastEntry = bStock[bStock.length - 1];
             const closeQty = lastEntry.closing_balance !== null ? parseInt(lastEntry.closing_balance) : 0;
             const closePrice = lastEntry.unit_price ? parseFloat(lastEntry.unit_price) : parseFloat(b.selling_price);
-            const closeMrp = lastEntry.unit_mrp ? parseFloat(lastEntry.unit_mrp) : parseFloat(b.mrp_price || 0);
-
             closingSaleVal += (closeQty * closePrice);
-            closingMrpVal += (closeQty * closeMrp);
           }
         });
 
-        const prevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
-        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
-        
-        const { data: prevStock } = await supabase
-          .from('daily_stock')
-          .select('*')
-          .eq('date', prevMonthLastDayStr);
-          
-        const prevStockMap = {};
-        prevStock?.forEach(s => { prevStockMap[s.brand_id] = s; });
-
         let rangePurchasesSale = 0;
-        let rangePurchasesMrp = 0;
-
         traderRangeTxData?.forEach(tx => {
           rangePurchasesSale += parseFloat(tx.purchase_amount || 0);
         });
 
+        let rangePurchasesMrp = 0;
         const runningPrevClosing = {};
-        brandsData?.forEach(b => {
-          const ps = prevStockMap[b.id];
-          runningPrevClosing[b.id] = ps && ps.closing_balance !== null ? parseInt(ps.closing_balance) : 0;
-        });
+        
+        const { data: prevStock } = await supabase
+          .from('daily_stock')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('date', prevEndStr);
+          
+        prevStock?.forEach(s => { runningPrevClosing[s.brand_id] = s.closing_balance !== null ? parseInt(s.closing_balance) : 0; });
 
         const stockByDateStr = {};
         stockData?.forEach(s => {
@@ -354,6 +474,9 @@ export default function Reports() {
             }
           });
 
+          // ----------------------------------------------------
+          // 2. FIFO SALES SIMULATION (DEFINED BEFORE INVOCATION)
+          // ----------------------------------------------------
           const calculateFifoSales = async (startObjRange, endObjRange) => {
             let totalSales = 0;
             const prevClosings = {};
@@ -424,79 +547,16 @@ export default function Reports() {
             computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
           });
 
-          let computedOpeningStockMrp = 0;
-          if (prevStock && prevStock.length > 0) {
-            prevStock.forEach(s => {
-              const brand = brandMap[s.brand_id];
-              const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
-              const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-              computedOpeningStockMrp += clQty * mrp;
-            });
-          } else {
-            const firstDayRecords = stockByDateStr[firstDayStr] || {};
-            brandsData?.forEach(b => {
-              const rec = firstDayRecords[b.id];
-              if (rec) {
-                const opQty = parseInt(rec.opening_balance) || 0;
-                const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-                computedOpeningStockMrp += opQty * mrp;
-              }
-            });
-          }
+          // Accurate Literal MRP valuations computed live (DIRECT FETCH & ACCURATE FIFO INTEGRATION)
+          const computedOpeningStockMrp = getTrueOpeningStockMrp(brandsData, stockData, firstDayStr, prevEndStr);
+          const computedClosingStockMrp = getFifoStockValuationMrp(brandsData, stockData, endStr);
 
-          let computedClosingStockMrp = 0;
-          const lastDayRecords = stockByDateStr[endStr] || {};
-          brandsData?.forEach(b => {
-            const rec = lastDayRecords[b.id];
-            if (rec) {
-              const clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : 0;
-              const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-              computedClosingStockMrp += clQty * mrp;
-            }
-          });
-
+          const prevFirstDayStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
           const prevPrevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 0);
           const prevPrevMonthLastDayStr = formatDateForDB(prevPrevMonthLastDayObj);
           
-          const { data: prevPrevStock } = await supabase
-            .from('daily_stock')
-            .select('*')
-            .eq('date', prevPrevMonthLastDayStr);
-
-          let computedPrevOpeningMrp = 0;
-          if (prevPrevStock && prevPrevStock.length > 0) {
-            prevPrevStock.forEach(s => {
-              const brand = brandMap[s.brand_id];
-              const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
-              const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-              computedPrevOpeningMrp += clQty * mrp;
-            });
-          } else {
-            const prevFirstDayRecords = {};
-            stockData?.forEach(s => {
-              if (s.date === prevStartStr) {
-                prevFirstDayRecords[s.brand_id] = s;
-              }
-            });
-            brandsData?.forEach(b => {
-              const rec = prevFirstDayRecords[b.id];
-              if (rec) {
-                const opQty = parseInt(rec.opening_balance) || 0;
-                const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-                computedPrevOpeningMrp += opQty * mrp;
-              }
-            });
-          }
-
-          let computedPrevClosingMrp = 0;
-          if (prevStock && prevStock.length > 0) {
-            prevStock.forEach(s => {
-              const brand = brandMap[s.brand_id];
-              const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : 0;
-              const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-              computedPrevClosingMrp += clQty * mrp;
-            });
-          }
+          const computedPrevOpeningMrp = getTrueOpeningStockMrp(brandsData, stockData, prevFirstDayStr, prevPrevMonthLastDayStr);
+          const computedPrevClosingMrp = computedOpeningStockMrp; // प्रिफिक्स सिंक
 
           const { data: prevTraderTxData } = await supabase
             .from('trader_transactions')
@@ -533,7 +593,6 @@ export default function Reports() {
       if (isMounted) setLoading(false);
     };
 
-    // एकीकृत एसिंक्रोनस निष्पादन
     const executeFetch = async () => {
       await Promise.resolve();
       if (isMounted) {
@@ -648,7 +707,6 @@ export default function Reports() {
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
         
-        /* UNIFIED HIGH-FIDELITY PRINT SYSTEM */
         @media print {
           @page { 
             size: A4 portrait; 
@@ -759,25 +817,6 @@ export default function Reports() {
           .print-bg-indigo-light { background-color: #e0e7ff !important; color: #4f46e5 !important; }
           .print-bg-indigo-deep { background-color: #4f46e5 !important; color: #ffffff !important; }
 
-          .print-magic-table input {
-            font-size: 8pt !important;
-            font-weight: 900 !important;
-            background-color: transparent !important;
-            border: none !important;
-            height: auto !important;
-            min-height: 0 !important;
-            padding: 0 !important;
-            text-align: center !important;
-            color: #0f172a !important;
-            -moz-appearance: textfield;
-            appearance: textfield;
-          }
-          .print-magic-table input::-webkit-outer-spin-button,
-          .print-magic-table input::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-          }
-
           table { width: 100% !important; border-collapse: collapse !important; margin-bottom: 20px !important; }
           th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: bold !important; text-transform: uppercase; font-size: 8pt !important; padding: 8px !important; border: 1px solid #e2e8f0 !important; }
           td { padding: 8px !important; border: 1px solid #e2e8f0 !important; font-size: 9pt !important; color: #334155 !important; }
@@ -834,22 +873,22 @@ export default function Reports() {
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4">1. Financial Summary Overview</h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 print-card-grid">
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Gross Profit (Sales)</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{summary.grossProfit.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Gross Profit (Sales)</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">{formatRs(summary.grossProfit)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Total Purchases (Sale)</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">₹{summary.totalPurchases.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Total Purchases (Sale)</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">{formatRs(summary.totalPurchases)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Business Expenses</p><h3 className="text-2xl font-black text-red-500 print-text-rose">₹{summary.totalExpenses.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Business Expenses</p><h3 className="text-2xl font-black text-red-500 print-text-rose">{formatRs(summary.totalExpenses)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Net Profit / Loss</p><h3 className="text-2xl font-black text-blue-600 dark:text-blue-400 print-text-indigo">₹{summary.netProfit.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Net Profit / Loss</p><h3 className="text-2xl font-black text-blue-600 dark:text-blue-400 print-text-indigo">{formatRs(summary.netProfit)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Online Collections</p><h3 className="text-2xl font-black text-indigo-500">₹{summary.totalWithdrawn.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Online Collections</p><h3 className="text-2xl font-black text-indigo-500">{formatRs(summary.totalWithdrawn)}</h3>
               </div>
               <div className="bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">Cash Left in Hand</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 print-text-emerald">₹{summary.retainedCash.toLocaleString()}</h3>
+                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">Cash Left in Hand</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 print-text-emerald">{formatRs(summary.retainedCash)}</h3>
               </div>
             </div>
 
@@ -860,11 +899,11 @@ export default function Reports() {
                 <div className="space-y-1">
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500 font-medium">MRP Total:</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.openingMrp.toLocaleString()}</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.openingMrp)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500 font-medium">Sale Total:</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.openingSale.toLocaleString()}</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.openingSale)}</span>
                   </div>
                 </div>
               </div>
@@ -874,11 +913,11 @@ export default function Reports() {
                 <div className="space-y-1">
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500 font-medium">MRP Total:</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.closingMrp.toLocaleString()}</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.closingMrp)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500 font-medium">Sale Total:</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.closingSale.toLocaleString()}</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.closingSale)}</span>
                   </div>
                 </div>
               </div>
@@ -907,7 +946,7 @@ export default function Reports() {
                       <td className="px-4 py-3 text-center">{item.bottle_size}</td>
                       <td className="px-4 py-3 text-right">₹{item.selling_price}</td>
                       <td className="px-4 py-3 text-center font-bold">{item.total_qty}</td>
-                      <td className="px-4 py-3 text-right font-bold text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{item.total_revenue.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right font-bold text-emerald-600 dark:text-emerald-400 print-text-emerald">{formatRs(item.total_revenue)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -918,7 +957,7 @@ export default function Reports() {
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTALS</div>
                       </td>
                       <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{salesTotalQty}</td>
-                      <td className="px-4 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">₹{salesTotalRev.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">{formatRs(salesTotalRev)}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -942,7 +981,7 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? <tr><td colSpan="3" className="px-4 py-8 text-center">Compiling...</td></tr> : expenseList.map((e, idx) => (
-                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{e.description}</td><td className="px-4 py-3 text-right font-bold text-red-600 dark:text-red-400 print-text-rose">₹{e.amount}</td></tr>
+                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{e.description}</td><td className="px-4 py-3 text-right font-bold text-red-600 dark:text-red-400 print-text-rose">{formatRs(e.amount)}</td></tr>
                   ))}
                 </tbody>
                 {expenseList.length > 0 && !loading && (
@@ -951,7 +990,7 @@ export default function Reports() {
                       <td colSpan="2" className="px-4 py-4 text-right">
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTAL EXPENSES</div>
                       </td>
-                      <td className="px-4 py-4 text-right font-black text-red-600 dark:text-red-400 print-text-rose">₹{summary.totalExpenses.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-red-600 dark:text-red-400 print-text-rose">{formatRs(summary.totalExpenses)}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -975,7 +1014,7 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? <tr><td colSpan="4" className="px-4 py-8 text-center">Compiling...</td></tr> : collectionList.map((c, idx) => (
-                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{c.description}</td><td className="px-4 py-3 text-center"><span className="px-2 py-1 text-[10px] font-bold uppercase rounded-md bg-blue-100 text-blue-700 print:bg-slate-100 print:text-blue-800">{c.withdrawal_mode}</span></td><td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{c.amount}</td></tr>
+                    <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{c.description}</td><td className="px-4 py-3 text-center"><span className="px-2 py-1 text-[10px] font-bold uppercase rounded-md bg-blue-100 text-blue-700 print:bg-slate-100 print:text-blue-800">{c.withdrawal_mode}</span></td><td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(c.amount)}</td></tr>
                   ))}
                 </tbody>
                 {collectionList.length > 0 && !loading && (
@@ -984,7 +1023,7 @@ export default function Reports() {
                       <td colSpan="3" className="px-4 py-4 text-right">
                          <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTAL COLLECTIONS</div>
                       </td>
-                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{summary.totalWithdrawn.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(summary.totalWithdrawn)}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -1043,18 +1082,18 @@ export default function Reports() {
                               {trader.transactions.map((tx, idx) => (
                                 <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                   <td className="px-4 py-2.5 font-medium">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                                  <td className="px-4 py-2.5 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
-                                  <td className="px-4 py-2.5 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
-                                  <td className="px-4 py-2.5 text-right font-bold text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? formatRs(tx.purchase_amount) : '-'}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? formatRs(tx.paid_amount) : '-'}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-slate-900 dark:text-white">{formatRs(tx.remaining_amount)}</td>
                                 </tr>
                               ))}
                             </tbody>
                             <tfoot className="bg-slate-100/50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-700">
                               <tr className="font-black">
                                 <td className="px-4 py-3 text-right text-xs uppercase text-slate-500 dark:text-slate-400">Total ({trader.name})</td>
-                                <td className="px-4 py-3 text-right text-amber-600 dark:text-amber-400">₹{trader.totalPurchases.toLocaleString()}</td>
-                                <td className="px-4 py-3 text-right text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{trader.totalPaid.toLocaleString()}</td>
-                                <td className="px-4 py-3 text-right text-slate-900 dark:text-white">₹{trader.remainingBalance.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-amber-600 dark:text-amber-400">{formatRs(trader.totalPurchases)}</td>
+                                <td className="px-4 py-3 text-right text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(trader.totalPaid)}</td>
+                                <td className="px-4 py-3 text-right text-slate-900 dark:text-white">{formatRs(trader.remainingBalance)}</td>
                               </tr>
                             </tfoot>
                           </table>
@@ -1085,9 +1124,9 @@ export default function Reports() {
                           <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 print:hover:bg-transparent">
                             <td className="px-4 py-3 font-medium">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                             <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{tx.traders?.trader_name || 'N/A'}</td>
-                            <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? `₹${tx.purchase_amount.toLocaleString()}` : '-'}</td>
-                            <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? `₹${tx.paid_amount.toLocaleString()}` : '-'}</td>
-                            <td className="px-4 py-3 text-right font-black text-slate-900 dark:text-white">₹{tx.remaining_amount.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-bold text-amber-600 dark:text-amber-500">{tx.purchase_amount > 0 ? formatRs(tx.purchase_amount) : '-'}</td>
+                            <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{tx.paid_amount > 0 ? formatRs(tx.paid_amount) : '-'}</td>
+                            <td className="px-4 py-3 text-right font-black text-slate-900 dark:text-white">{formatRs(tx.remaining_amount)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1097,9 +1136,9 @@ export default function Reports() {
                             <td colSpan="2" className="px-4 py-4 text-right">
                                <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TRADER TOTALS</div>
                             </td>
-                            <td className="px-4 py-4 text-right font-black text-amber-600 dark:text-amber-400">₹{traderTotalPurchases.toLocaleString()}</td>
-                            <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">₹{traderTotalPaid.toLocaleString()}</td>
-                            <td className="px-4 py-4 text-right font-black text-slate-900 dark:text-white">₹{traderTotalRemaining.toLocaleString()}</td>
+                            <td className="px-4 py-4 text-right font-black text-amber-600 dark:text-amber-400">{formatRs(traderTotalPurchases)}</td>
+                            <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(traderTotalPaid)}</td>
+                            <td className="px-4 py-4 text-right font-black text-slate-900 dark:text-white">{formatRs(traderTotalRemaining)}</td>
                           </tr>
                         </tfoot>
                       )}

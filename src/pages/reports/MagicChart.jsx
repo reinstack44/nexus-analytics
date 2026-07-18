@@ -1,4 +1,4 @@
-import { useState, useEffect, forwardRef } from 'react';
+import { useState, useEffect, forwardRef, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { Wand2, Calendar, ChevronDown, RefreshCw } from 'lucide-react';
@@ -36,27 +36,148 @@ const getLocalDateObj = (dateInput) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 };
 
-const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
+// दशमलव सटीकता के साथ मुद्रा प्रदर्शन
+const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Literal Opening Stock MRP Total Calculation
+const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
+  const firstDayRecords = allStock?.filter(s => {
+    const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
+    return cleanDate === currentMonthStartStr;
+  }) || [];
+  
+  if (firstDayRecords.length > 0) {
+    let totalMrp = 0;
+    firstDayRecords.forEach(s => {
+      const brand = brands?.find(b => b.id === s.brand_id);
+      const opQty = parseInt(s.opening_balance) || 0;
+      const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+      totalMrp += opQty * mrp;
+    });
+    return totalMrp;
+  }
+
+  const currentMonthYearPrefix = currentMonthStartStr.substring(0, 7);
+  const currentMonthRecords = allStock?.filter(s => {
+    const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
+    return cleanDate.startsWith(currentMonthYearPrefix);
+  }) || [];
+
+  if (currentMonthRecords.length > 0) {
+    const uniqueDates = [...new Set(currentMonthRecords.map(r => {
+      return r.date ? r.date.split('T')[0].split(' ')[0] : '';
+    }))].sort();
+    const earliestDateStr = uniqueDates[0];
+    const earliestRecords = currentMonthRecords.filter(r => {
+      const cleanDate = r.date ? r.date.split('T')[0].split(' ')[0] : '';
+      return cleanDate === earliestDateStr;
+    });
+    let totalMrp = 0;
+    earliestRecords.forEach(s => {
+      const brand = brands?.find(b => b.id === s.brand_id);
+      const opQty = parseInt(s.opening_balance) || 0;
+      const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
+      totalMrp += opQty * mrp;
+    });
+    return totalMrp;
+  }
+  return 0;
+};
+
+// FIFO Stock Valuation Helper to calculate exact true batch stock MRP totals
+const getFifoStockValuationMrp = (brands, allStock, targetDateStr) => {
+  const brandBatches = {};
+  const prevClosing = {};
+
+  const sortedStock = [...(allStock || [])]
+    .filter(s => {
+      const cleanDate = s.date ? s.date.split('T')[0].split(' ')[0] : '';
+      return cleanDate <= targetDateStr;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  sortedStock.forEach(s => {
+    if (!brandBatches[s.brand_id]) {
+      brandBatches[s.brand_id] = [];
+    }
+    let queue = brandBatches[s.brand_id];
+    const brand = brands?.find(b => b.id === s.brand_id);
+    if (!brand) return;
+
+    const opBal = parseInt(s.opening_balance) || 0;
+    const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
+    const pPrice = parseFloat(s.unit_price) || parseFloat(brand.selling_price) || 0;
+    const pMrp = parseFloat(s.unit_mrp) || parseFloat(brand.mrp_price) || 0;
+
+    if (pQty > 0) {
+      queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
+    }
+
+    const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+    if (clBal !== null) {
+      let sales = Math.max(0, opBal - clBal);
+      while (sales > 0 && queue.length > 0) {
+        if (queue[0].qty <= sales) {
+          sales -= queue[0].qty;
+          queue.shift();
+        } else {
+          queue[0].qty -= sales;
+          sales = 0;
+        }
+      }
+      prevClosing[s.brand_id] = clBal;
+    } else {
+      prevClosing[s.brand_id] = opBal;
+    }
+    brandBatches[s.brand_id] = queue;
+  });
+
+  let totalMrpValuation = 0;
+  brands?.forEach(b => {
+    const queue = brandBatches[b.id] || [];
+    queue.forEach(batch => {
+      totalMrpValuation += batch.qty * batch.mrp;
+    });
+  });
+
+  return totalMrpValuation;
+};
+
+const getTrueOpeningStockMrp = (brands, allStock, currentMonthStartStr, prevMonthEndStr) => {
+  const prevMonthEndValuation = getFifoStockValuationMrp(brands, allStock, prevMonthEndStr);
+  if (prevMonthEndValuation > 0) {
+    return prevMonthEndValuation;
+  }
+  return getOpeningStockMrp(brands, allStock, currentMonthStartStr);
+};
 
 export default function MagicChart() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const prevMonthRef = useRef(null);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const saved = sessionStorage.getItem('mc_selectedMonth');
     return saved ? new Date(saved) : new Date();
   });
 
-  // सिंक करने के लिए स्टेट ट्रिगर
   const [syncTrigger, setSyncTrigger] = useState(0);
 
-  // 🔴 100% REAL-TIME SYNC LISTENER
+  // 1-सेकंड पोलिंग इंटरवल (Instantaneous Refresh Check)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSyncTrigger(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // REAL-TIME SYNC LISTENER
   useEffect(() => {
     const channel = supabase
       .channel('magicchart-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setSyncTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setSyncTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setSyncTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setSyncTrigger(prev => prev + 1)) // Track Price/MRP Changes
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setSyncTrigger(prev => prev + 1))
       .subscribe();
 
     return () => {
@@ -64,23 +185,19 @@ export default function MagicChart() {
     };
   }, []);
 
-  // ऑटोमेटेड स्टेट्स (चालू और पिछले महीने के लिए)
   const [salesAmount, setSalesAmount] = useState(0);
   const [expensesAmount, setExpensesAmount] = useState(0);
   const [prevMonthSales, setPrevMonthSales] = useState(0);
   const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
 
-  // लाइव कम्प्यूटेड लेड्जर वैल्यूज
   const [ledgerOpening, setLedgerOpening] = useState(0);
   const [ledgerClosing, setLedgerClosing] = useState(0);
   const [ledgerPurchases, setLedgerPurchases] = useState(0);
 
-  // पिछले महीने की ऑटोमेटेड गणनाएँ
   const [prevMonthOpening, setPrevMonthOpening] = useState(0);
   const [prevMonthClosing, setPrevMonthClosing] = useState(0);
   const [prevMonthPurchases, setPrevMonthPurchases] = useState(0);
 
-  // Selected Month को sessionStorage में सिंक करने के लिए हुक
   useEffect(() => {
     if (selectedMonth) {
       sessionStorage.setItem('mc_selectedMonth', selectedMonth.toISOString());
@@ -92,7 +209,12 @@ export default function MagicChart() {
 
     const fetchAndCalculateMagicData = async () => {
       if (!user) return;
-      setLoading(true);
+      
+      const monthKey = selectedMonth ? selectedMonth.toISOString() : '';
+      if (prevMonthRef.current !== monthKey) {
+        setLoading(true);
+      }
+      prevMonthRef.current = monthKey;
 
       const currYear = selectedMonth.getFullYear();
       const currMonth = selectedMonth.getMonth();
@@ -104,22 +226,21 @@ export default function MagicChart() {
 
       const currEndStr = formatDateForDB(currEndObj);
       const prevStartStr = formatDateForDB(prevStartObj);
+      const prevEndStr = formatDateForDB(prevEndObj);
 
       const firstDayStr = `${currYear}-${String(currMonth + 1).padStart(2, '0')}-01`;
 
       try {
         const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: traderTxData } ] = await Promise.all([
           supabase.from('brands').select('*'),
-          supabase.from('daily_stock').select('*').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
-          supabase.from('expenses').select('amount, date').gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59'),
+          supabase.from('daily_stock').select('*').eq('user_id', user.id).gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
+          supabase.from('expenses').select('amount, date').eq('user_id', user.id).gte('date', prevStartStr).lte('date', currEndStr + 'T23:59:59'),
           supabase.from('trader_transactions').select('purchase_amount').eq('user_id', user.id).gte('date', firstDayStr).lte('date', currEndStr)
         ]);
 
         if (!isMounted) return;
 
-        // ----------------------------------------------------
-        // 1. EXPENSES CALCULATION
-        // ----------------------------------------------------
+        // EXPENSES CALCULATION
         let currExpVal = 0;
         let prevExpVal = 0;
         allExpenses?.forEach(e => {
@@ -130,9 +251,7 @@ export default function MagicChart() {
           }
         });
 
-        // ----------------------------------------------------
-        // 2. FIFO SALES SIMULATION
-        // ----------------------------------------------------
+        // FIFO SALES SIMULATION
         const calculateFifoSales = async (startObj, endObj) => {
           let totalSales = 0;
           const prevClosings = {};
@@ -199,115 +318,24 @@ export default function MagicChart() {
         const currSales = await calculateFifoSales(currStartObj, currEndObj);
         const prevSales = await calculateFifoSales(prevStartObj, prevEndObj);
 
-        // ----------------------------------------------------
-        // 3. AUTO-FETCH OPENING/CLOSING & TOTAL PURCHASES
-        // ----------------------------------------------------
-        const stockByDateStr = {};
-        allStock?.forEach(s => {
-          if (!stockByDateStr[s.date]) stockByDateStr[s.date] = {};
-          stockByDateStr[s.date][s.brand_id] = s;
-        });
+        // TRUE LITERAL MRP STOCK VALUATIONS (DIRECT FETCH & ACCURATE FIFO INTEGRATION)
+        const computedOpeningStockMrp = getTrueOpeningStockMrp(brands, allStock, firstDayStr, prevEndStr);
+        const computedClosingStockMrp = getFifoStockValuationMrp(brands, allStock, currEndStr);
 
-        // A. Closing Stock of Previous Month = Opening Stock of Current Month (MRP Total)
-        const prevMonthLastDayObj = new Date(currYear, currMonth, 0);
-        const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
-        
-        const { data: prevStock } = await supabase
-          .from('daily_stock')
-          .select('*')
-          .eq('date', prevMonthLastDayStr);
-          
-        const prevStockMap = {};
-        prevStock?.forEach(s => { prevStockMap[s.brand_id] = s; });
-
-        let computedOpeningStockMrp = 0;
-        if (prevStock && prevStock.length > 0) {
-          prevStock.forEach(s => {
-            const brand = brands?.find(b => b.id === s.brand_id);
-            const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
-            const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-            computedOpeningStockMrp += clQty * mrp;
-          });
-        } else {
-          const firstDayRecords = stockByDateStr[firstDayStr] || {};
-          brands?.forEach(b => {
-            const rec = firstDayRecords[b.id];
-            if (rec) {
-              const opQty = parseInt(rec.opening_balance) || 0;
-              const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-              computedOpeningStockMrp += opQty * mrp;
-            }
-          });
-        }
-
-        // B. Closing Stock MRP Total (Last Day of the Month)
-        let computedClosingStockMrp = 0;
-        const lastDayRecords = stockByDateStr[currEndStr] || {};
-        brands?.forEach(b => {
-          const rec = lastDayRecords[b.id];
-          if (rec) {
-            const clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : 0;
-            const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-            computedClosingStockMrp += clQty * mrp;
-          }
-        });
-
-        // C. Monthly Total Purchases (Fetched directly from Purchase Manager Ledger)
+        // Monthly Total Purchases
         let computedTotalPurchasesTraders = 0;
         traderTxData?.forEach(tx => {
           computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
         });
 
-        // ----------------------------------------------------
-        // 4. PREVIOUS MONTH COMPLETE AUTO-FETCH LOGIC
-        // ----------------------------------------------------
-        // Previous Month's Opening Stock (Closing of month before previous, i.e., 2 months ago)
-        const prevPrevMonthLastDayObj = new Date(currYear, currMonth - 1, 0);
+        // PREVIOUS MONTH VALUATIONS (DIRECT FETCH & ACCURATE FIFO INTEGRATION)
+        const prevFirstDayStr = `${prevStartObj.getFullYear()}-${String(prevStartObj.getMonth() + 1).padStart(2, '0')}-01`;
+        const prevPrevMonthLastDayObj = new Date(currYear, currMonth - 2, 0);
         const prevPrevMonthLastDayStr = formatDateForDB(prevPrevMonthLastDayObj);
         
-        const { data: prevPrevStock } = await supabase
-          .from('daily_stock')
-          .select('*')
-          .eq('date', prevPrevMonthLastDayStr);
+        const computedPrevOpeningMrp = getTrueOpeningStockMrp(brands, allStock, prevFirstDayStr, prevPrevMonthLastDayStr);
+        const computedPrevClosingMrp = computedOpeningStockMrp; // प्रिफिक्स सिंक
 
-        let computedPrevOpeningMrp = 0;
-        if (prevPrevStock && prevPrevStock.length > 0) {
-          prevPrevStock.forEach(s => {
-            const brand = brands?.find(b => b.id === s.brand_id);
-            const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : (parseInt(s.opening_balance) || 0);
-            const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-            computedPrevOpeningMrp += clQty * mrp;
-          });
-        } else {
-          const prevStartStr = formatDateForDB(prevStartObj);
-          const prevFirstDayRecords = {};
-          allStock?.forEach(s => {
-            if (s.date === prevStartStr) {
-              prevFirstDayRecords[s.brand_id] = s;
-            }
-          });
-          brands?.forEach(b => {
-            const rec = prevFirstDayRecords[b.id];
-            if (rec) {
-              const opQty = parseInt(rec.opening_balance) || 0;
-              const mrp = parseFloat(rec.unit_mrp || b.mrp_price || 0);
-              computedPrevOpeningMrp += opQty * mrp;
-            }
-          });
-        }
-
-        // Previous Month's Closing Stock
-        let computedPrevClosingMrp = 0;
-        if (prevStock && prevStock.length > 0) {
-          prevStock.forEach(s => {
-            const brand = brands?.find(b => b.id === s.brand_id);
-            const clQty = s.closing_balance !== null ? parseInt(s.closing_balance) : 0;
-            const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-            computedPrevClosingMrp += clQty * mrp;
-          });
-        }
-
-        // Previous Month's Total Purchases from Trader Transactions
         const { data: prevTraderTxData } = await supabase
           .from('trader_transactions')
           .select('purchase_amount')
@@ -346,7 +374,7 @@ export default function MagicChart() {
     return () => { isMounted = false; };
   }, [selectedMonth, user, syncTrigger]);
 
-  // --- CALCULATIONS FOR CURRENT MONTH ---
+  // Calculations
   const box1Val = salesAmount;
   const box2Val = ledgerClosing;
   const box3Val = box1Val + box2Val;
@@ -355,10 +383,9 @@ export default function MagicChart() {
   const box5Val = ledgerPurchases;
   const box6Val = box4Val + box5Val;
 
-  const box7Val = box3Val - box6Val; // चालू ग्रॉस प्रॉफिट
-  const netProfitVal = box7Val - expensesAmount; // चालू नेट प्रॉफिट
+  const box7Val = box3Val - box6Val; 
+  const netProfitVal = box7Val - expensesAmount; 
 
-  // --- CALCULATIONS FOR PREVIOUS MONTH ---
   const prevBox1Val = prevMonthSales;
   const prevBox2Val = prevMonthClosing;
   const prevBox3Val = prevBox1Val + prevBox2Val;
@@ -368,9 +395,9 @@ export default function MagicChart() {
   const prevBox6Val = prevBox4Val + prevBox5Val;
 
   const prevBox7Val = prevBox3Val - prevBox6Val;
-  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; // मागील महिन्याचा नफा
+  const prevNetProfitVal = prevBox7Val - prevMonthExpenses; 
 
-  const cumulativeProfitVal = prevNetProfitVal + netProfitVal; // एकूण नफा
+  const cumulativeProfitVal = prevNetProfitVal + netProfitVal; 
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300">
@@ -423,7 +450,6 @@ export default function MagicChart() {
         </div>
         
         <div className="shrink-0 relative flex items-center gap-3">
-          {/* Sync Data Button */}
           <button
             type="button"
             disabled={loading}
@@ -476,7 +502,6 @@ export default function MagicChart() {
           {/* LEDGER SHEETS CONTAINER */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-2xl p-6 space-y-8 overflow-hidden">
             
-            {/* माहे LABEL (LEDGER HEADER) */}
             <div className="text-center">
               <h3 className="text-xl font-black text-slate-700 dark:text-slate-300 tracking-widest uppercase">
                 *** माहे {selectedMonth.toLocaleDateString('mr-IN', { month: 'long' })} {selectedMonth.getFullYear()} ***
@@ -513,43 +538,35 @@ export default function MagicChart() {
                 </thead>
                 <tbody>
                   <tr className="border-b border-slate-300 dark:border-slate-700 h-16">
-                    {/* रकाना 1 */}
                     <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
                       {formatRs(box1Val)}
                     </td>
                     
-                    {/* रकाना 2 */}
                     <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
                       {formatRs(box2Val)}
                     </td>
 
-                    {/* रकाना 3 */}
                     <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
                       {formatRs(box3Val)}
                     </td>
 
-                    {/* रकाना 4 */}
                     <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
                       {formatRs(box4Val)}
                     </td>
 
-                    {/* रकाना 5 */}
                     <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg">
                       {formatRs(box5Val)}
                     </td>
 
-                    {/* रकाना 6 */}
                     <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5">
                       {formatRs(box6Val)}
                     </td>
 
-                    {/* रकाना 7 */}
                     <td className={`font-black text-xl ${box7Val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
                       {formatRs(box7Val)}
                     </td>
                   </tr>
                   
-                  {/* Row Indices */}
                   <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 font-bold">
                     <td className="py-1 border-r border-slate-300 dark:border-slate-700">1</td>
                     <td className="py-1 border-r border-slate-300 dark:border-slate-700">2</td>
@@ -563,7 +580,7 @@ export default function MagicChart() {
               </table>
             </div>
 
-            {/* 2. SETTLEMENT TABLE (ढोबळ नफा - खर्च) */}
+            {/* 2. SETTLEMENT TABLE */}
             <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
               <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
                 <thead>
@@ -589,7 +606,7 @@ export default function MagicChart() {
               </table>
             </div>
 
-            {/* 3. CUMULATIVE TABLE (एकूण नफा / संचयी) */}
+            {/* 3. CUMULATIVE TABLE */}
             <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-xl">
               <table className="w-full text-center border-collapse" style={{ minWidth: '600px' }}>
                 <thead>
