@@ -844,20 +844,6 @@ export default function Reports() {
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Total Purchases Valuation</p>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 font-medium">MRP Total:</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.purchasesMrp.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 font-medium">Sale Total:</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">₹{summary.purchasesSale.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
 
               <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
                 <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Closing Stock Valuation</p>
