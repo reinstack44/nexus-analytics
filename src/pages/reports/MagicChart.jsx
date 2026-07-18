@@ -1,7 +1,7 @@
 import { useState, useEffect, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Wand2, Calendar, ChevronDown } from 'lucide-react';
+import { Wand2, Calendar, ChevronDown, RefreshCw } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -45,6 +45,9 @@ export default function MagicChart() {
     const saved = sessionStorage.getItem('mc_selectedMonth');
     return saved ? new Date(saved) : new Date();
   });
+
+  // सिंक करने के लिए स्टेट ट्रिगर
+  const [syncTrigger, setSyncTrigger] = useState(0);
 
   // ऑटोमेटेड स्टेट्स (चालू और पिछले महीने के लिए)
   const [salesAmount, setSalesAmount] = useState(0);
@@ -326,7 +329,7 @@ export default function MagicChart() {
 
     fetchAndCalculateMagicData();
     return () => { isMounted = false; };
-  }, [selectedMonth, user]);
+  }, [selectedMonth, user, syncTrigger]);
 
   // --- CALCULATIONS FOR CURRENT MONTH ---
   const box1Val = salesAmount;
@@ -405,6 +408,17 @@ export default function MagicChart() {
         </div>
         
         <div className="shrink-0 relative flex items-center gap-3">
+          {/* Sync Data Button */}
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => setSyncTrigger(prev => prev + 1)}
+            className="flex items-center justify-center p-2.5 h-12 w-12 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+            title="Sync Data"
+          >
+            <RefreshCw size={18} className={`text-indigo-500 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        
           <DatePicker 
             selected={selectedMonth} 
             onChange={date => setSelectedMonth(date)} 
