@@ -28,37 +28,44 @@ const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
 ));
 FormDateInput.displayName = "FormDateInput";
 
-// Helper function to safely get dates from SessionStorage or fallback to Current Date
-const getInitialFilterDate = (storageKey) => {
-  const savedDate = sessionStorage.getItem(storageKey);
-  if (savedDate) {
-    return new Date(savedDate);
-  }
-  return new Date(); // Current date by default
-};
-
 export default function PurchaseManager() {
   const [activeTab, setActiveTab] = useState('ledger'); 
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Data States
   const [traders, setTraders] = useState([]);
   const [selectedTraderId, setSelectedTraderId] = useState('');
   const [ledgerRows, setStockLedgerRows] = useState([]);
 
-  // Filter Date Range State (Using Session Storage for persistence)
-  const [filterStartDate, setFilterStartDate] = useState(() => getInitialFilterDate('pm_filter_start'));
-  const [filterEndDate, setFilterEndDate] = useState(() => getInitialFilterDate('pm_filter_end'));
+  // एकीकृत साझा कीज़ (Unified Session Storage)
+  const [filterStartDate, setFilterStartDate] = useState(() => {
+    const saved = sessionStorage.getItem('global_startDate');
+    return saved ? new Date(saved) : new Date();
+  });
+  const [filterEndDate, setFilterEndDate] = useState(() => {
+    const saved = sessionStorage.getItem('global_endDate');
+    return saved ? new Date(saved) : new Date();
+  });
 
-  // Save filter dates to session storage whenever they change
   useEffect(() => {
-    if (filterStartDate) sessionStorage.setItem('pm_filter_start', filterStartDate.toISOString());
-  }, [filterStartDate]);
+    if (filterStartDate) sessionStorage.setItem('global_startDate', filterStartDate.toISOString());
+    if (filterEndDate) sessionStorage.setItem('global_endDate', filterEndDate.toISOString());
+  }, [filterStartDate, filterEndDate]);
 
+  // रीयल-टाइम डेटाबेस लिसनर
   useEffect(() => {
-    if (filterEndDate) sessionStorage.setItem('pm_filter_end', filterEndDate.toISOString());
-  }, [filterEndDate]);
+    const channel = supabase
+      .channel('purchasemanager-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'traders' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setRefreshTrigger(prev => prev + 1))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Modal States for Transaction Editing
   const [isEditTxModalOpen, setIsEditTxModalOpen] = useState(false);
@@ -75,7 +82,6 @@ export default function PurchaseManager() {
     name: ''
   });
   
-  // LOGIC: Memory Management for Entry Form Date Persistence
   const savedFormDate = localStorage.getItem('purchaseManagerDate');
   const initialFormDate = savedFormDate ? savedFormDate : new Date().toISOString().split('T')[0];
 
@@ -99,7 +105,6 @@ export default function PurchaseManager() {
     return `${day}/${month}/${year}`;
   };
 
-  // Custom handler to update Entry Form Date AND save to browser memory
   const handleEntryDateChange = (date) => {
     const formattedDBDate = formatForDB(date);
     setLedgerForm({ ...ledgerForm, date: formattedDBDate });
@@ -119,7 +124,7 @@ export default function PurchaseManager() {
     setLoading(false);
   }, [selectedTraderId]);
 
-  // Fetch Chronological Account Ledger for selected Trader & Apply Date Filters
+  // Fetch Chronological Account Ledger
   const fetchTraderLedger = useCallback(async () => {
     if (!selectedTraderId || !filterStartDate || !filterEndDate) return;
     setLoading(true);
@@ -131,7 +136,7 @@ export default function PurchaseManager() {
       .from('trader_transactions')
       .select('*')
       .eq('trader_id', selectedTraderId)
-      .lte('date', endStr) // Fetch up to end date to calculate precise running balance
+      .lte('date', endStr) 
       .order('date', { ascending: true })
       .order('created_at', { ascending: true });
 
@@ -143,14 +148,12 @@ export default function PurchaseManager() {
         const pAmt = parseFloat(tx.purchase_amount) || 0;
         const paidAmt = parseFloat(tx.paid_amount) || 0;
         
-        // Calculate running balance
         if (tx.manual_remaining !== null && tx.manual_remaining !== undefined) {
           currentRemaining = parseFloat(tx.manual_remaining);
         } else {
           currentRemaining = currentRemaining + pAmt - paidAmt;
         }
 
-        // Only push to array if it is greater than or equal to start date filter
         if (tx.date >= startStr) {
           computedLedger.push({
             id: tx.id,
@@ -168,17 +171,30 @@ export default function PurchaseManager() {
     setLoading(false);
   }, [selectedTraderId, filterStartDate, filterEndDate]);
 
+  // Settle synchronous setState executions via Deferred Microtask Wrappers
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchTraders();
-  }, [fetchTraders]);
+    let isMounted = true;
+    const executeFetch = async () => {
+      await Promise.resolve();
+      if (isMounted) {
+        fetchTraders();
+      }
+    };
+    executeFetch();
+    return () => { isMounted = false; };
+  }, [fetchTraders, refreshTrigger]);
 
   useEffect(() => {
-    if (selectedTraderId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchTraderLedger();
-    }
-  }, [selectedTraderId, fetchTraderLedger]);
+    let isMounted = true;
+    const executeFetch = async () => {
+      await Promise.resolve();
+      if (isMounted && selectedTraderId) {
+        fetchTraderLedger();
+      }
+    };
+    executeFetch();
+    return () => { isMounted = false; };
+  }, [selectedTraderId, fetchTraderLedger, refreshTrigger]);
 
   // Add New Trader Action
   const handleAddTrader = async (e) => {
@@ -193,7 +209,7 @@ export default function PurchaseManager() {
       alert("Error: " + error.message);
     } else {
       setTraderForm({ name: '' });
-      fetchTraders();
+      setRefreshTrigger(prev => prev + 1);
     }
     setIsSubmitting(false);
   };
@@ -218,9 +234,8 @@ export default function PurchaseManager() {
     if (error) {
       alert("Error: " + error.message);
     } else {
-      // Keeps the date as selected in memory, clears amounts
       setLedgerForm({ ...ledgerForm, purchaseAmount: '', paidAmount: '', manualRemaining: '' });
-      fetchTraderLedger();
+      setRefreshTrigger(prev => prev + 1);
     }
     setIsSubmitting(false);
   };
@@ -239,7 +254,7 @@ export default function PurchaseManager() {
     if (error) {
       alert("Error deleting transaction: " + error.message);
     } else {
-      fetchTraderLedger(); 
+      setRefreshTrigger(prev => prev + 1);
     }
     setIsSubmitting(false);
   };
@@ -279,13 +294,12 @@ export default function PurchaseManager() {
       alert("Error updating ledger entry: " + error.message);
     } else {
       setIsEditTxModalOpen(false);
-      fetchTraderLedger();
+      setRefreshTrigger(prev => prev + 1);
     }
     
     setIsSubmitting(false);
   };
 
-  // --- CALCULATE TOTALS ---
   const totalPurchase = ledgerRows.reduce((sum, row) => sum + row.purchase_amount, 0);
   const totalPaid = ledgerRows.reduce((sum, row) => sum + row.paid_amount, 0);
   const finalRemainingBalance = ledgerRows.length > 0 ? ledgerRows[ledgerRows.length - 1].remaining_amount : 0;
@@ -354,12 +368,14 @@ export default function PurchaseManager() {
         
         <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 w-fit">
           <button 
+            type="button"
             onClick={() => setActiveTab('ledger')}
             className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-300 ${activeTab === 'ledger' ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
           >
             <ArrowRightLeft size={16} /> Account Ledger
           </button>
           <button 
+            type="button"
             onClick={() => setActiveTab('traders')}
             className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-300 ${activeTab === 'traders' ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
           >
@@ -415,7 +431,7 @@ export default function PurchaseManager() {
 
               <div className="border-t border-dashed border-slate-200 dark:border-slate-800 pt-3">
                 <label className="block text-xs font-bold text-indigo-500 dark:text-indigo-400 uppercase tracking-wider mb-1.5">Direct Remaining Amount (₹) <span className="text-slate-400 font-normal text-[10px]">(Optional)</span></label>
-                <input type="number" min="0" value={ledgerForm.manualRemaining} onChange={(e) => setLedgerForm({ ...ledgerForm, manualRemaining: e.target.value })} className={`${inputClass} border-indigo-200 dark:border-indigo-900/60 focus:ring-indigo-500`} placeholder="Set custom balance" />
+                <input type="number" min="0" value={ledgerForm.manualRemaining} onChange={(e) => setLedgerForm({ ...ledgerForm, manualRemaining: e.target.value })} className={`${inputClass} border-indigo-200 dark:indigo-900/60 focus:ring-indigo-500`} placeholder="Set custom balance" />
               </div>
 
               <button type="submit" disabled={isSubmitting || !selectedTraderId} className="w-full mt-2 bg-blue-600 text-white font-medium py-2.5 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 disabled:opacity-50 flex justify-center items-center gap-2 shadow-sm">
@@ -495,6 +511,7 @@ export default function PurchaseManager() {
                         <td className="px-4 py-4 text-center">
                           <div className="flex items-center justify-center gap-2">
                             <button 
+                              type="button"
                               onClick={() => handleEditTxClick(row)}
                               title="Edit Entry" 
                               className="p-1.5 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors outline-none"
@@ -502,6 +519,7 @@ export default function PurchaseManager() {
                               <Edit2 size={16} />
                             </button>
                             <button 
+                              type="button"
                               onClick={() => handleDeleteTx(row.id)}
                               title="Delete Entry" 
                               className="p-1.5 text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors outline-none"
@@ -552,7 +570,7 @@ export default function PurchaseManager() {
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Edit2 size={18} className="text-blue-500" /> Edit Ledger Entry
               </h3>
-              <button onClick={() => setIsEditTxModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 outline-none"><X size={20} /></button>
+              <button type="button" onClick={() => setIsEditTxModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 outline-none"><X size={20} /></button>
             </div>
             
             <form onSubmit={handleEditTxSubmit} className="p-5 space-y-4">

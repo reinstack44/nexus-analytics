@@ -9,6 +9,20 @@ export default function BrandMaster() {
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Realtime Database sync channel
+  useEffect(() => {
+    const channel = supabase
+      .channel('brandmaster-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brand_price_history' }, () => setRefreshTrigger(prev => prev + 1))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -69,9 +83,17 @@ export default function BrandMaster() {
         setLoading(false);
       }
     };
-    loadInitialBrands();
+    
+    const executeFetch = async () => {
+      await Promise.resolve();
+      if (isMounted) {
+        loadInitialBrands();
+      }
+    };
+    executeFetch();
+
     return () => { isMounted = false; };
-  }, []);
+  }, [refreshTrigger]);
 
   // Derived Stats
   const categoriesCount = useMemo(() => new Set(brands.map(b => b.category)).size, [brands]);

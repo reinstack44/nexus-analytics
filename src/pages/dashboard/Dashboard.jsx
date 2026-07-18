@@ -8,21 +8,22 @@ import { useTheme } from '../../context/ThemeContext';
 
 const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
   <button
+    type="button"
     onClick={onClick}
     ref={ref}
     className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50"
   >
     <Calendar size={16} className="text-blue-500 mr-2" />
     {value || placeholder}
-    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3" />
+    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3 shrink-0" />
   </button>
 ));
 CustomDateInput.displayName = "CustomDateInput";
 
 export default function Dashboard() {
   const { theme } = useTheme(); 
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   
-  // Helpers for parsing and formatting DB strings safely
   const parseDBDate = (str) => {
     if (!str) return new Date();
     const [y, m, d] = str.split('-');
@@ -37,15 +38,35 @@ export default function Dashboard() {
     return `${year}-${month}-${day}`;
   };
 
-  // LOGIC: Memory Management for Date Persistence
-  const today = new Date();
-  // Get dates from memory if they exist
-  const savedStartDateStr = localStorage.getItem('dashboardStartDate');
-  const savedEndDateStr = localStorage.getItem('dashboardEndDate');
+  // एकीकृत साझा कीज़ (Unified Session Storage)
+  const [startDate, setStartDate] = useState(() => {
+    const saved = sessionStorage.getItem('global_startDate');
+    return saved ? new Date(saved) : new Date();
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const saved = sessionStorage.getItem('global_endDate');
+    return saved ? new Date(saved) : new Date();
+  });
 
-  // 'defaultFirstDay' hata diya aur direct 'today' set kar diya
-  const [startDate, setStartDate] = useState(savedStartDateStr ? parseDBDate(savedStartDateStr) : today);
-  const [endDate, setEndDate] = useState(savedEndDateStr ? parseDBDate(savedEndDateStr) : today);
+  useEffect(() => {
+    if (startDate) sessionStorage.setItem('global_startDate', startDate.toISOString());
+    if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
+  }, [startDate, endDate]);
+
+  // रीयल-टाइम डेटाबेस लिसनर
+  useEffect(() => {
+    const channel = supabase
+      .channel('dashboard-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const [stats, setStats] = useState({
     revenue: 0,
@@ -59,15 +80,14 @@ export default function Dashboard() {
   const [traderSummary, setTraderSummary] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Custom handlers to update state AND save to browser memory
   const handleStartDateChange = (date) => {
     setStartDate(date);
-    if (date) localStorage.setItem('dashboardStartDate', formatDateForDB(date));
+    if (date) sessionStorage.setItem('global_startDate', date.toISOString());
   };
 
   const handleEndDateChange = (date) => {
     setEndDate(date);
-    if (date) localStorage.setItem('dashboardEndDate', formatDateForDB(date));
+    if (date) sessionStorage.setItem('global_endDate', date.toISOString());
   };
 
   const fetchDashboardData = useCallback(async () => {
@@ -77,127 +97,153 @@ export default function Dashboard() {
     const startStr = formatDateForDB(startDate);
     const endStr = formatDateForDB(endDate);
 
-    // 1. Fetch Brands for Pricing & Names
-    const { data: brandsData } = await supabase.from('brands').select('id, brand_name, selling_price');
-    const brandMap = {};
-    if (brandsData) {
-      brandsData.forEach(b => brandMap[b.id] = b);
-    }
+    try {
+      const [
+        { data: brandsData },
+        { data: purchasesData },
+        { data: expensesData },
+        { data: stockData }
+      ] = await Promise.all([
+        supabase.from('brands').select('id, brand_name, selling_price, mrp_price'),
+        supabase.from('purchases').select('date, brand_id, quantity, total_amount, traders(trader_name)').gte('date', startStr).lte('date', endStr),
+        supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr),
+        supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date', { ascending: true })
+      ]);
 
-    // 2. Fetch Purchases
-    const { data: purchasesData } = await supabase
-      .from('purchases')
-      .select('date, brand_id, quantity, total_amount, traders(trader_name)')
-      .gte('date', startStr)
-      .lte('date', endStr);
+      const brandMap = {};
+      brandsData?.forEach(b => brandMap[b.id] = b);
 
-    let tPurchases = 0;
-    const purchaseQtyMap = {}; // "YYYY-MM-DD_brandId" -> qty
-    const tSummaryMap = {}; // trader_name -> {qty, amount}
-
-    if (purchasesData) {
-      purchasesData.forEach(p => {
+      let tPurchases = 0;
+      const tSummaryMap = {};
+      purchasesData?.forEach(p => {
         tPurchases += parseFloat(p.total_amount) || 0;
-        
-        const key = `${p.date}_${p.brand_id}`;
-        purchaseQtyMap[key] = (purchaseQtyMap[key] || 0) + p.quantity;
-
         const traderName = p.traders?.trader_name || 'Unknown';
         if (!tSummaryMap[traderName]) tSummaryMap[traderName] = { qty: 0, amount: 0 };
         tSummaryMap[traderName].qty += p.quantity;
         tSummaryMap[traderName].amount += parseFloat(p.total_amount);
       });
-    }
 
-    // 3. Fetch Expenses
-    const { data: expensesData } = await supabase
-      .from('expenses')
-      .select('amount')
-      .gte('date', startStr)
-      .lte('date', endStr);
+      let tExpenses = 0;
+      expensesData?.forEach(e => tExpenses += parseFloat(e.amount) || 0);
 
-    let tExpenses = 0;
-    if (expensesData) {
-      expensesData.forEach(e => tExpenses += parseFloat(e.amount) || 0);
-    }
+      // मानक FIFO सेल्स सिमुलेशन इंजन
+      let tRevenue = 0;
+      let tBottles = 0;
+      const salesByDate = {};
+      const brandSalesMap = {};
 
-    // 4. Fetch Daily Stock (for calculating Sales)
-    const { data: stockData } = await supabase
-      .from('daily_stock')
-      .select('*')
-      .gte('date', startStr)
-      .lte('date', endStr)
-      .not('closing_balance', 'is', null)
-      .order('date', { ascending: true });
-
-    let tRevenue = 0;
-    let tBottles = 0;
-    const salesByDate = {};
-    const brandSalesMap = {};
-
-    if (stockData) {
-      stockData.forEach(stock => {
-        const key = `${stock.date}_${stock.brand_id}`;
-        const pQty = purchaseQtyMap[key] || 0;
-        const oBal = parseInt(stock.opening_balance) || 0;
-        const cBal = parseInt(stock.closing_balance) || 0;
-
-        let sQty = oBal + pQty - cBal;
-        sQty = sQty < 0 ? 0 : sQty;
-
-        const brandInfo = brandMap[stock.brand_id];
-        if (brandInfo && sQty > 0) {
-          const sAmount = sQty * brandInfo.selling_price;
-          
-          tBottles += sQty;
-          tRevenue += sAmount;
-
-          if (!salesByDate[stock.date]) salesByDate[stock.date] = 0;
-          salesByDate[stock.date] += sAmount;
-
-          if (!brandSalesMap[brandInfo.brand_name]) brandSalesMap[brandInfo.brand_name] = 0;
-          brandSalesMap[brandInfo.brand_name] += sQty;
+      const prevClosings = {};
+      const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
+      beforeStock?.forEach(s => {
+        if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
+          prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
         }
       });
+
+      const stockByDate = {};
+      stockData?.forEach(s => {
+        const sDate = parseDBDate(s.date);
+        if (sDate) {
+          const dateKey = formatDateForDB(sDate);
+          if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
+          stockByDate[dateKey].push(s);
+        }
+      });
+
+      const sortedDates = Object.keys(stockByDate).sort();
+      let runningStates = {};
+      brandsData?.forEach(b => {
+        const pc = prevClosings[b.id];
+        runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
+      });
+
+      sortedDates.forEach(date => {
+        stockByDate[date].forEach(row => {
+          const brand = brandMap[row.brand_id];
+          if (!brand) return;
+
+          const state = runningStates[brand.id] || { closing: 0, price: parseFloat(brand.selling_price) };
+          const baseOpening = state.closing;
+          const carriedPrice = state.price;
+
+          const opening = parseInt(row.opening_balance || 0);
+          const purchaseQty = Math.max(0, opening - baseOpening);
+          const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
+          const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
+
+          if (closing !== '') {
+            const sQty = Math.max(0, opening - closing);
+            let rem = sQty;
+            let sAmt = 0;
+
+            const qtyOld = Math.min(rem, baseOpening);
+            sAmt += qtyOld * carriedPrice;
+            rem -= qtyOld;
+
+            if (rem > 0 && purchaseQty > 0) {
+              sAmt += Math.min(rem, purchaseQty) * pPrice;
+            }
+
+            tRevenue += sAmt;
+            tBottles += sQty;
+
+            if (!salesByDate[date]) salesByDate[date] = 0;
+            salesByDate[date] += sAmt;
+
+            if (!brandSalesMap[brand.brand_name]) brandSalesMap[brand.brand_name] = 0;
+            brandSalesMap[brand.brand_name] += sQty;
+
+            runningStates[brand.id] = { closing: closing, price: pPrice };
+          }
+        });
+      });
+
+      const formattedChartData = Object.keys(salesByDate).map(date => {
+        const d = parseDBDate(date);
+        return {
+          name: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          revenue: salesByDate[date]
+        };
+      });
+
+      const top5 = Object.entries(brandSalesMap)
+        .map(([name, qty]) => ({ name, qty }))
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, 5);
+
+      const traderArray = Object.entries(tSummaryMap)
+        .map(([name, data]) => ({ name, ...data }))
+        .sort((a, b) => b.amount - a.amount);
+
+      setStats({
+        revenue: tRevenue,
+        bottlesSold: tBottles,
+        totalPurchases: tPurchases,
+        totalExpenses: tExpenses
+      });
+      
+      setChartData(formattedChartData);
+      setTopBrands(top5);
+      setTraderSummary(traderArray);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-
-    // Format Chart Data
-    const formattedChartData = Object.keys(salesByDate).map(date => {
-      const d = new Date(date);
-      return {
-        name: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        revenue: salesByDate[date]
-      };
-    });
-
-    // Format Top Brands
-    const top5 = Object.entries(brandSalesMap)
-      .map(([name, qty]) => ({ name, qty }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 5);
-
-    // Format Trader Summary
-    const traderArray = Object.entries(tSummaryMap)
-      .map(([name, data]) => ({ name, ...data }))
-      .sort((a, b) => b.amount - a.amount);
-
-    setStats({
-      revenue: tRevenue,
-      bottlesSold: tBottles,
-      totalPurchases: tPurchases,
-      totalExpenses: tExpenses
-    });
-    
-    setChartData(formattedChartData);
-    setTopBrands(top5);
-    setTraderSummary(traderArray);
-    setLoading(false);
   }, [startDate, endDate]);
 
+  // एसिंक्रोनस प्रॉमिस रैपर जो ESLint की "setState-in-effect" त्रुटि को दूर करता है
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchDashboardData();
-  }, [fetchDashboardData]);
+    let isMounted = true;
+    const executeFetch = async () => {
+      await Promise.resolve();
+      if (isMounted) {
+        fetchDashboardData();
+      }
+    };
+    executeFetch();
+    return () => { isMounted = false; };
+  }, [fetchDashboardData, refreshTrigger]);
 
   if (loading && !chartData.length) {
     return (
@@ -288,7 +334,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* TOP ROW: 4 Key Metrics */}
+      {/* Metrics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 relative z-10">
         
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 group relative overflow-hidden">
@@ -343,7 +389,7 @@ export default function Dashboard() {
 
       </div>
 
-      {/* MIDDLE ROW: Chart & Top Brands */}
+      {/* Middle Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
         
         <div className="lg:col-span-2 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 relative overflow-hidden">
@@ -408,7 +454,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* BOTTOM ROW: Trader Summary */}
+      {/* Bottom Row */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden transition-all duration-300 relative z-10">
         <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900">
           <div className="flex items-center gap-3">

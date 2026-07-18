@@ -40,19 +40,19 @@ export default function DailyStock() {
   const [refreshTrigger, setRefreshTrigger] = useState(0); 
   const [firstEverDate, setFirstEverDate] = useState(null);
 
-  // --- SMART DATE RANGE STATE ---
+  // एकीकृत साझा कीज़ (Unified Session Storage)
   const [startDate, setStartDate] = useState(() => {
-    const saved = sessionStorage.getItem('ds_startDate');
+    const saved = sessionStorage.getItem('global_startDate');
     return saved ? new Date(saved) : new Date();
   });
   const [endDate, setEndDate] = useState(() => {
-    const saved = sessionStorage.getItem('ds_endDate');
+    const saved = sessionStorage.getItem('global_endDate');
     return saved ? new Date(saved) : new Date();
   });
 
   useEffect(() => {
-    if (startDate) sessionStorage.setItem('ds_startDate', startDate.toISOString());
-    if (endDate) sessionStorage.setItem('ds_endDate', endDate.toISOString());
+    if (startDate) sessionStorage.setItem('global_startDate', startDate.toISOString());
+    if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
   }, [startDate, endDate]);
 
   const [stockRows, setStockRows] = useState([]);
@@ -82,12 +82,27 @@ export default function DailyStock() {
   const [markedHolidays, setMarkedHolidays] = useState([]);
   const [filledDates, setFilledDates] = useState([]);
 
+  // रीयल-टाइम लिसनर
+  useEffect(() => {
+    const channel = supabase
+      .channel('dailystock-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     const fetchCloudPreferences = async () => {
       if (!user) return;
       const { data: holidayData } = await supabase.from('holidays').select('date').eq('user_id', user.id);
-      const { data: filledData } = await supabase.from('daily_stock').select('date').not('closing_balance', 'is', null);
+      const { data: filledData } = await supabase.from('daily_stock').select('date').eq('user_id', user.id).not('closing_balance', 'is', null);
       
       if (isMounted) {
         if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
@@ -173,7 +188,7 @@ export default function DailyStock() {
 
   // --- AUTO EXPAND EFFECT ON LOAD/UPDATE ---
   useEffect(() => {
-    if (customRangeMode) return; // Bypass if custom range view mode is active
+    if (customRangeMode) return; 
     if (filledDates.length > 0 && startDate) {
       const range = findFilledRangeOfDate(startDate);
       if (range) {
@@ -274,7 +289,6 @@ export default function DailyStock() {
       const startStr = formatDateForDB(startDate);
       const endStr = endDate ? formatDateForDB(endDate) : startStr;
 
-      // 1. STRICT PROPAGATION: Find EXACT Previous Working Day
       let targetPrevDate = new Date(startDate);
       targetPrevDate.setDate(targetPrevDate.getDate() - 1);
       while (markedHolidays.includes(formatDateForDB(targetPrevDate))) {
@@ -282,7 +296,6 @@ export default function DailyStock() {
       }
       const prevDateStr = formatDateForDB(targetPrevDate);
 
-      // 2. CHECK PIPELINE INTEGRITY (Only active in Reconcile Mode)
       if (!customRangeMode) {
         const { data: earliestRecord } = await supabase.from('daily_stock').select('date').order('date', {ascending: true}).limit(1);
         const firstEverDateStr = earliestRecord?.[0]?.date;
@@ -298,19 +311,21 @@ export default function DailyStock() {
         }
       }
 
-      // Fetch consolidated range data
+      // Look-back algorithm: ऐतिहासिक रूप से पिछली सबसे हालिया गैर-शून्य सक्रिय बैच कीमतें फ़ेच करना (User ID Filter Added)
       const [
         { data: brandsData },
         { data: rangeStockData },
         { data: prevStockData },
         { data: expData },
-        { data: collData }
+        { data: collData },
+        { data: historicalStockData }
       ] = await Promise.all([
         supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
-        supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr).order('date', { ascending: true }),
-        supabase.from('daily_stock').select('*').eq('date', prevDateStr),
-        supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr),
-        supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr)
+        supabase.from('daily_stock').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr).order('date', { ascending: true }),
+        supabase.from('daily_stock').select('*').eq('user_id', user.id).eq('date', prevDateStr),
+        supabase.from('expenses').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
+        supabase.from('owner_withdrawals').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
+        supabase.from('daily_stock').select('brand_id, date, unit_price, unit_mrp').eq('user_id', user.id).lt('date', startStr).order('date', { ascending: false })
       ]);
 
       if (!isMounted) return;
@@ -318,11 +333,29 @@ export default function DailyStock() {
       let tExp = 0; if (expData) expData.forEach(e => tExp += parseFloat(e.amount));
       let tColl = 0; if (collData) collData.forEach(c => tColl += parseFloat(c.amount));
 
+      // इन-मेमोरी "लास्ट एक्टिव बैच प्राइस" मैप बनाना (Independent Backwards Scan for Price & MRP)
+      const lastActivePrices = {};
+      historicalStockData?.forEach(record => {
+        if (!lastActivePrices[record.brand_id]) {
+          lastActivePrices[record.brand_id] = { unit_price: null, unit_mrp: null };
+        }
+        
+        const uPrice = parseFloat(record.unit_price) || 0;
+        const uMrp = parseFloat(record.unit_mrp) || 0;
+        
+        // MRP aur Price dono tab tak pichhe scan honge jab tak > 0 value nahi milti
+        if (uPrice > 0 && lastActivePrices[record.brand_id].unit_price === null) {
+          lastActivePrices[record.brand_id].unit_price = uPrice;
+        }
+        if (uMrp > 0 && lastActivePrices[record.brand_id].unit_mrp === null) {
+          lastActivePrices[record.brand_id].unit_mrp = uMrp;
+        }
+      });
+
       if (brandsData) {
         const prevStockMap = {};
         prevStockData?.forEach(s => prevStockMap[s.brand_id] = s);
 
-        // Group range stock records by brand ID
         const stockByBrandAndDate = {};
         rangeStockData?.forEach(s => {
           if (!stockByBrandAndDate[s.brand_id]) stockByBrandAndDate[s.brand_id] = [];
@@ -338,13 +371,19 @@ export default function DailyStock() {
           const prevStock = prevStockMap[brand.id];
 
           let baseOpening = 0;
+          if (prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
+            baseOpening = prevStock.closing_balance;
+          }
+
+          // डिफॉल्ट मास्टर रेट
           let carriedPrice = parseFloat(brand.selling_price);
           let carriedMrp = parseFloat(brand.mrp_price || 0);
 
-          if (prevStock && prevStock.closing_balance !== null && prevStock.closing_balance !== undefined) {
-            baseOpening = prevStock.closing_balance;
-            if (prevStock.unit_price) carriedPrice = parseFloat(prevStock.unit_price);
-            if (prevStock.unit_mrp) carriedMrp = parseFloat(prevStock.unit_mrp);
+          // ऐतिहासिक रीयल-टाइम एक्टिव परचेज़ मूल्य ओवरराइड
+          const lastActive = lastActivePrices[brand.id];
+          if (lastActive) {
+            if (lastActive.unit_price !== null && lastActive.unit_price > 0) carriedPrice = lastActive.unit_price;
+            if (lastActive.unit_mrp !== null && lastActive.unit_mrp > 0) carriedMrp = lastActive.unit_mrp;
           }
 
           let totalPurchasesQty = 0;
@@ -357,12 +396,11 @@ export default function DailyStock() {
           let rangeSalesAmt = 0;
           let rangeSalesMrpAmt = 0;
 
-          // Day by day timeline math to calculate absolute FIFO over any custom range
           brandLogs.forEach(log => {
             const opBal = parseInt(log.opening_balance) || 0;
             const clBal = log.closing_balance !== null ? parseInt(log.closing_balance) : null;
-            const dayUnitPrice = log.unit_price ? parseFloat(log.unit_price) : latestUnitPrice;
-            const dayUnitMrp = log.unit_mrp ? parseFloat(log.unit_mrp) : latestUnitMrp;
+            const dayUnitPrice = (log.unit_price !== undefined && log.unit_price !== null && parseFloat(log.unit_price) !== 0) ? parseFloat(log.unit_price) : latestUnitPrice;
+            const dayUnitMrp = (log.unit_mrp !== undefined && log.unit_mrp !== null && parseFloat(log.unit_mrp) !== 0) ? parseFloat(log.unit_mrp) : latestUnitMrp;
 
             const dailyPurchase = Math.max(0, opBal - currentPrevClosing);
             totalPurchasesQty += dailyPurchase;
@@ -436,8 +474,8 @@ export default function DailyStock() {
 
   const fetchPopupData = async (dateToFetch) => {
     const dateStr = formatDateForDB(dateToFetch);
-    const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
-    const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('date', dateStr).order('created_at', { ascending: false });
+    const { data: expData } = await supabase.from('expenses').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
+    const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
     if (expData) setExpenses(expData);
     if (collData) setCollections(collData);
   };
@@ -448,8 +486,8 @@ export default function DailyStock() {
       if (!isBankDepositOpen) return;
       const dateToFetch = popupTab === 'expense' ? expenseForm.date : collectionForm.date;
       const dateStr = formatDateForDB(dateToFetch);
-      const { data: expData } = await supabase.from('expenses').select('*').eq('date', dateStr).order('created_at', { ascending: false });
-      const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('date', dateStr).order('created_at', { ascending: false });
+      const { data: expData } = await supabase.from('expenses').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
+      const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
       if (isMounted) {
         if (expData) setExpenses(expData);
         if (collData) setCollections(collData);
@@ -457,7 +495,7 @@ export default function DailyStock() {
     };
     loadData();
     return () => { isMounted = false; };
-  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date]);
+  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date, user.id]);
 
   // --- FIFO CALCULATION ENGINE ---
   const recalculateRow = (row) => {
@@ -642,18 +680,51 @@ export default function DailyStock() {
     setSaveMessage(null);
     const endStr = formatDateForDB(endDate || startDate);
 
+    // Absolute Latest Pricing Logic (Strict Carry Forward)
     const upsertData = stockRows.map(row => ({
       user_id: user.id, date: endStr, brand_id: row.brand_id,
       opening_balance: parseInt(row.opening_balance) || 0,
       closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
-      unit_price: parseFloat(row.purchase_price) || 0,
-      unit_mrp: parseFloat(row.purchase_mrp) || 0
+      unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
+      unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
     }));
 
     const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
     if (error) {
       setAlertModal({ isOpen: true, title: "Database Error", message: "Failed to save stock: " + error.message });
     } else {
+      // Live Sync Latest Prices back to Brand Master Catalog & Price History
+      try {
+        const brandUpdates = stockRows.map(async (row) => {
+          const activePrice = parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0;
+          const activeMrp = parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0;
+          
+          if ((activePrice > 0 && activePrice !== parseFloat(row.selling_price)) || 
+              (activeMrp > 0 && activeMrp !== parseFloat(row.mrp_price))) {
+            
+            // Update master brands table
+            await supabase
+              .from('brands')
+              .update({ selling_price: activePrice, mrp_price: activeMrp })
+              .eq('id', row.brand_id);
+
+            // Add log entry to brand price history
+            if (activePrice !== parseFloat(row.selling_price)) {
+              await supabase.from('brand_price_history').insert([{
+                brand_id: row.brand_id,
+                user_id: user.id,
+                old_price: parseFloat(row.selling_price),
+                new_price: activePrice,
+                effective_date: endStr
+              }]);
+            }
+          }
+        });
+        await Promise.all(brandUpdates);
+      } catch (syncErr) {
+        console.error("Brand Price Live Sync Error:", syncErr);
+      }
+
       setSaveMessage({ type: 'success', text: `Stock ledger saved successfully for the period!` });
       setTimeout(() => setSaveMessage(null), 3000);
       setRefreshTrigger(prev => prev + 1);
@@ -837,7 +908,7 @@ export default function DailyStock() {
         .dark .react-datepicker__month-container { background-color: #1e293b !important; }
         .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
         .dark .react-datepicker__day-name { color: #94a3b8 !important; }
-        .dark .react-datepicker__day { color: #e2e8f0 !important; }
+        .dark .react-datepicker__day { color: #cbd5e1 !important; }
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--selected { background-color: #3b82f6 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--highlighted-holiday { background-color: #ea580c !important; color: #ffffff !important; }
@@ -1075,14 +1146,14 @@ export default function DailyStock() {
                           <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center flex-wrap gap-1">
                             <span>{row.bottle_size} |</span>
-                            {row.purchase_qty > 0 && (row.purchase_price !== row.carried_price || row.purchase_mrp !== row.carried_mrp) ? (
+                            {row.purchase_qty > 0 ? (
                               <span className="inline-flex items-center gap-1.5 ml-1 flex-wrap">
                                 <span>Old: {row.base_opening} (MRP: ₹{row.carried_mrp} | Sale: ₹{row.carried_price})</span>
                                 <span className="text-slate-300 dark:text-slate-600">•</span>
                                 <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} (MRP: ₹{row.purchase_mrp} | Sale: ₹{row.purchase_price})</span>
                               </span>
                             ) : (
-                              <span className="ml-1">MRP: ₹{row.carried_mrp} | Base: ₹{row.carried_price}</span>
+                              <span className="ml-1">MRP: ₹{row.purchase_mrp || row.carried_mrp || row.mrp_price} | Sale: ₹{row.purchase_price || row.carried_price || row.selling_price}</span>
                             )}
                           </div>
                         </td>
@@ -1185,151 +1256,151 @@ export default function DailyStock() {
       )}
 
       {/* --- ADD PURCHASE MODAL (FIFO ENGINE) --- */}
-{purchaseModal.isOpen && (
-  <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" style={{ zIndex: 90000 }}>
-    <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
-      
-      {/* Header (Responsive spacing) */}
-      <div className="flex justify-between items-center px-5 py-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 shrink-0">
-        <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-          <Package size={20} className="text-blue-500" /> Record New Purchase
-        </h3>
-        <button 
-          type="button"
-          onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false })} 
-          className="p-1.5 sm:p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"
-        >
-          <X size={18} />
-        </button>
-      </div>
-      
-      {/* Scrollable Form Body (Ensures accessibility on smaller screens/keyboards) */}
-      <form onSubmit={handlePurchaseSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 sm:space-y-5 custom-scrollbar">
-        
-        <div className="bg-blue-50 dark:bg-blue-900/20 p-3.5 sm:p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
-          <h4 className="font-bold text-slate-800 dark:text-slate-100 text-base sm:text-lg">{purchaseModal.brand?.brand_name}</h4>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">{purchaseModal.brand?.bottle_size} • Base MRP: ₹{purchaseModal.brand?.carried_mrp} • Base Sale: ₹{purchaseModal.brand?.carried_price}</p>
-        </div>
-
-        <div>
-          <label className="block text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">New Quantity Added</label>
-          <input 
-            type="number" 
-            required min="0" 
-            value={purchaseModal.qty} 
-            onChange={(e) => setPurchaseModal({...purchaseModal, qty: e.target.value})} 
-            className={inputClass} 
-            placeholder="e.g., 240" 
-            autoFocus
-          />
-        </div>
-
-        {/* MRP CHANGE SECTION */}
-        <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-          <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there an MRP change for this new stock?</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
-              <input 
-                type="radio" 
-                name="mrpChange" 
-                checked={!purchaseModal.isMrpChanged} 
-                onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: false, mrp: purchaseModal.brand.carried_mrp})} 
-                className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
-              />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">No (₹{purchaseModal.brand?.carried_mrp})</span>
-            </label>
-            <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
-              <input 
-                type="radio" 
-                name="mrpChange" 
-                checked={purchaseModal.isMrpChanged} 
-                onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: true})} 
-                className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
-              />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different MRP</span>
-            </label>
-          </div>
-        </div>
-
-        {purchaseModal.isMrpChanged && (
-          <div className="animate-in fade-in slide-in-from-top-2 pt-1">
-            <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-              <span>New MRP Price (₹)</span>
-              <span className="text-[9px] text-purple-500 bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
-              <input 
-                type="number" 
-                required min="0" step="any" 
-                value={purchaseModal.mrp} 
-                onChange={(e) => setPurchaseModal({...purchaseModal, mrp: e.target.value})} 
-                className={`${inputClass} pl-8.5 font-bold border-purple-300 dark:border-purple-800 focus:ring-purple-500`} 
-              />
+      {purchaseModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" style={{ zIndex: 90000 }}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
+            
+            {/* Header (Responsive spacing) */}
+            <div className="flex justify-between items-center px-5 py-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 shrink-0">
+              <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Package size={20} className="text-blue-500" /> Record New Purchase
+              </h3>
+              <button 
+                type="button"
+                onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false })} 
+                className="p-1.5 sm:p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"
+              >
+                <X size={18} />
+              </button>
             </div>
-          </div>
-        )}
+            
+            {/* Scrollable Form Body */}
+            <form onSubmit={handlePurchaseSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 sm:space-y-5 custom-scrollbar">
+              
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-3.5 sm:p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-base sm:text-lg">{purchaseModal.brand?.brand_name}</h4>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">{purchaseModal.brand?.bottle_size} • Base MRP: ₹{purchaseModal.brand?.carried_mrp} • Base Sale: ₹{purchaseModal.brand?.carried_price}</p>
+              </div>
 
-        {/* SELLING PRICE CHANGE SECTION */}
-        <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-          <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there a sale price change for this new stock?</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
-              <input 
-                type="radio" 
-                name="priceChange" 
-                checked={!purchaseModal.isPriceChanged} 
-                onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: false, price: purchaseModal.brand.carried_price})} 
-                className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
-              />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">No (₹{purchaseModal.brand?.carried_price})</span>
-            </label>
-            <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
-              <input 
-                type="radio" 
-                name="priceChange" 
-                checked={purchaseModal.isPriceChanged} 
-                onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: true})} 
-                className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
-              />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different price</span>
-            </label>
+              <div>
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">New Quantity Added</label>
+                <input 
+                  type="number" 
+                  required min="0" 
+                  value={purchaseModal.qty} 
+                  onChange={(e) => setPurchaseModal({...purchaseModal, qty: e.target.value})} 
+                  className={inputClass} 
+                  placeholder="e.g., 240" 
+                  autoFocus
+                />
+              </div>
+
+              {/* MRP CHANGE SECTION */}
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there an MRP change for this new stock?</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="mrpChange" 
+                      checked={!purchaseModal.isMrpChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: false, mrp: purchaseModal.brand.carried_mrp || purchaseModal.brand.mrp_price})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
+                    />
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">No (₹{purchaseModal.brand?.carried_mrp || purchaseModal.brand?.mrp_price})</span>
+                  </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="mrpChange" 
+                      checked={purchaseModal.isMrpChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: true})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
+                    />
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different MRP</span>
+                  </label>
+                </div>
+              </div>
+
+              {purchaseModal.isMrpChanged && (
+                <div className="animate-in fade-in slide-in-from-top-2 pt-1">
+                  <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    <span>New MRP Price (₹)</span>
+                    <span className="text-[9px] text-purple-500 bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
+                    <input 
+                      type="number" 
+                      required min="0" step="any" 
+                      value={purchaseModal.mrp} 
+                      onChange={(e) => setPurchaseModal({...purchaseModal, mrp: e.target.value})} 
+                      className={`${inputClass} pl-8.5 font-bold border-purple-300 dark:border-purple-800 focus:ring-purple-500`} 
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* SELLING PRICE CHANGE SECTION */}
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there a sale price change for this new stock?</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="priceChange" 
+                      checked={!purchaseModal.isPriceChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: false, price: purchaseModal.brand.carried_price})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
+                    />
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">No (₹{purchaseModal.brand?.carried_price})</span>
+                  </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
+                    <input 
+                      type="radio" 
+                      name="priceChange" 
+                      checked={purchaseModal.isPriceChanged} 
+                      onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: true})} 
+                      className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
+                    />
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different price</span>
+                  </label>
+                </div>
+              </div>
+
+              {purchaseModal.isPriceChanged && (
+                <div className="animate-in fade-in slide-in-from-top-2 pt-1">
+                  <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    <span>New Selling Price (₹)</span>
+                    <span className="text-[9px] text-blue-500 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
+                    <input 
+                      type="number" 
+                      required min="0" step="any" 
+                      value={purchaseModal.price} 
+                      onChange={(e) => setPurchaseModal({...purchaseModal, price: e.target.value})} 
+                      className={`${inputClass} pl-8.5 font-bold border-blue-300 dark:border-blue-800 focus:ring-blue-500`} 
+                    />
+                  </div>
+                </div>
+              )}
+
+              <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed shrink-0">
+                * Note: Previous stock will continue to sell at older rates. These new rates will only apply to these {purchaseModal.qty || '0'} newly added bottles.
+              </p>
+
+              <button 
+                type="submit" 
+                className="w-full mt-2 sm:mt-4 bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2 shrink-0 text-sm"
+              >
+                <CheckCircle2 size={18} /> Confirm Addition
+              </button>
+            </form>
           </div>
         </div>
-
-        {purchaseModal.isPriceChanged && (
-          <div className="animate-in fade-in slide-in-from-top-2 pt-1">
-            <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-              <span>New Selling Price (₹)</span>
-              <span className="text-[9px] text-blue-500 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
-              <input 
-                type="number" 
-                required min="0" step="any" 
-                value={purchaseModal.price} 
-                onChange={(e) => setPurchaseModal({...purchaseModal, price: e.target.value})} 
-                className={`${inputClass} pl-8.5 font-bold border-blue-300 dark:border-blue-800 focus:ring-blue-500`} 
-              />
-            </div>
-          </div>
-        )}
-
-        <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed shrink-0">
-          * Note: Previous stock will continue to sell at older rates. These new rates will only apply to these {purchaseModal.qty || '0'} newly added bottles.
-        </p>
-
-        <button 
-          type="submit" 
-          className="w-full mt-2 sm:mt-4 bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2 shrink-0 text-sm"
-        >
-          <CheckCircle2 size={18} /> Confirm Addition
-        </button>
-      </form>
-    </div>
-  </div>
-)}
+      )}
 
       {/* --- BANK DEPOSIT & EXPENSES POPUP (MODAL) --- */}
       {isBankDepositOpen && (

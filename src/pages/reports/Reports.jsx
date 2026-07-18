@@ -9,18 +9,17 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
 const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
-  <button onClick={onClick} ref={ref} className="flex items-center px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap">
+  <button 
+    type="button"
+    onClick={onClick} 
+    ref={ref} 
+    className="flex items-center px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap"
+  >
     <Calendar size={16} className="text-blue-500 mr-2" /> {value || placeholder}
     <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3" />
   </button>
 ));
 CustomDateInput.displayName = "CustomDateInput";
-
-const getInitialDate = (storageKey) => {
-  const savedDate = sessionStorage.getItem(storageKey);
-  if (savedDate) return new Date(savedDate);
-  return new Date(); 
-};
 
 const formatDateForDB = (date) => {
   if (!date) return '';
@@ -73,8 +72,18 @@ const formatRs = (num) => '₹' + Math.round(num || 0).toLocaleString('en-IN');
 export default function Reports() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [startDate, setStartDate] = useState(() => getInitialDate('report_start_date'));
-  const [endDate, setEndDate] = useState(() => getInitialDate('report_end_date'));
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // एकीकृत साझा कीज़ (Unified Session Storage)
+  const [startDate, setStartDate] = useState(() => {
+    const saved = sessionStorage.getItem('global_startDate');
+    return saved ? new Date(saved) : new Date();
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const saved = sessionStorage.getItem('global_endDate');
+    return saved ? new Date(saved) : new Date();
+  });
+
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
 
   const [salesList, setSalesList] = useState([]);
@@ -93,7 +102,6 @@ export default function Reports() {
   const [prevMonthSales, setPrevMonthSales] = useState(0);
   const [prevMonthExpenses, setPrevMonthExpenses] = useState(0);
 
-  // लाइव कम्प्यूटेड प्रीवियस मंथ स्टॉक
   const [prevMonthOpening, setPrevMonthOpening] = useState(0);
   const [prevMonthClosing, setPrevMonthClosing] = useState(0);
   const [prevMonthPurchases, setPrevMonthPurchases] = useState(0);
@@ -106,13 +114,38 @@ export default function Reports() {
     }
   }, [selectedMonth]);
 
-  const handleStartDateChange = (date) => { setStartDate(date); sessionStorage.setItem('report_start_date', date.toISOString()); setLoading(true); };
-  const handleEndDateChange = (date) => { setEndDate(date); sessionStorage.setItem('report_end_date', date.toISOString()); setLoading(true); };
+  const handleStartDateChange = (date) => { 
+    setStartDate(date); 
+    sessionStorage.setItem('global_startDate', date.toISOString()); 
+    setLoading(true); 
+  };
+  const handleEndDateChange = (date) => { 
+    setEndDate(date); 
+    sessionStorage.setItem('global_endDate', date.toISOString()); 
+    setLoading(true); 
+  };
 
   const showMagicChart = isFullCalendarMonth(startDate, endDate);
 
+  // 🔴 100% REAL-TIME SYNC LISTENER
+  useEffect(() => {
+    const channel = supabase
+      .channel('reports-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1)) // Track Price/MRP Changes
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
+
     const fetchReportData = async () => {
       if (!startDate || !endDate) return;
       
@@ -198,9 +231,6 @@ export default function Reports() {
         });
         setSalesList(sortedSalesList);
 
-        // ---------------------------------------------------------------------
-        // opening, closing, and purchase quantities & valuations calculation
-        // ---------------------------------------------------------------------
         let openingSaleVal = 0;
         let openingMrpVal = 0;
         let closingSaleVal = 0;
@@ -235,7 +265,6 @@ export default function Reports() {
           }
         });
 
-        // Compute total purchases from Purchase Manager totals (Sale) and daily stock (MRP Valuation)
         const prevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
         const prevMonthLastDayStr = formatDateForDB(prevMonthLastDayObj);
         
@@ -250,7 +279,6 @@ export default function Reports() {
         let rangePurchasesSale = 0;
         let rangePurchasesMrp = 0;
 
-        // Cumulative purchases in trader transactions (PurchaseManager)
         traderRangeTxData?.forEach(tx => {
           rangePurchasesSale += parseFloat(tx.purchase_amount || 0);
         });
@@ -396,7 +424,6 @@ export default function Reports() {
             computedTotalPurchasesTraders += parseFloat(tx.purchase_amount || 0);
           });
 
-          // A. Opening Stock MRP Total calculation with First Month Fallback
           let computedOpeningStockMrp = 0;
           if (prevStock && prevStock.length > 0) {
             prevStock.forEach(s => {
@@ -417,7 +444,6 @@ export default function Reports() {
             });
           }
 
-          // B. Closing Stock MRP Total
           let computedClosingStockMrp = 0;
           const lastDayRecords = stockByDateStr[endStr] || {};
           brandsData?.forEach(b => {
@@ -429,7 +455,6 @@ export default function Reports() {
             }
           });
 
-          // C. Previous Month complete auto-fetch
           const prevPrevMonthLastDayObj = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 0);
           const prevPrevMonthLastDayStr = formatDateForDB(prevPrevMonthLastDayObj);
           
@@ -508,9 +533,17 @@ export default function Reports() {
       if (isMounted) setLoading(false);
     };
 
-    fetchReportData();
+    // एकीकृत एसिंक्रोनस निष्पादन
+    const executeFetch = async () => {
+      await Promise.resolve();
+      if (isMounted) {
+        fetchReportData();
+      }
+    };
+    executeFetch();
+
     return () => { isMounted = false; };
-  }, [startDate, endDate, showMagicChart, user]);
+  }, [startDate, endDate, showMagicChart, user, refreshTrigger]);
 
   const exportToCSV = () => {
     window.alert("Exporting CSV is optimized for specific fields. PDF is recommended for full multi-page reporting.");
@@ -524,7 +557,6 @@ export default function Reports() {
   const traderTotalPaid = traderTransactions.reduce((acc, tx) => acc + tx.paid_amount, 0);
   const traderTotalRemaining = traderTransactions.length > 0 ? traderTransactions[traderTransactions.length - 1].remaining_amount : 0;
 
-  // Grouping trader transactions by trader ID for individual ledgers
   const groupedTraderData = traderTransactions.reduce((acc, tx) => {
     const traderId = tx.trader_id;
     const name = tx.traders?.trader_name || 'N/A';
@@ -540,7 +572,7 @@ export default function Reports() {
     acc[traderId].transactions.push(tx);
     acc[traderId].totalPurchases += parseFloat(tx.purchase_amount || 0);
     acc[traderId].totalPaid += parseFloat(tx.paid_amount || 0);
-    acc[traderId].remainingBalance = tx.remaining_amount; // Sets the final remaining balance after last transaction
+    acc[traderId].remainingBalance = tx.remaining_amount; 
     return acc;
   }, {});
 
@@ -612,7 +644,7 @@ export default function Reports() {
         .dark .react-datepicker__current-month, .dark .react-datepicker-time__header, .dark .react-datepicker-year-header { color: #f8fafc !important; }
         .dark .react-datepicker__header select { background-color: #334155 !important; color: #f8fafc !important; border-color: #475569 !important; }
         .dark .react-datepicker__day-name { color: #94a3b8 !important; }
-        .dark .react-datepicker__day { color: #e2e8f0 !important; }
+        .dark .react-datepicker__day { color: #cbd5e1 !important; }
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
         
@@ -623,7 +655,6 @@ export default function Reports() {
             margin: 12mm 12mm 12mm 12mm; 
           }
           
-          /* Enforce exact colors and graphics rendering regardless of active theme */
           * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
@@ -639,7 +670,6 @@ export default function Reports() {
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; 
           }
 
-          /* Forcefully strip out dark-mode styling overrides on print pages */
           .dark, .dark * {
             background-color: #ffffff !important;
             color: #0f172a !important;
@@ -660,7 +690,6 @@ export default function Reports() {
             margin: 0 !important;
           }
 
-          /* Elegant Colored Section Headings */
           .print-section-header {
             border-left: 5px solid #4f46e5 !important;
             padding-left: 10px !important;
@@ -672,7 +701,6 @@ export default function Reports() {
             margin-bottom: 15px !important;
           }
 
-          /* Clean Metric Grid styling */
           .print-card-grid { 
             display: grid !important; 
             grid-template-columns: repeat(3, 1fr) !important; 
@@ -699,7 +727,6 @@ export default function Reports() {
             margin: 0 !important;
           }
 
-          /* Auto-Scaling Magic Chart Tables */
           .print-magic-table {
             min-width: 0 !important;
             width: 100% !important;
@@ -726,14 +753,12 @@ export default function Reports() {
             background-color: #ffffff !important;
           }
 
-          /* Print Highlights Preservation */
           .print-text-emerald { color: #059669 !important; }
           .print-text-rose { color: #e11d48 !important; }
           .print-text-indigo { color: #4f46e5 !important; }
           .print-bg-indigo-light { background-color: #e0e7ff !important; color: #4f46e5 !important; }
           .print-bg-indigo-deep { background-color: #4f46e5 !important; color: #ffffff !important; }
 
-          /* Flatten inputs to raw text in print */
           .print-magic-table input {
             font-size: 8pt !important;
             font-weight: 900 !important;
@@ -753,7 +778,6 @@ export default function Reports() {
             margin: 0;
           }
 
-          /* General lists */
           table { width: 100% !important; border-collapse: collapse !important; margin-bottom: 20px !important; }
           th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: bold !important; text-transform: uppercase; font-size: 8pt !important; padding: 8px !important; border: 1px solid #e2e8f0 !important; }
           td { padding: 8px !important; border: 1px solid #e2e8f0 !important; font-size: 9pt !important; color: #334155 !important; }
@@ -829,7 +853,7 @@ export default function Reports() {
               </div>
             </div>
 
-            {/* NEW ADDITION: MRP & SALE PRICE VALUATION DETAIL GRID */}
+            {/* MRP & SALE PRICE VALUATION DETAIL GRID */}
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-slate-100 dark:border-slate-800 pt-6">
               <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
                 <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Opening Stock Valuation</p>
@@ -989,7 +1013,7 @@ export default function Reports() {
                 {/* A. SEPARATE INDIVIDUAL TRADER TABLES */}
                 <div>
                   <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-indigo-400 pl-2">
-                    A. Individual Trader Ledgers (व्यक्तिगत व्यापारी खाते)
+                    A. Individual Trader Ledgers
                   </h4>
                   
                   {Object.keys(groupedTraderData).length === 0 ? (
@@ -1040,10 +1064,10 @@ export default function Reports() {
                   )}
                 </div>
 
-                {/* B. CONSOLIDATED LEDGER (MIXED) */}
+                {/* B. CONSOLIDATED LEDGER */}
                 <div className="pt-4 break-inside-avoid">
                   <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-slate-400 pl-2">
-                    B. Consolidated Ledger (एकत्रित सर्व व्यापारी खाते)
+                    B. Consolidated Ledger
                   </h4>
                   <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
                     <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
@@ -1111,7 +1135,7 @@ export default function Reports() {
                     </h3>
                   </div>
 
-                  {/* 1. MAIN 7-COLUMN TABLE ENCLOSED IN A BEAUTIFUL CARD */}
+                  {/* 1. MAIN 7-COLUMN TABLE */}
                   <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300 overflow-hidden">
                     <table className="w-full text-center border-collapse min-w-225 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
@@ -1170,7 +1194,7 @@ export default function Reports() {
                           </td>
                         </tr>
                         
-                        {/* BOX NUMBERS ROW (1, 2, 3, 4, 5, 6, 7) */}
+                        {/* BOX NUMBERS ROW */}
                         <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 dark:text-slate-500 font-bold">
                           <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">1</td>
                           <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">2</td>
@@ -1184,7 +1208,7 @@ export default function Reports() {
                     </table>
                   </div>
 
-                  {/* 2. SETTLEMENT TABLE ENCLOSED IN A BEAUTIFUL CARD (ढोबळ नफा - खर्च) */}
+                  {/* 2. SETTLEMENT TABLE */}
                   <div className="overflow-hidden border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300">
                     <table className="w-full text-center border-collapse min-w-150 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
@@ -1210,7 +1234,7 @@ export default function Reports() {
                     </table>
                   </div>
 
-                  {/* 3. CUMULATIVE TABLE ENCLOSED IN A BEAUTIFUL CARD (एकूण नफा / संचयी) */}
+                  {/* 3. CUMULATIVE TABLE */}
                   <div className="overflow-hidden border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300">
                     <table className="w-full text-center border-collapse min-w-150 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>

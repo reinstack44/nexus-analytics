@@ -19,23 +19,23 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 CustomDateInput.displayName = "CustomDateInput";
 
 export default function ProfitLoss() {
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // एकीकृत साझा कीज़ (Unified Session Storage)
   const [startDate, setStartDate] = useState(() => {
-    const saved = sessionStorage.getItem('pl_startDate');
+    const saved = sessionStorage.getItem('global_startDate');
     return saved ? new Date(saved) : new Date();
   });
   
   const [endDate, setEndDate] = useState(() => {
-    const saved = sessionStorage.getItem('pl_endDate');
+    const saved = sessionStorage.getItem('global_endDate');
     return saved ? new Date(saved) : new Date();
   });
 
   useEffect(() => {
-    if (startDate) sessionStorage.setItem('pl_startDate', startDate.toISOString());
-  }, [startDate]);
-
-  useEffect(() => {
-    if (endDate) sessionStorage.setItem('pl_endDate', endDate.toISOString());
-  }, [endDate]);
+    if (startDate) sessionStorage.setItem('global_startDate', startDate.toISOString());
+    if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
+  }, [startDate, endDate]);
 
   const [summary, setSummary] = useState({
     totalSales: 0,
@@ -54,6 +54,27 @@ export default function ProfitLoss() {
     return `${year}-${month}-${day}`;
   };
 
+  const parseDBDate = (str) => {
+    if (!str) return new Date();
+    const [y, m, d] = str.split('-');
+    return new Date(y, m - 1, d);
+  };
+
+  // रीयल-टाइम डेटाबेस लिसनर
+  useEffect(() => {
+    const channel = supabase
+      .channel('pl-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     
@@ -61,55 +82,107 @@ export default function ProfitLoss() {
       const startStr = formatDateForDB(startDate);
       const endStr = formatDateForDB(endDate);
 
-      const { data: expData } = await supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr);
-      let tExpenses = 0;
-      if (expData) expData.forEach(e => tExpenses += parseFloat(e.amount));
+      try {
+        const [
+          { data: expData },
+          { data: withData },
+          { data: purchData },
+          { data: brandsData },
+          { data: stockData }
+        ] = await Promise.all([
+          supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr),
+          supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr),
+          supabase.from('purchases').select('date, brand_id, quantity, total_amount').gte('date', startStr).lte('date', endStr),
+          supabase.from('brands').select('id, brand_name, selling_price'),
+          supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date', { ascending: true })
+        ]);
 
-      const { data: withData } = await supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr);
-      let tWithdrawals = 0;
-      if (withData) withData.forEach(w => tWithdrawals += parseFloat(w.amount));
+        let tExpenses = 0;
+        expData?.forEach(e => tExpenses += parseFloat(e.amount) || 0);
 
-      const { data: purchData } = await supabase.from('purchases').select('date, brand_id, quantity, total_amount').gte('date', startStr).lte('date', endStr);
-      let tPurchases = 0;
-      const purchaseMap = {}; 
-      if (purchData) {
-        purchData.forEach(p => {
-          tPurchases += parseFloat(p.total_amount);
-          const key = `${p.date}_${p.brand_id}`;
-          purchaseMap[key] = (purchaseMap[key] || 0) + p.quantity;
+        let tWithdrawals = 0;
+        withData?.forEach(w => tWithdrawals += parseFloat(w.amount) || 0);
+
+        let tPurchases = 0;
+        purchData?.forEach(p => tPurchases += parseFloat(p.total_amount) || 0);
+
+        const brandMap = {};
+        brandsData?.forEach(b => brandMap[b.id] = b);
+
+        // मानक FIFO सिमुलेशन इंजन
+        let tSales = 0;
+        const prevClosings = {};
+        const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
+        beforeStock?.forEach(s => {
+          if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
+            prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
+          }
         });
-      }
 
-      const { data: brandsData } = await supabase.from('brands').select('id, selling_price');
-      const priceMap = {};
-      if (brandsData) brandsData.forEach(b => priceMap[b.id] = parseFloat(b.selling_price) || 0);
-
-      const { data: stockData } = await supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr).not('closing_balance', 'is', null); 
-      let tSales = 0;
-      if (stockData) {
-        stockData.forEach(stock => {
-          const key = `${stock.date}_${stock.brand_id}`;
-          const purchQty = purchaseMap[key] || 0;
-          const openBal = parseInt(stock.opening_balance) || 0;
-          const closeBal = parseInt(stock.closing_balance) || 0;
-          let saleQty = openBal + purchQty - closeBal;
-          saleQty = saleQty < 0 ? 0 : saleQty; 
-          const sellingPrice = parseFloat(stock.unit_price) || priceMap[stock.brand_id] || 0;
-          tSales += (saleQty * sellingPrice);
+        const stockByDate = {};
+        stockData?.forEach(s => {
+          const sDate = parseDBDate(s.date);
+          if (sDate) {
+            const dateKey = formatDateForDB(sDate);
+            if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
+            stockByDate[dateKey].push(s);
+          }
         });
+
+        const sortedDates = Object.keys(stockByDate).sort();
+        let runningStates = {};
+        brandsData?.forEach(b => {
+          const pc = prevClosings[b.id];
+          runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
+        });
+
+        sortedDates.forEach(date => {
+          stockByDate[date].forEach(row => {
+            const brand = brandMap[row.brand_id];
+            if (!brand) return;
+
+            const state = runningStates[brand.id] || { closing: 0, price: parseFloat(brand.selling_price) };
+            const baseOpening = state.closing;
+            const carriedPrice = state.price;
+
+            const opening = parseInt(row.opening_balance || 0);
+            const purchaseQty = Math.max(0, opening - baseOpening);
+            const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
+            const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
+
+            if (closing !== '') {
+              const sQty = Math.max(0, opening - closing);
+              let rem = sQty;
+              let sAmt = 0;
+
+              const qtyOld = Math.min(rem, baseOpening);
+              sAmt += qtyOld * carriedPrice;
+              rem -= qtyOld;
+
+              if (rem > 0 && purchaseQty > 0) {
+                sAmt += Math.min(rem, purchaseQty) * pPrice;
+              }
+
+              tSales += sAmt;
+              runningStates[brand.id] = { closing: closing, price: pPrice };
+            }
+          });
+        });
+
+        if (!isMounted) return;
+
+        const netProfit = tSales - tPurchases - tExpenses;
+        setSummary({
+          totalSales: tSales,
+          totalPurchases: tPurchases,
+          totalExpenses: tExpenses,
+          netProfit: netProfit,
+          totalWithdrawn: tWithdrawals,
+          retainedCash: netProfit - tWithdrawals 
+        });
+      } catch (err) {
+        console.error("P&L Compile Error:", err);
       }
-
-      if (!isMounted) return;
-
-      const netProfit = tSales - tPurchases - tExpenses;
-      setSummary({
-        totalSales: tSales,
-        totalPurchases: tPurchases,
-        totalExpenses: tExpenses,
-        netProfit: netProfit,
-        totalWithdrawn: tWithdrawals,
-        retainedCash: netProfit - tWithdrawals 
-      });
     };
 
     fetchReportData();
@@ -117,7 +190,7 @@ export default function ProfitLoss() {
     return () => {
       isMounted = false;
     };
-  }, [startDate, endDate]);
+  }, [startDate, endDate, refreshTrigger]);
 
   return (
     <div className="space-y-6 transition-colors duration-300">

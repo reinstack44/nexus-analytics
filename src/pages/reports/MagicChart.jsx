@@ -49,6 +49,21 @@ export default function MagicChart() {
   // सिंक करने के लिए स्टेट ट्रिगर
   const [syncTrigger, setSyncTrigger] = useState(0);
 
+  // 🔴 100% REAL-TIME SYNC LISTENER
+  useEffect(() => {
+    const channel = supabase
+      .channel('magicchart-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setSyncTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setSyncTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setSyncTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setSyncTrigger(prev => prev + 1)) // Track Price/MRP Changes
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   // ऑटोमेटेड स्टेट्स (चालू और पिछले महीने के लिए)
   const [salesAmount, setSalesAmount] = useState(0);
   const [expensesAmount, setExpensesAmount] = useState(0);
