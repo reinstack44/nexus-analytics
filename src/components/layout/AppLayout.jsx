@@ -95,7 +95,7 @@ export default function AppLayout() {
                className={`transition-all duration-300 object-center block ${
                  isCollapsed 
                    ? 'h-8 w-10 object-cover' 
-                   : 'h-22 w-55 sm:w-48 object-contain'
+                   : 'h-20 w-55 sm:w-48 object-contain'
                }`}
              />
           </Link>
