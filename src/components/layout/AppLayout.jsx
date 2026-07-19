@@ -4,7 +4,10 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext'; 
 import { useTranslation } from 'react-i18next'; 
-import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, Wine, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, Wand2 } from 'lucide-react';
+import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, Wand2 } from 'lucide-react';
+
+// IMPORT THE LOGO HERE - Updated to .png
+import nxDiaryLogo from '../../assets/nx diary logo.png';
 
 export default function AppLayout() {
   const { user } = useAuth();
@@ -47,7 +50,6 @@ export default function AppLayout() {
     setIsLangMenuOpen(false);
   };
 
-  // Magic Chart को ऊपर और Reports को अंत में रखा गया है
   const navItems = [
     { name: t('sidebar.dashboard', 'Dashboard'), path: '/', icon: LayoutDashboard },
     { name: t('sidebar.brands', 'Brand Master'), path: '/brands', icon: Tag },
@@ -84,18 +86,22 @@ export default function AppLayout() {
         )}
 
         <div className="h-20 flex items-center justify-between px-5 border-b border-slate-800/60 shrink-0">
-          <div className="flex items-center overflow-hidden whitespace-nowrap">
-            <div className="min-w-10 flex items-center justify-center">
-              <div className="h-10 w-10 bg-linear-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-                <Wine className="text-white" size={22} />
-              </div>
-            </div>
-            <span className={`ml-3 text-lg font-bold text-white tracking-wide transition-all duration-300 ${isCollapsed ? 'opacity-0 w-0 hidden lg:block' : 'opacity-100 w-auto'}`}>
-              Nexus Diary
-            </span>
-          </div>
           
-          <button className="lg:hidden text-slate-400 hover:text-white bg-slate-800/50 p-2 rounded-lg outline-none" onClick={() => setIsMobileOpen(false)}>
+          {/* --- NEW LOGO SECTION --- */}
+          <Link to="/" className="flex items-center overflow-hidden w-full h-full py-4">
+             <img 
+               src={nxDiaryLogo} 
+               alt="NX Diary Logo" 
+               className={`transition-all duration-300 object-center block ${
+                 isCollapsed 
+                   ? 'h-8 w-10 object-cover' 
+                   : 'h-22 w-55 sm:w-48 object-contain'
+               }`}
+             />
+          </Link>
+          {/* ------------------------ */}
+
+          <button className="lg:hidden text-slate-400 hover:text-white bg-slate-800/50 p-2 rounded-lg outline-none ml-2 shrink-0" onClick={() => setIsMobileOpen(false)}>
             <X size={20} />
           </button>
         </div>
@@ -173,7 +179,6 @@ export default function AppLayout() {
               </button>
             )}
             
-            {/* Dynamic Greeting Heading */}
             <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight hidden sm:block transition-colors duration-300">
               {getGreeting()}
             </h1>
