@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, forwardRef, useCallback } from 'react';
+import { useState, useEffect, useRef, forwardRef, useCallback, useMemo } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, Coffee, CalendarOff, Info, Lock, ArrowRightLeft } from 'lucide-react';
@@ -89,7 +89,6 @@ export default function DailyStock() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0); 
-  const [firstEverDate, setFirstEverDate] = useState(null);
 
   // एकीकृत साझा कीज़ (Unified Session Storage)
   const [startDate, setStartDate] = useState(() => {
@@ -128,16 +127,89 @@ export default function DailyStock() {
   const [pipelineWarning, setPipelineWarning] = useState(null);
   const [customRangeMode, setCustomRangeMode] = useState(false);
 
-  // 1-सेकंड का पोलिंग सिंक इंटरवल
+  const [markedHolidays, setMarkedHolidays] = useState([]);
+  const [filledDates, setFilledDates] = useState([]);
+
+  // optimized helper to convert dates
+  const formatDateForDB = useCallback((dateObj) => {
+    if (!dateObj) return '';
+    const d = new Date(dateObj);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
+
+  const getDatesInRange = useCallback((start, end) => {
+    const dates = [];
+    let current = new Date(start);
+    const last = new Date(end || start);
+    current.setHours(0,0,0,0); last.setHours(0,0,0,0);
+    while (current <= last) { dates.push(formatDateForDB(current)); current.setDate(current.getDate() + 1); }
+    return dates;
+  }, [formatDateForDB]);
+
+  const selectedDates = useMemo(() => getDatesInRange(startDate, endDate), [startDate, endDate, getDatesInRange]);
+  const isMultiDayRange = startDate && endDate && formatDateForDB(startDate) !== formatDateForDB(endDate);
+  const isHolidaySelected = isMultiDayRange 
+    ? selectedDates.every(d => markedHolidays.includes(d)) 
+    : selectedDates.some(d => markedHolidays.includes(d));
+  
+  const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
+
+  // --- HARD DATA RESET TOOL ---
+  const handleResetRangeData = async () => {
+    if (!startDate || !endDate) return;
+    const startStr = formatDateForDB(startDate);
+    const endStr = formatDateForDB(endDate);
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset & Clear Range Data?',
+      message: `Warning: This will permanently DELETE all recorded entries from ${formatDisplayDate(startDate)} to ${formatDisplayDate(endDate)} from the database. All system locks will be released. This action cannot be undone.`,
+      isDanger: true,
+      onConfirm: async () => {
+        setIsSaving(true);
+        closeConfirm();
+        try {
+          const { error } = await supabase
+            .from('daily_stock')
+            .delete()
+            .eq('user_id', user.id)
+            .gte('date', startStr)
+            .lte('date', endStr);
+
+          if (error) throw error;
+
+          await supabase
+            .from('holidays')
+            .delete()
+            .eq('user_id', user.id)
+            .gte('date', startStr)
+            .lte('date', endStr);
+
+          // local state release to instantly unlock the range view
+          setFilledDates(prev => prev.filter(d => d < startStr || d > endStr));
+          setMarkedHolidays(prev => prev.filter(d => d < startStr || d > endStr));
+          
+          setStartDate(startDate);
+          setEndDate(startDate);
+
+          setSaveMessage({ type: 'success', text: 'Database entries deleted. Dates are now completely normal and fresh.' });
+          setRefreshTrigger(prev => prev + 1);
+        } catch (err) {
+          setAlertModal({ isOpen: true, title: "Reset Failed", message: err.message });
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    });
+  };
+
+  // 30-सेकंड पोलिंग सिंक (Flickering रोकने के लिए)
   useEffect(() => {
     const interval = setInterval(() => {
       setRefreshTrigger(prev => prev + 1);
-    }, 1000);
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
-
-  const [markedHolidays, setMarkedHolidays] = useState([]);
-  const [filledDates, setFilledDates] = useState([]);
 
   // रीयल-टाइम लिसनर
   useEffect(() => {
@@ -162,116 +234,32 @@ export default function DailyStock() {
       const { data: filledData } = await supabase.from('daily_stock').select('date').eq('user_id', user.id).not('closing_balance', 'is', null);
       
       if (isMounted) {
-        if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
-        if (filledData) setFilledDates([...new Set(filledData.map(d => d.date))]);
+        if (holidayData) {
+          const newHolidays = holidayData.map(h => h.date);
+          setMarkedHolidays(prev => {
+            const isSame = prev.length === newHolidays.length && prev.every((v, i) => v === newHolidays[i]);
+            return isSame ? prev : newHolidays;
+          });
+        }
+        if (filledData) {
+          const newFilled = [...new Set(filledData.map(d => d.date))].sort();
+          setFilledDates(prev => {
+            const isSame = prev.length === newFilled.length && prev.every((v, i) => v === newFilled[i]);
+            return isSame ? prev : newFilled;
+          });
+        }
       }
     };
     fetchCloudPreferences();
     return () => { isMounted = false; };
   }, [user, refreshTrigger]);
 
-  const formatDateForDB = (dateObj) => {
-    if (!dateObj) return '';
-    const d = new Date(dateObj);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  };
-
-  const parseDateSafe = (dateStr) => {
-    if (!dateStr) return null;
-    const [year, month, day] = dateStr.split('-');
-    return new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
-  };
-
-  const getDatesInRange = (start, end) => {
-    const dates = [];
-    let current = new Date(start);
-    const last = new Date(end || start);
-    current.setHours(0,0,0,0); last.setHours(0,0,0,0);
-    while (current <= last) { dates.push(formatDateForDB(current)); current.setDate(current.getDate() + 1); }
-    return dates;
-  };
-
-  const selectedDates = getDatesInRange(startDate, endDate);
-  const isMultiDayRange = startDate && endDate && formatDateForDB(startDate) !== formatDateForDB(endDate);
-  const isHolidaySelected = isMultiDayRange 
-    ? selectedDates.every(d => markedHolidays.includes(d)) 
-    : selectedDates.some(d => markedHolidays.includes(d));
-  
-  const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
-
-  const findFilledRangeOfDate = useCallback((date) => {
-    if (!date || filledDates.length === 0) return null;
-    const dateStr = formatDateForDB(date);
-    const sortedFilled = [...filledDates].sort();
-    
-    const nextFilledStr = sortedFilled.find(d => d >= dateStr);
-    if (!nextFilledStr) return null;
-    
-    const idx = sortedFilled.indexOf(nextFilledStr);
-    let prevFilledStr = null;
-    if (idx > 0) {
-      prevFilledStr = sortedFilled[idx - 1];
-    }
-    
-    const getRangeStart = () => {
-      if (prevFilledStr) {
-        const d = parseDateSafe(prevFilledStr);
-        d.setDate(d.getDate() + 1);
-        while (markedHolidays.includes(formatDateForDB(d))) {
-          d.setDate(d.getDate() + 1);
-        }
-        return d;
-      }
-      return firstEverDate ? parseDateSafe(firstEverDate) : parseDateSafe(nextFilledStr);
-    };
-    
-    const rangeStart = getRangeStart();
-    const rangeEnd = parseDateSafe(nextFilledStr);
-    
-    const checkDate = new Date(date);
-    checkDate.setHours(0,0,0,0);
-    
-    const compStart = new Date(rangeStart);
-    compStart.setHours(0,0,0,0);
-    const compEnd = new Date(rangeEnd);
-    compEnd.setHours(0,0,0,0);
-    
-    if (checkDate >= compStart && checkDate <= compEnd) {
-      return { start: rangeStart, end: rangeEnd };
-    }
-    return null;
-  }, [filledDates, firstEverDate, markedHolidays]);
-
-  useEffect(() => {
-    if (customRangeMode) return; 
-    if (filledDates.length > 0 && startDate) {
-      const range = findFilledRangeOfDate(startDate);
-      if (range) {
-        const rangeStartStr = formatDateForDB(range.start);
-        const rangeEndStr = formatDateForDB(range.end);
-        if (rangeStartStr !== formatDateForDB(startDate) || rangeEndStr !== formatDateForDB(endDate)) {
-          const timer = setTimeout(() => {
-            setStartDate(range.start);
-            setEndDate(range.end);
-          }, 0);
-          return () => clearTimeout(timer);
-        }
-      }
-    }
-  }, [filledDates, firstEverDate, startDate, endDate, findFilledRangeOfDate, customRangeMode]);
-
   const handleStartDateChange = (date) => {
     const dateStr = formatDateForDB(date);
-    if (markedHolidays.includes(dateStr)) {
-      setHolidayModal({ isOpen: true, date, dateStr });
-      return;
-    }
     
     if (!customRangeMode) {
-      const existingRange = findFilledRangeOfDate(date);
-      if (existingRange) {
-        setStartDate(existingRange.start);
-        setEndDate(existingRange.end);
+      if (markedHolidays.includes(dateStr)) {
+        setHolidayModal({ isOpen: true, date, dateStr });
         return;
       }
     }
@@ -282,25 +270,20 @@ export default function DailyStock() {
 
   const handleEndDateChange = (date) => {
     const dateStr = formatDateForDB(date);
-    if (markedHolidays.includes(dateStr)) {
-      setHolidayModal({ isOpen: true, date, dateStr });
-      return;
-    }
-
-    if (date < startDate) {
-      setAlertModal({ isOpen: true, title: "Invalid Range", message: "End date cannot be earlier than the Start date." });
-      return;
-    }
-
+    
     if (!customRangeMode) {
-      const existingRange = findFilledRangeOfDate(date);
-      if (existingRange) {
-        setEndDate(existingRange.end);
+      if (markedHolidays.includes(dateStr)) {
+        setHolidayModal({ isOpen: true, date, dateStr });
+        return;
+      }
+      if (date < startDate) {
+        setAlertModal({ isOpen: true, title: "Invalid Range", message: "End date cannot be earlier than the Start date." });
         return;
       }
 
       if (formatDateForDB(date) !== formatDateForDB(startDate)) {
         const range = getDatesInRange(startDate, date);
+        // BLOCK holiday or previously filled selection in Reconcile Mode
         if (range.some(d => markedHolidays.includes(d))) {
           setAlertModal({ isOpen: true, title: "Invalid Selection", message: "Your selected range contains a holiday. Please select a clear working period." });
           return;
@@ -330,8 +313,7 @@ export default function DailyStock() {
   const prevDatesRef = useRef({ start: null, end: null });
   const hasLoadedRef = useRef(false);
 
-    // --- FETCH MAIN DAILY STOCK & ENFORCE PIPELINE ---
-
+  // --- FETCH MAIN DAILY STOCK WITH HIGH-SPEED OPTIMIZATION ---
   useEffect(() => {
     let isMounted = true;
 
@@ -342,7 +324,6 @@ export default function DailyStock() {
       const startStr = formatDateForDB(startDate);
       const endStr = endDate ? formatDateForDB(endDate) : startStr;
 
-      // केवल तभी लोडिंग दिखाएं जब तारीख बदली हो या डेटा पहली बार आ रहा हो
       const datesChanged = prevDatesRef.current.start !== startStr || prevDatesRef.current.end !== endStr;
       if (datesChanged || !hasLoadedRef.current) {
         setLoading(true);
@@ -360,28 +341,22 @@ export default function DailyStock() {
       const prevDateStr = formatDateForDB(targetPrevDate);
 
       if (!customRangeMode) {
-        const { data: earliestRecord } = await supabase.from('daily_stock').select('date').order('date', {ascending: true}).limit(1);
-        const firstEverDateStr = earliestRecord?.[0]?.date;
-        if (firstEverDateStr && isMounted) {
-          setFirstEverDate(firstEverDateStr);
-        }
-
-        if (firstEverDateStr && startStr > firstEverDateStr && prevDateStr >= firstEverDateStr) {
-          const { data: pData } = await supabase.from('daily_stock').select('closing_balance').eq('date', prevDateStr);
-          if (!pData || pData.length === 0 || pData.some(r => r.closing_balance === null)) {
-              setPipelineWarning(prevDateStr);
-          }
+        // चेक करें कि क्या पिछले दिन का डेटा अधूरा है
+        const { data: pData } = await supabase.from('daily_stock').select('closing_balance').eq('date', prevDateStr);
+        if (pData && pData.length > 0 && pData.some(r => r.closing_balance === null)) {
+            setPipelineWarning(prevDateStr);
         }
       }
 
+      // optimized selecting structure with high limit bypass limit (50k rows)
       const [
         { data: brandsData },
         { data: allHistoricalStock },
         { data: expData },
         { data: collData }
       ] = await Promise.all([
-        supabase.from('brands').select('*').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
-        supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }),
+        supabase.from('brands').select('id, brand_name, bottle_size, selling_price, mrp_price').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
+        supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }).limit(50000),
         supabase.from('expenses').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
         supabase.from('owner_withdrawals').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
       ]);
@@ -440,6 +415,39 @@ export default function DailyStock() {
 
           const brandRangeLogs = allHistoricalStock?.filter(s => s.brand_id === brand.id && s.date >= startStr && s.date <= endStr) || [];
           
+          // Rule of Truth: Load existing db record dynamically for pristine data security
+          const exactRecord = !isMultiDayRange ? brandRangeLogs.find(log => log.date === startStr) : null;
+          
+          if (exactRecord) {
+            const opBal = parseInt(exactRecord.opening_balance) || 0;
+            const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
+            
+            const pQty = Math.max(0, opBal - baseOpening);
+            
+            // FIFO Continuity Upgrade: If pQty is 0, always fallback to queue price to prevent master reversion.
+            const pPrice = pQty > 0 ? (parseFloat(exactRecord.unit_price) || carriedPrice) : carriedPrice;
+            const pMrp = pQty > 0 ? (parseFloat(exactRecord.unit_mrp) || carriedMrp) : carriedMrp;
+
+            let initialRow = { 
+              brand_id: brand.id, 
+              brand_name: brand.brand_name, 
+              bottle_size: brand.bottle_size, 
+              selling_price: brand.selling_price, 
+              mrp_price: brand.mrp_price,
+              carried_price: carriedPrice, 
+              carried_mrp: carriedMrp,
+              purchase_price: pPrice, 
+              purchase_mrp: pMrp,
+              base_opening: baseOpening, 
+              purchase_qty: pQty, 
+              opening_balance: opBal, 
+              closing_balance: clBal === '' ? '' : String(clBal),
+              starting_batches: starting_batches
+            };
+
+            return recalculateRow(initialRow);
+          }
+
           let totalPurchasesQty = 0;
           let latestUnitPrice = carriedPrice;
           let latestUnitMrp = carriedMrp;
@@ -450,8 +458,11 @@ export default function DailyStock() {
              const pQty = Math.max(0, opBal - currentPrevClosing);
              totalPurchasesQty += pQty;
              
-             if (log.unit_price) latestUnitPrice = parseFloat(log.unit_price);
-             if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
+             // Range logs continuity upgrade
+             if (pQty > 0) {
+                if (log.unit_price) latestUnitPrice = parseFloat(log.unit_price);
+                if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
+             }
              
              if (log.closing_balance !== null) {
                  currentPrevClosing = parseInt(log.closing_balance);
@@ -507,7 +518,7 @@ export default function DailyStock() {
     }
     
     return () => { isMounted = false; };
-  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode]);
+  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode, formatDateForDB, isMultiDayRange]);
 
   const fetchPopupData = async (dateToFetch) => {
     const dateStr = formatDateForDB(dateToFetch);
@@ -532,7 +543,7 @@ export default function DailyStock() {
     };
     loadData();
     return () => { isMounted = false; };
-  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date, user.id]);
+  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date, user.id, formatDateForDB]);
 
   const handleOpenBankDeposit = () => {
     setIsBankDepositOpen(true);
@@ -921,7 +932,7 @@ export default function DailyStock() {
             <div className="flex gap-3">
               <button onClick={closeConfirm} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors">Cancel</button>
               <button onClick={confirmModal.onConfirm} className={`flex-1 px-4 py-2.5 text-white rounded-xl font-bold transition-colors shadow-sm ${confirmModal.isDanger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                {confirmModal.title === 'Holiday Declared!' ? 'Cancel Holiday' : 'Confirm'}
+                {confirmModal.title.includes('Reset') ? 'Delete & Reset' : 'Confirm'}
               </button>
             </div>
           </div>
@@ -975,7 +986,7 @@ export default function DailyStock() {
       )}
 
       {/* PIPELINE BROKEN WARNING */}
-      {pipelineWarning && !isHolidaySelected && (
+      {pipelineWarning && !isHolidaySelected && !customRangeMode && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Lock className="text-red-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-red-800 dark:text-red-300 leading-relaxed font-medium">
@@ -1017,9 +1028,11 @@ export default function DailyStock() {
               />
             </div>
             
-            <button onClick={openHolidayConfirm} disabled={isHolidaySelected || isAnyDateFilled || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-orange-500 text-white px-3 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-              <Coffee size={18} /> Mark Holiday
-            </button>
+            {!customRangeMode && (
+              <button onClick={openHolidayConfirm} disabled={isHolidaySelected || isAnyDateFilled || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-orange-500 text-white px-3 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                <Coffee size={18} /> Mark Holiday
+              </button>
+            )}
             
             <button 
               onClick={() => {
@@ -1032,13 +1045,27 @@ export default function DailyStock() {
               <ArrowRightLeft size={16} /> {customRangeMode ? 'Reconcile Mode' : 'Custom View'}
             </button>
 
-            <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
-              <Landmark size={18} /> Expenses & Cash
-            </button>
+            {!customRangeMode && (
+              <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
+                <Landmark size={18} /> Expenses & Cash
+              </button>
+            )}
 
-            <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-              <Save size={18} /> {isSaving ? 'Saving...' : 'Save'}
-            </button>
+            {!customRangeMode && (
+              <button 
+                onClick={handleResetRangeData} 
+                disabled={isSaving}
+                className="shrink-0 flex items-center gap-1.5 h-10.5 bg-red-600 hover:bg-red-700 text-white px-4 rounded-xl text-sm font-bold transition-all shadow-sm disabled:opacity-50"
+              >
+                <Trash2 size={18} /> Reset Range Data
+              </button>
+            )}
+
+            {!customRangeMode && (
+              <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning || isMultiDayRange} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                <Save size={18} /> {isSaving ? 'Saving...' : 'Save'}
+              </button>
+            )}
             
           </div>
         </div>
@@ -1051,11 +1078,19 @@ export default function DailyStock() {
         </div>
       )}
 
-      {isMultiDayRange && !isHolidaySelected && !pipelineWarning && (
+      {/* Mode Status Indicator Banner */}
+      {customRangeMode ? (
+        <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
+          <Info className="text-indigo-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
+          <p className="text-sm text-indigo-800 dark:text-indigo-300 leading-relaxed font-semibold">
+            Custom View Mode Active (Read-Only): Showing combined calculations from {formatDisplayDate(startDate)} to {formatDisplayDate(endDate)}. Saving and editing are disabled.
+          </p>
+        </div>
+      ) : isMultiDayRange && !isHolidaySelected && !pipelineWarning && (
         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Info className="text-blue-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed">
-            <strong>Combined View Active:</strong> Data entered applies to the period <strong>{formatDisplayDate(startDate)}</strong> to <strong>{formatDisplayDate(endDate)}</strong>.
+            Reconcile Range Selected: Visualizing operational chain from <strong>{formatDisplayDate(startDate)}</strong> to <strong>{formatDisplayDate(endDate)}</strong>. Use Reset Range to start clean.
           </p>
         </div>
       )}
@@ -1069,13 +1104,15 @@ export default function DailyStock() {
           <p className="text-slate-500 dark:text-slate-400 mb-8 max-w-lg text-lg">
             Sales generation is locked for the selected period. Your stock balances have been safely carried forward. 
           </p>
-          <button onClick={handleRemoveHoliday} disabled={isSaving} className="px-6 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50 mx-auto">
-            <Trash2 size={20} /> {isSaving ? 'Unlocking Entry...' : 'Cancel Holiday & Unlock Entry'}
-          </button>
+          {!customRangeMode && (
+            <button onClick={handleRemoveHoliday} disabled={isSaving} className="px-6 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50 mx-auto">
+              <Trash2 size={20} /> {isSaving ? 'Unlocking Entry...' : 'Cancel Holiday & Unlock Entry'}
+            </button>
+          )}
         </div>
       ) : (
         <>
-          <div className={`grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10 animate-in fade-in transition-opacity ${pipelineWarning ? 'opacity-50 pointer-events-none' : ''}`}>
+          <div className={`grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10 animate-in fade-in transition-opacity ${pipelineWarning && !customRangeMode ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="bg-linear-to-br from-indigo-500 to-indigo-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
               <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty (Auto)</p>
@@ -1095,7 +1132,7 @@ export default function DailyStock() {
             </div>
           </div>
 
-          <div className={`bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden relative z-10 animate-in fade-in slide-in-from-bottom-4 transition-opacity ${pipelineWarning ? 'opacity-50 pointer-events-none' : ''}`}>
+          <div className={`bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden relative z-10 animate-in fade-in slide-in-from-bottom-4 transition-opacity ${pipelineWarning && !customRangeMode ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300 min-w-220">
                 <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
@@ -1117,8 +1154,10 @@ export default function DailyStock() {
                     <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
                   ) : (
                     stockRows.map((row, index) => (
-                      <tr key={row.brand_id} draggable onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
-                        <td className="px-3 py-4 text-center cursor-move"><GripVertical size={16} className="text-slate-300 dark:text-slate-600 group-hover:text-blue-500 transition-colors" /></td>
+                      <tr key={row.brand_id} draggable={!customRangeMode} onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
+                        <td className="px-3 py-4 text-center cursor-move">
+                          {!customRangeMode && <GripVertical size={16} className="text-slate-300 dark:text-slate-600 group-hover:text-blue-500 transition-colors" />}
+                        </td>
                         
                         <td className="px-3 py-4">
                           <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
@@ -1139,7 +1178,7 @@ export default function DailyStock() {
                         <td className="px-4 py-4 text-center">
                           <input 
                             type="number" 
-                            disabled={customRangeMode}
+                            disabled={customRangeMode || isMultiDayRange}
                             value={row.opening_balance} 
                             onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} 
                             className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
@@ -1148,9 +1187,9 @@ export default function DailyStock() {
                         
                         <td className="px-4 py-4 text-center">
                           <button 
-                            disabled={customRangeMode}
+                            disabled={customRangeMode || isMultiDayRange}
                             onClick={() => openPurchaseModal(row)}
-                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${customRangeMode ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${(customRangeMode || isMultiDayRange) ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
                           >
                             {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
                           </button>
@@ -1161,7 +1200,7 @@ export default function DailyStock() {
                             type="number" 
                             min="0" 
                             placeholder="Qty" 
-                            disabled={customRangeMode}
+                            disabled={customRangeMode || isMultiDayRange}
                             value={row.closing_balance} 
                             onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} 
                             className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
