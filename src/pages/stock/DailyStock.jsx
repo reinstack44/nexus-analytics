@@ -90,19 +90,19 @@ export default function DailyStock() {
   const [saveMessage, setSaveMessage] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0); 
 
-  // Global Calendar Configuration & Storage Continuity
+  // Isolated DailyStock Calendar configuration memory to prevent global leaks
   const [startDate, setStartDate] = useState(() => {
-    const saved = sessionStorage.getItem('global_startDate');
+    const saved = sessionStorage.getItem('dailyStock_startDate');
     return saved ? new Date(saved) : new Date();
   });
   const [endDate, setEndDate] = useState(() => {
-    const saved = sessionStorage.getItem('global_endDate');
+    const saved = sessionStorage.getItem('dailyStock_endDate');
     return saved ? new Date(saved) : new Date();
   });
 
   useEffect(() => {
-    if (startDate) sessionStorage.setItem('global_startDate', startDate.toISOString());
-    if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
+    if (startDate) sessionStorage.setItem('dailyStock_startDate', startDate.toISOString());
+    if (endDate) sessionStorage.setItem('dailyStock_endDate', endDate.toISOString());
   }, [startDate, endDate]);
 
   const [stockRows, setStockRows] = useState([]);
@@ -140,6 +140,7 @@ export default function DailyStock() {
 
   const normalizeDateStr = useCallback((dStr) => {
     if (!dStr) return '';
+    if (typeof dStr !== 'string') return '';
     if (dStr.includes('T')) {
       return dStr.split('T')[0];
     }
@@ -180,33 +181,63 @@ export default function DailyStock() {
     return lockedRanges.some(r => r.end_date === endStr);
   }, [lockedRanges, startDate, endDate, formatDateForDB]);
 
-  // Combined Block Unmerging - Splitting Range Safely
+  // Combined Block Unmerging - Safe Range splitting and absolute database purging
+  // Combined Block Unmerging - Splitting Range Safely (With instant state reset)
+  // Combined Block Unmerging - Splitting Range Safely (With Dynamic Range Identification)
   const handleResetRangeData = async () => {
-    if (!startDate || !endDate) return;
-    const startStr = formatDateForDB(startDate);
-    const endStr = formatDateForDB(endDate);
+    const activeEndStr = formatDateForDB(endDate || startDate);
+    
+    // Find the true range metadata from lockedRanges state using activeEndStr
+    const matchedRange = lockedRanges.find(r => r.end_date === activeEndStr);
+    
+    const rangeStartStr = matchedRange ? matchedRange.start_date : activeEndStr;
+    const rangeEndStr = matchedRange ? matchedRange.end_date : activeEndStr;
+
+    // Convert range start string to standard Date object for proper calendar view restoration
+    const [startYear, startMonth, startDay] = rangeStartStr.split('-').map(Number);
+    const trueStartObj = new Date(startYear, startMonth - 1, startDay);
 
     setConfirmModal({
       isOpen: true,
-      title: 'Reset & Split Range Data?',
-      message: `Do you want to split the combined block from ${formatDisplayDate(startDate)} to ${formatDisplayDate(endDate)} into individual daily entries? This action removes the combined lock from your calendar while fully protecting historical stock metrics.`,
+      title: 'Unlock & Split Combined Range?',
+      message: `Are you sure you want to split this combined block? This will permanently DELETE all recorded ledger values from ${formatDisplayDate(trueStartObj)} to ${formatDisplayDate(endDate || startDate)} (including closing balances) from the database, unlocking these dates so you can fill them individually day-by-day.`,
       isDanger: true,
       onConfirm: async () => {
         setIsSaving(true);
         closeConfirm();
         try {
-          // Delete locked metadata record only, preserving physical records for intermediate logs
-          await supabase
+          // 1. Delete matching metadata record using the true range boundaries
+          const { error: rangeError } = await supabase
             .from('locked_ranges')
             .delete()
             .eq('user_id', user.id)
-            .eq('start_date', startStr)
-            .eq('end_date', endStr);
+            .eq('start_date', rangeStartStr)
+            .eq('end_date', rangeEndStr);
 
-          setSaveMessage({ type: 'success', text: 'Operational range successfully unmerged.' });
+          if (rangeError) throw rangeError;
+
+          // 2. Delete ALL daily stock records within the true range boundaries from database
+          const { error: stockError } = await supabase
+            .from('daily_stock')
+            .delete()
+            .eq('user_id', user.id)
+            .gte('date', rangeStartStr)
+            .lte('date', rangeEndStr);
+
+          if (stockError) throw stockError;
+
+          // 3. Immediately clear local states to instantly reset calendar styling on screen
+          setLockedRanges(prev => prev.filter(r => !(r.start_date === rangeStartStr && r.end_date === rangeEndStr)));
+          setFilledDates(prev => prev.filter(d => !(d >= rangeStartStr && d <= rangeEndStr)));
+
+          // 4. Reset date selection back to the start date of the split range so user can start filling
+          setStartDate(trueStartObj);
+          setEndDate(trueStartObj);
+
+          setSaveMessage({ type: 'success', text: 'Combined range successfully split. All intermediate days unlocked.' });
           setRefreshTrigger(prev => prev + 1);
         } catch (err) {
-          setAlertModal({ isOpen: true, title: "Reset Failed", message: err.message });
+          setAlertModal({ isOpen: true, title: "Split Range Failed", message: err.message });
         } finally {
           setIsSaving(false);
         }
@@ -291,8 +322,17 @@ export default function DailyStock() {
 
       if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
         const range = getDatesInRange(startDate, redirected || date);
+        
+        // 1. Check for holidays in the requested range
         if (range.some(d => markedHolidays.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays." });
+          setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays. Range selection blocked." });
+          return;
+        }
+
+        // 2. Check for previously filled daily stock entries in the requested range (excluding end date if they are updating)
+        const rangeToCheck = range.slice(0, -1);
+        if (rangeToCheck.some(d => filledDates.includes(d))) {
+          setAlertModal({ isOpen: true, title: "Overlaps Existing Entries", message: "Selected range overlaps with previously saved daily stock records. Range selection blocked." });
           return;
         }
       }
@@ -1525,7 +1565,7 @@ export default function DailyStock() {
                       onClick={() => {
                         setPopupTab('collection');
                         setEditingExpenseId(null);
-                        setExpenseForm({ date: popupDate, description: '', amount: '' });
+                        setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
                       }} 
                       className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'collection' ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
                     >
@@ -1615,7 +1655,7 @@ export default function DailyStock() {
 
                 <div className="lg:col-span-2 bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
                   <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
                       {popupTab === 'expense' ? <Receipt size={18} className="text-red-500"/> : <Landmark size={18} className="text-indigo-500"/>}
                       {popupTab === 'expense' ? 'Daily Expenses Log' : 'Daily Online Collections'}
                     </h3>
@@ -1646,26 +1686,26 @@ export default function DailyStock() {
                                 </td>
                               )}
                               <td className={`px-6 py-4 text-right font-bold ${popupTab === 'expense' ? 'text-red-600 dark:text-red-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
-                                ₹{parseFloat(row.amount).toLocaleString()}
-                              </td>
-                              <td className="px-4 py-4 text-center">
-                                <div className="flex justify-center gap-2">
-                                  <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                                  <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"><Trash2 size={16} /></button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
+                                  ₹{parseFloat(row.amount).toLocaleString()}
+                                </td>
+                                <td className="px-4 py-4 text-center">
+                                  <div className="flex justify-center gap-2">
+                                    <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"><Edit2 size={16} /></button>
+                                    <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
+        )}
+      </div>
+    );
+  }
