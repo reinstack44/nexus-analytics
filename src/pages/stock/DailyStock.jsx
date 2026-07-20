@@ -33,7 +33,6 @@ FormDateInput.displayName = "FormDateInput";
 
 const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// --- FIFO BATCH CALCULATION ENGINE ---
 const recalculateRow = (row) => {
   let sQty = 0; let sAmt = 0; let sMrpAmt = 0;
   let cAmt = 0; let cMrpAmt = 0;
@@ -78,7 +77,8 @@ const recalculateRow = (row) => {
     sales_amount: sAmt, 
     sales_mrp_amount: sMrpAmt,
     closing_amount: cAmt,
-    closing_mrp_amount: cMrpAmt
+    closing_mrp_amount: cMrpAmt,
+    ending_batches: queue
   };
 };
 
@@ -90,7 +90,7 @@ export default function DailyStock() {
   const [saveMessage, setSaveMessage] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0); 
 
-  // एकीकृत साझा कीज़ (Unified Session Storage)
+  // Global Calendar Configuration & Storage Continuity
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('global_startDate');
     return saved ? new Date(saved) : new Date();
@@ -108,7 +108,7 @@ export default function DailyStock() {
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0, totalMrpRevenue: 0 });
 
-  // --- CUSTOM MODALS ---
+  // Custom Modal State Handlers
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', isDanger: false, onConfirm: null });
   const [alertModal, setAlertModal] = useState({ isOpen: false, title: '', message: '' });
   const [holidayModal, setHolidayModal] = useState({ isOpen: false, date: null, dateStr: '' });
@@ -127,14 +127,23 @@ export default function DailyStock() {
   const [pipelineWarning, setPipelineWarning] = useState(null);
   const [customRangeMode, setCustomRangeMode] = useState(false);
 
+  // Database-driven Highlight Arrays
   const [markedHolidays, setMarkedHolidays] = useState([]);
   const [filledDates, setFilledDates] = useState([]);
+  const [lockedRanges, setLockedRanges] = useState([]); // Database Combined Ranges
 
-  // optimized helper to convert dates
   const formatDateForDB = useCallback((dateObj) => {
     if (!dateObj) return '';
     const d = new Date(dateObj);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
+
+  const normalizeDateStr = useCallback((dStr) => {
+    if (!dStr) return '';
+    if (dStr.includes('T')) {
+      return dStr.split('T')[0];
+    }
+    return dStr;
   }, []);
 
   const getDatesInRange = useCallback((start, end) => {
@@ -148,13 +157,30 @@ export default function DailyStock() {
 
   const selectedDates = useMemo(() => getDatesInRange(startDate, endDate), [startDate, endDate, getDatesInRange]);
   const isMultiDayRange = startDate && endDate && formatDateForDB(startDate) !== formatDateForDB(endDate);
+  
   const isHolidaySelected = isMultiDayRange 
     ? selectedDates.every(d => markedHolidays.includes(d)) 
     : selectedDates.some(d => markedHolidays.includes(d));
   
   const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
 
-  // --- HARD DATA RESET TOOL ---
+  // Auto-redirect Click Events if selected inside an existing locked range block
+  const getRedirectedDate = useCallback((date) => {
+    if (!date) return null;
+    const dateStr = formatDateForDB(date);
+    const matchedRange = lockedRanges.find(r => dateStr >= r.start_date && dateStr <= r.end_date);
+    if (matchedRange) {
+      return new Date(matchedRange.end_date);
+    }
+    return date;
+  }, [lockedRanges, formatDateForDB]);
+
+  const isCurrentSelectionARangeEnd = useMemo(() => {
+    const endStr = formatDateForDB(endDate || startDate);
+    return lockedRanges.some(r => r.end_date === endStr);
+  }, [lockedRanges, startDate, endDate, formatDateForDB]);
+
+  // Combined Block Unmerging - Splitting Range Safely
   const handleResetRangeData = async () => {
     if (!startDate || !endDate) return;
     const startStr = formatDateForDB(startDate);
@@ -162,37 +188,22 @@ export default function DailyStock() {
 
     setConfirmModal({
       isOpen: true,
-      title: 'Reset & Clear Range Data?',
-      message: `Warning: This will permanently DELETE all recorded entries from ${formatDisplayDate(startDate)} to ${formatDisplayDate(endDate)} from the database. All system locks will be released. This action cannot be undone.`,
+      title: 'Reset & Split Range Data?',
+      message: `Do you want to split the combined block from ${formatDisplayDate(startDate)} to ${formatDisplayDate(endDate)} into individual daily entries? This action removes the combined lock from your calendar while fully protecting historical stock metrics.`,
       isDanger: true,
       onConfirm: async () => {
         setIsSaving(true);
         closeConfirm();
         try {
-          const { error } = await supabase
-            .from('daily_stock')
-            .delete()
-            .eq('user_id', user.id)
-            .gte('date', startStr)
-            .lte('date', endStr);
-
-          if (error) throw error;
-
+          // Delete locked metadata record only, preserving physical records for intermediate logs
           await supabase
-            .from('holidays')
+            .from('locked_ranges')
             .delete()
             .eq('user_id', user.id)
-            .gte('date', startStr)
-            .lte('date', endStr);
+            .eq('start_date', startStr)
+            .eq('end_date', endStr);
 
-          // local state release to instantly unlock the range view
-          setFilledDates(prev => prev.filter(d => d < startStr || d > endStr));
-          setMarkedHolidays(prev => prev.filter(d => d < startStr || d > endStr));
-          
-          setStartDate(startDate);
-          setEndDate(startDate);
-
-          setSaveMessage({ type: 'success', text: 'Database entries deleted. Dates are now completely normal and fresh.' });
+          setSaveMessage({ type: 'success', text: 'Operational range successfully unmerged.' });
           setRefreshTrigger(prev => prev + 1);
         } catch (err) {
           setAlertModal({ isOpen: true, title: "Reset Failed", message: err.message });
@@ -203,7 +214,6 @@ export default function DailyStock() {
     });
   };
 
-  // 30-सेकंड पोलिंग सिंक (Flickering रोकने के लिए)
   useEffect(() => {
     const interval = setInterval(() => {
       setRefreshTrigger(prev => prev + 1);
@@ -211,7 +221,6 @@ export default function DailyStock() {
     return () => clearInterval(interval);
   }, []);
 
-  // रीयल-टाइम लिसनर
   useEffect(() => {
     const channel = supabase
       .channel('dailystock-realtime')
@@ -219,6 +228,7 @@ export default function DailyStock() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'locked_ranges' }, () => setRefreshTrigger(prev => prev + 1))
       .subscribe();
 
     return () => {
@@ -230,24 +240,20 @@ export default function DailyStock() {
     let isMounted = true;
     const fetchCloudPreferences = async () => {
       if (!user) return;
-      const { data: holidayData } = await supabase.from('holidays').select('date').eq('user_id', user.id);
-      const { data: filledData } = await supabase.from('daily_stock').select('date').eq('user_id', user.id).not('closing_balance', 'is', null);
+      const [
+        { data: holidayData },
+        { data: filledData },
+        { data: rangeData }
+      ] = await Promise.all([
+        supabase.from('holidays').select('date').eq('user_id', user.id),
+        supabase.from('daily_stock').select('date').eq('user_id', user.id).not('closing_balance', 'is', null),
+        supabase.from('locked_ranges').select('start_date, end_date').eq('user_id', user.id)
+      ]);
       
       if (isMounted) {
-        if (holidayData) {
-          const newHolidays = holidayData.map(h => h.date);
-          setMarkedHolidays(prev => {
-            const isSame = prev.length === newHolidays.length && prev.every((v, i) => v === newHolidays[i]);
-            return isSame ? prev : newHolidays;
-          });
-        }
-        if (filledData) {
-          const newFilled = [...new Set(filledData.map(d => d.date))].sort();
-          setFilledDates(prev => {
-            const isSame = prev.length === newFilled.length && prev.every((v, i) => v === newFilled[i]);
-            return isSame ? prev : newFilled;
-          });
-        }
+        if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
+        if (filledData) setFilledDates([...new Set(filledData.map(d => d.date))].sort());
+        if (rangeData) setLockedRanges(rangeData);
       }
     };
     fetchCloudPreferences();
@@ -255,46 +261,43 @@ export default function DailyStock() {
   }, [user, refreshTrigger]);
 
   const handleStartDateChange = (date) => {
-    const dateStr = formatDateForDB(date);
+    const redirected = getRedirectedDate(date);
+    const dateStr = formatDateForDB(redirected || date);
     
     if (!customRangeMode) {
       if (markedHolidays.includes(dateStr)) {
-        setHolidayModal({ isOpen: true, date, dateStr });
+        setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
         return;
       }
     }
 
-    setStartDate(date);
-    setEndDate(date); 
+    setStartDate(redirected || date);
+    setEndDate(redirected || date); 
   };
 
   const handleEndDateChange = (date) => {
-    const dateStr = formatDateForDB(date);
+    const redirected = getRedirectedDate(date);
+    const dateStr = formatDateForDB(redirected || date);
     
     if (!customRangeMode) {
       if (markedHolidays.includes(dateStr)) {
-        setHolidayModal({ isOpen: true, date, dateStr });
+        setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
         return;
       }
-      if (date < startDate) {
-        setAlertModal({ isOpen: true, title: "Invalid Range", message: "End date cannot be earlier than the Start date." });
+      if ((redirected || date) < startDate) {
+        setAlertModal({ isOpen: true, title: "Invalid Selection", message: "End date must fall on or after the start date." });
         return;
       }
 
-      if (formatDateForDB(date) !== formatDateForDB(startDate)) {
-        const range = getDatesInRange(startDate, date);
-        // BLOCK holiday or previously filled selection in Reconcile Mode
+      if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
+        const range = getDatesInRange(startDate, redirected || date);
         if (range.some(d => markedHolidays.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Invalid Selection", message: "Your selected range contains a holiday. Please select a clear working period." });
-          return;
-        }
-        if (range.some(d => filledDates.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Data Conflict", message: "You cannot form a date range over days that already have recorded entries. Please select a fresh period or view them individually." });
+          setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays." });
           return;
         }
       }
     }
-    setEndDate(date);
+    setEndDate(redirected || date);
   };
 
   const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
@@ -313,7 +316,7 @@ export default function DailyStock() {
   const prevDatesRef = useRef({ start: null, end: null });
   const hasLoadedRef = useRef(false);
 
-  // --- FETCH MAIN DAILY STOCK WITH HIGH-SPEED OPTIMIZATION ---
+  // Cumulative chronological reconstruction algorithm with robust decoupled price tracking
   useEffect(() => {
     let isMounted = true;
 
@@ -341,14 +344,13 @@ export default function DailyStock() {
       const prevDateStr = formatDateForDB(targetPrevDate);
 
       if (!customRangeMode) {
-        // चेक करें कि क्या पिछले दिन का डेटा अधूरा है
         const { data: pData } = await supabase.from('daily_stock').select('closing_balance').eq('date', prevDateStr);
         if (pData && pData.length > 0 && pData.some(r => r.closing_balance === null)) {
             setPipelineWarning(prevDateStr);
         }
       }
 
-      // optimized selecting structure with high limit bypass limit (50k rows)
+      // Linear Retrieval of full historical stock to build highly accurate FIFO chains
       const [
         { data: brandsData },
         { data: allHistoricalStock },
@@ -369,17 +371,40 @@ export default function DailyStock() {
       if (brandsData) {
         const brandBatches = {};
         const prevClosing = {};
+        const lastActivePrice = {}; // Track last recorded operational price
+        const lastActiveMrp = {};   // Track last recorded operational MRP
         
+        const targetStart = normalizeDateStr(startStr);
+
         allHistoricalStock?.forEach(s => {
-            if (s.date < startStr) {
+            const logDate = normalizeDateStr(s.date);
+            if (logDate < targetStart) {
                 let queue = brandBatches[s.brand_id] || [];
                 const brand = brandsData.find(b => b.id === s.brand_id);
                 if (!brand) return;
 
+                // Track the last recorded prices unconditionally to avoid timezone / blank day carry-over losses
+                // If it is different from master baseline, we preserve it as custom active rate
+                if (s.unit_price !== undefined && s.unit_price !== null && parseFloat(s.unit_price) > 0) {
+                    if (parseFloat(s.unit_price) !== parseFloat(brand.selling_price)) {
+                        lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
+                    } else if (lastActivePrice[s.brand_id] === undefined) {
+                        lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
+                    }
+                }
+                if (s.unit_mrp !== undefined && s.unit_mrp !== null && parseFloat(s.unit_mrp) > 0) {
+                    if (parseFloat(s.unit_mrp) !== parseFloat(brand.mrp_price)) {
+                        lastActiveMrp[s.brand_id] = parseFloat(s.unit_mrp);
+                    } else if (lastActiveMrp[s.brand_id] === undefined) {
+                        lastActiveMrp[s.brand_id] = parseFloat(s.unit_mrp);
+                    }
+                }
+
                 const opBal = parseInt(s.opening_balance) || 0;
                 const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
-                const pPrice = parseFloat(s.unit_price) || parseFloat(brand.selling_price) || 0;
-                const pMrp = parseFloat(s.unit_mrp) || parseFloat(brand.mrp_price) || 0;
+                
+                const pPrice = parseFloat(s.unit_price) || lastActivePrice[s.brand_id] || parseFloat(brand.selling_price) || 0;
+                const pMrp = parseFloat(s.unit_mrp) || lastActiveMrp[s.brand_id] || parseFloat(brand.mrp_price) || 0;
 
                 if (pQty > 0) {
                     queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
@@ -410,21 +435,29 @@ export default function DailyStock() {
           const starting_batches = brandBatches[brand.id] || [];
           const baseOpening = starting_batches.reduce((acc, b) => acc + b.qty, 0);
           
-          let carriedPrice = starting_batches.length > 0 ? starting_batches[0].price : parseFloat(brand.selling_price);
-          let carriedMrp = starting_batches.length > 0 ? starting_batches[0].mrp : parseFloat(brand.mrp_price || 0);
+          // Gap continuity fix: Fallback to lastActivePrice/lastActiveMrp if starting queue is temporarily empty
+          let carriedPrice = parseFloat(brand.selling_price) || 0;
+          if (lastActivePrice[brand.id] !== undefined && lastActivePrice[brand.id] > 0) {
+            carriedPrice = lastActivePrice[brand.id];
+          } else if (starting_batches.length > 0) {
+            carriedPrice = starting_batches[0].price;
+          }
+            
+          let carriedMrp = parseFloat(brand.mrp_price) || 0;
+          if (lastActiveMrp[brand.id] !== undefined && lastActiveMrp[brand.id] > 0) {
+            carriedMrp = lastActiveMrp[brand.id];
+          } else if (starting_batches.length > 0) {
+            carriedMrp = starting_batches[0].mrp;
+          }
 
-          const brandRangeLogs = allHistoricalStock?.filter(s => s.brand_id === brand.id && s.date >= startStr && s.date <= endStr) || [];
-          
-          // Rule of Truth: Load existing db record dynamically for pristine data security
-          const exactRecord = !isMultiDayRange ? brandRangeLogs.find(log => log.date === startStr) : null;
+          const brandRangeLogs = allHistoricalStock?.filter(s => s.brand_id === brand.id && normalizeDateStr(s.date) >= targetStart && normalizeDateStr(s.date) <= normalizeDateStr(endStr)) || [];
+          const exactRecord = !isMultiDayRange ? brandRangeLogs.find(log => normalizeDateStr(log.date) === targetStart) : null;
           
           if (exactRecord) {
             const opBal = parseInt(exactRecord.opening_balance) || 0;
             const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
             
             const pQty = Math.max(0, opBal - baseOpening);
-            
-            // FIFO Continuity Upgrade: If pQty is 0, always fallback to queue price to prevent master reversion.
             const pPrice = pQty > 0 ? (parseFloat(exactRecord.unit_price) || carriedPrice) : carriedPrice;
             const pMrp = pQty > 0 ? (parseFloat(exactRecord.unit_mrp) || carriedMrp) : carriedMrp;
 
@@ -458,7 +491,6 @@ export default function DailyStock() {
              const pQty = Math.max(0, opBal - currentPrevClosing);
              totalPurchasesQty += pQty;
              
-             // Range logs continuity upgrade
              if (pQty > 0) {
                 if (log.unit_price) latestUnitPrice = parseFloat(log.unit_price);
                 if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
@@ -518,7 +550,7 @@ export default function DailyStock() {
     }
     
     return () => { isMounted = false; };
-  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode, formatDateForDB, isMultiDayRange]);
+  }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode, formatDateForDB, normalizeDateStr, isMultiDayRange]);
 
   const fetchPopupData = async (dateToFetch) => {
     const dateStr = formatDateForDB(dateToFetch);
@@ -558,7 +590,7 @@ export default function DailyStock() {
     setConfirmModal({
       isOpen: true,
       title: 'Declare as Holiday?',
-      message: 'Marking this period as a holiday will automatically lock sales generation and carry forward opening balances as closing balances.',
+      message: 'Marking this period as a holiday will automatically carry forward opening stock and lock transactions.',
       isDanger: false,
       onConfirm: async () => {
         setIsSaving(true);
@@ -586,7 +618,7 @@ export default function DailyStock() {
              return supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
           });
           await Promise.all(upsertPromises);
-        } catch (error) { console.error("Holiday DB Save Error:", error); }
+        } catch (error) { console.error("Holiday Save Error:", error); }
 
         setRefreshTrigger(prev => prev + 1);
         setIsSaving(false);
@@ -615,7 +647,7 @@ export default function DailyStock() {
     try {
       const updatePromises = _stockRows.map((row, index) => supabase.from('brands').update({ display_order: index }).eq('id', row.brand_id));
       await Promise.all(updatePromises);
-    } catch (error) { console.error("Error saving new sequence:", error); }
+    } catch (error) { console.error("Error saving layout hierarchy:", error); }
     dragItem.current = null;
     dragOverItem.current = null;
   };
@@ -701,27 +733,66 @@ export default function DailyStock() {
     setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
   };
 
+  // Safe Multi-Day & Single-Day Database Save Execution
   const handleSaveStock = async () => {
     setIsSaving(true);
     setSaveMessage(null);
+    const startStr = formatDateForDB(startDate);
     const endStr = formatDateForDB(endDate || startDate);
 
-    const upsertData = stockRows.map(row => ({
-      user_id: user.id, date: endStr, brand_id: row.brand_id,
-      opening_balance: parseInt(row.opening_balance) || 0,
-      closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
-      unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
-      unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
-    }));
+    try {
+      if (isMultiDayRange) {
+        // Safe Range Entry commit to "locked_ranges"
+        await supabase
+          .from('locked_ranges')
+          .upsert([{ user_id: user.id, start_date: startStr, end_date: endStr }], { onConflict: 'user_id, start_date, end_date' });
 
-    const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
-    if (error) {
-      setAlertModal({ isOpen: true, title: "Database Error", message: "Failed to save stock: " + error.message });
-    } else {
-      try {
-        const brandUpdates = stockRows.map(async (row) => {
-          const activePrice = parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0;
-          const activeMrp = parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0;
+        // Zero down intermediate sales to keep downstream chronological chains intact
+        for (let i = 0; i < selectedDates.length; i++) {
+          const dateStr = selectedDates[i];
+          const isLastDay = i === selectedDates.length - 1;
+
+          const upsertBatch = stockRows.map(row => {
+            const op = parseInt(row.opening_balance) || 0;
+            const pQty = parseInt(row.purchase_qty) || 0;
+            const cl = isLastDay 
+              ? (row.closing_balance === '' ? null : parseInt(row.closing_balance)) 
+              : (op + pQty);
+
+            return {
+              user_id: user.id,
+              date: dateStr,
+              brand_id: row.brand_id,
+              opening_balance: op,
+              closing_balance: cl,
+              unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
+              unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
+            };
+          });
+
+          await supabase.from('daily_stock').upsert(upsertBatch, { onConflict: 'date, brand_id, user_id' });
+        }
+      } else {
+        // Standard single-day record save
+        const upsertData = stockRows.map(row => ({
+          user_id: user.id, 
+          date: endStr, 
+          brand_id: row.brand_id,
+          opening_balance: parseInt(row.opening_balance) || 0,
+          closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
+          unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
+          unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
+        }));
+
+        const { error } = await supabase.from('daily_stock').upsert(upsertData, { onConflict: 'date, brand_id, user_id' });
+        if (error) throw error;
+      }
+
+      // Safeguard: ONLY update brands master baseline price if a direct purchase is made
+      const brandUpdates = stockRows.map(async (row) => {
+        if (parseInt(row.purchase_qty) > 0) {
+          const activePrice = parseFloat(row.purchase_price);
+          const activeMrp = parseFloat(row.purchase_mrp);
           
           if ((activePrice > 0 && activePrice !== parseFloat(row.selling_price)) || 
               (activeMrp > 0 && activeMrp !== parseFloat(row.mrp_price))) {
@@ -741,17 +812,18 @@ export default function DailyStock() {
               }]);
             }
           }
-        });
-        await Promise.all(brandUpdates);
-      } catch (syncErr) {
-        console.error("Brand Price Live Sync Error:", syncErr);
-      }
+        }
+      });
+      await Promise.all(brandUpdates);
 
-      setSaveMessage({ type: 'success', text: `Stock ledger saved successfully for the period!` });
+      setSaveMessage({ type: 'success', text: `Inventory metrics saved successfully!` });
       setTimeout(() => setSaveMessage(null), 3000);
       setRefreshTrigger(prev => prev + 1);
+    } catch (err) {
+      setAlertModal({ isOpen: true, title: "Database Error", message: err.message });
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
   };
 
   const handleAddExpense = async (e) => {
@@ -775,7 +847,7 @@ export default function DailyStock() {
   
   const openDeleteExpense = (id) => {
     setConfirmModal({
-      isOpen: true, title: 'Delete Expense?', message: 'This expense record will be permanently deleted.', isDanger: true,
+      isOpen: true, title: 'Delete Expense?', message: 'This transaction record will be permanently deleted.', isDanger: true,
       onConfirm: async () => {
         setIsSubmitting(true); 
         const { error } = await supabase.from('expenses').delete().eq('id', id); 
@@ -806,7 +878,7 @@ export default function DailyStock() {
   
   const openDeleteCollection = (id) => {
     setConfirmModal({
-      isOpen: true, title: 'Delete Collection?', message: 'This collection entry will be permanently removed.', isDanger: true,
+      isOpen: true, title: 'Delete Entry?', message: 'This collection entry will be permanently removed.', isDanger: true,
       onConfirm: async () => {
         setIsSubmitting(true); 
         const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id); 
@@ -849,10 +921,24 @@ export default function DailyStock() {
   const inputClass = "w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-semibold";
   const numInputClass = "w-20 px-2 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm text-center font-bold";
 
-  const holidayDatesArray = markedHolidays.map(dateStr => {
-    const [year, month, day] = dateStr.split('-');
-    return new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
-  });
+  // Calendar Day Styling Matrix (Styles applied dynamically by dayClassName)
+  const getDayClassName = (date) => {
+    const dateStr = formatDateForDB(date);
+    if (markedHolidays.includes(dateStr)) {
+      return "react-datepicker__day--highlighted-holiday";
+    }
+    
+    // Check locked_ranges table data
+    const isLockedRange = lockedRanges.some(r => dateStr >= r.start_date && dateStr <= r.end_date);
+    if (isLockedRange) {
+      return "react-datepicker__day--highlighted-combined";
+    }
+    
+    if (filledDates.includes(dateStr)) {
+      return "react-datepicker__day--highlighted-filled";
+    }
+    return "";
+  };
 
   return (
     <div className="space-y-6 transition-colors duration-300 relative">
@@ -862,10 +948,9 @@ export default function DailyStock() {
         .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }
         .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
         .react-datepicker-popper { z-index: 99999 !important; }
-        .react-datepicker { background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 1rem !important; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important; font-family: inherit !important; padding: 0.5rem !important; }
+        .react-datepicker { background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 1rem !important; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important; padding: 0.5rem !important; }
         .react-datepicker__month-select, .react-datepicker__year-select { background-color: #f8fafc !important; border: 1px solid #cbd5e1 !important; border-radius: 0.5rem !important; padding: 0.2rem 0.5rem !important; color: #1e293b !important; font-weight: 600 !important; cursor: pointer !important; outline: none !important; }
         .react-datepicker__month-container { background-color: #ffffff !important; }
-        .react-datepicker__header { background-color: #ffffff !important; border-bottom: 1px solid #f1f5f9 !important; padding-top: 0.5rem !important; }
         .react-datepicker__current-month { display: none !important; } 
         .react-datepicker__header__dropdown { margin-top: 5px; margin-bottom: 10px; display: flex; justify-content: center; gap: 8px; font-size: 0.95rem; }
         .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
@@ -873,7 +958,11 @@ export default function DailyStock() {
         .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
         .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; }
         .react-datepicker__triangle { display: none !important; }
+        
+        /* State Indicators */
         .react-datepicker__day--highlighted-holiday { background-color: #f97316 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
+        .react-datepicker__day--highlighted-filled { background-color: #10b981 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
+        .react-datepicker__day--highlighted-combined { background-color: #6366f1 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
         
         .react-datepicker__day--in-range {
           background-color: #dbeafe !important;
@@ -901,6 +990,8 @@ export default function DailyStock() {
         .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--selected { background-color: #3b82f6 !important; color: #ffffff !important; }
         .dark .react-datepicker__day--highlighted-holiday { background-color: #ea580c !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--highlighted-filled { background-color: #059669 !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--highlighted-combined { background-color: #4f46e5 !important; color: #ffffff !important; }
         .dark .react-datepicker__month-select, .dark .react-datepicker__year-select { background-color: #0f172a !important; border-color: #334155 !important; color: #f8fafc !important; }
         .dark .react-datepicker__month-select option, .dark .react-datepicker__year-select option { background-color: #0f172a !important; color: #f8fafc !important; }
         
@@ -908,18 +999,6 @@ export default function DailyStock() {
           background-color: #1e3a8a !important;
           color: #eff6ff !important;
           border-radius: 0px !important;
-        }
-        .dark .react-datepicker__day--range-start {
-          background-color: #3b82f6 !important;
-          color: #ffffff !important;
-          border-top-left-radius: 0.5rem !important;
-          border-bottom-left-radius: 0.5rem !important;
-        }
-        .dark .react-datepicker__day--range-end {
-          background-color: #3b82f6 !important;
-          color: #ffffff !important;
-          border-top-right-radius: 0.5rem !important;
-          border-bottom-right-radius: 0.5rem !important;
         }
       `}</style>
 
@@ -932,7 +1011,7 @@ export default function DailyStock() {
             <div className="flex gap-3">
               <button onClick={closeConfirm} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors">Cancel</button>
               <button onClick={confirmModal.onConfirm} className={`flex-1 px-4 py-2.5 text-white rounded-xl font-bold transition-colors shadow-sm ${confirmModal.isDanger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                {confirmModal.title.includes('Reset') ? 'Delete & Reset' : 'Confirm'}
+                Confirm
               </button>
             </div>
           </div>
@@ -964,15 +1043,15 @@ export default function DailyStock() {
             </div>
             <h3 className="text-2xl font-black text-slate-800 dark:text-white mb-2">Holiday Declared!</h3>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
-              The selected date <strong className="text-slate-800 dark:text-white">{formatDisplayDate(holidayModal.date)}</strong> is marked as a holiday. Sales recording and standard entries are currently locked.
+              The selected date <strong className="text-slate-800 dark:text-white">{formatDisplayDate(holidayModal.date)}</strong> is marked as a holiday.
             </p>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 p-4">
               <button 
                 onClick={() => handleCancelHolidayFromModal(holidayModal.dateStr)} 
                 disabled={isSaving}
                 className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2"
               >
-                <Trash2 size={18} /> {isSaving ? 'Unlocking Entry...' : 'Cancel Holiday & Unlock Entry'}
+                <Trash2 size={18} /> {isSaving ? 'Unlocking...' : 'Cancel Holiday & Unlock'}
               </button>
               <button 
                 onClick={() => setHolidayModal({ isOpen: false, date: null, dateStr: '' })} 
@@ -985,12 +1064,12 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* PIPELINE BROKEN WARNING */}
+      {/* PIPELINE LOCK WARNING */}
       {pipelineWarning && !isHolidaySelected && !customRangeMode && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Lock className="text-red-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-red-800 dark:text-red-300 leading-relaxed font-medium">
-            <strong>Pipeline Locked:</strong> The closing stock for <span className="font-bold border-b border-red-300">{formatDisplayDate(pipelineWarning)}</span> is incomplete. You must fill its closing balance or declare it as a holiday before managing subsequent dates.
+            <strong>Reconciliation Locked:</strong> The closing stock for <span className="font-bold border-b border-red-300">{formatDisplayDate(pipelineWarning)}</span> is incomplete. You must save its closing balance or declare it as a holiday before managing subsequent dates.
           </p>
         </div>
       )}
@@ -1000,7 +1079,7 @@ export default function DailyStock() {
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
             <Package className="text-blue-500" /> Daily Stock Ledger
           </h2>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing stock.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing balances.</p>
         </div>
         
         <div className="flex-1 min-w-0 flex xl:justify-end mt-2 xl:mt-0">
@@ -1011,7 +1090,7 @@ export default function DailyStock() {
                 selected={startDate} onChange={handleStartDateChange} maxDate={new Date()} dateFormat="dd MMM yyyy" 
                 customInput={<CustomDateInput placeholder="Start Date" />} 
                 showMonthDropdown showYearDropdown dropdownMode="select"
-                highlightDates={[ { "react-datepicker__day--highlighted-holiday": holidayDatesArray } ]}
+                dayClassName={getDayClassName}
                 selectsStart
                 startDate={startDate}
                 endDate={endDate}
@@ -1021,7 +1100,7 @@ export default function DailyStock() {
                 selected={endDate} onChange={handleEndDateChange} minDate={startDate} maxDate={new Date()} dateFormat="dd MMM yyyy" 
                 customInput={<CustomDateInput placeholder="End Date" />} 
                 showMonthDropdown showYearDropdown dropdownMode="select"
-                highlightDates={[ { "react-datepicker__day--highlighted-holiday": holidayDatesArray } ]}
+                dayClassName={getDayClassName}
                 selectsEnd
                 startDate={startDate}
                 endDate={endDate}
@@ -1051,18 +1130,18 @@ export default function DailyStock() {
               </button>
             )}
 
-            {!customRangeMode && (
+            {!customRangeMode && isCurrentSelectionARangeEnd && (
               <button 
                 onClick={handleResetRangeData} 
                 disabled={isSaving}
                 className="shrink-0 flex items-center gap-1.5 h-10.5 bg-red-600 hover:bg-red-700 text-white px-4 rounded-xl text-sm font-bold transition-all shadow-sm disabled:opacity-50"
               >
-                <Trash2 size={18} /> Reset Range Data
+                <Trash2 size={18} /> Split Range
               </button>
             )}
 
             {!customRangeMode && (
-              <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning || isMultiDayRange} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+              <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
                 <Save size={18} /> {isSaving ? 'Saving...' : 'Save'}
               </button>
             )}
@@ -1078,19 +1157,18 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* Mode Status Indicator Banner */}
       {customRangeMode ? (
         <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Info className="text-indigo-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-indigo-800 dark:text-indigo-300 leading-relaxed font-semibold">
-            Custom View Mode Active (Read-Only): Showing combined calculations from {formatDisplayDate(startDate)} to {formatDisplayDate(endDate)}. Saving and editing are disabled.
+            Custom View Mode Active (Read-Only): Showing operational statistics from {formatDisplayDate(startDate)} to {formatDisplayDate(endDate)}. Edits are locked.
           </p>
         </div>
       ) : isMultiDayRange && !isHolidaySelected && !pipelineWarning && (
         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Info className="text-blue-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
-          <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed">
-            Reconcile Range Selected: Visualizing operational chain from <strong>{formatDisplayDate(startDate)}</strong> to <strong>{formatDisplayDate(endDate)}</strong>. Use Reset Range to start clean.
+          <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed font-semibold">
+            Reconcile Range Selected: Visualizing chain from <strong>{formatDisplayDate(startDate)}</strong> to <strong>{formatDisplayDate(endDate)}</strong>. Use Save to commit closing stock.
           </p>
         </div>
       )}
@@ -1102,11 +1180,11 @@ export default function DailyStock() {
           </div>
           <h3 className="text-3xl font-black text-slate-800 dark:text-white mb-3">Holiday Declared!</h3>
           <p className="text-slate-500 dark:text-slate-400 mb-8 max-w-lg text-lg">
-            Sales generation is locked for the selected period. Your stock balances have been safely carried forward. 
+            Sales records are locked for this period. Your stock metrics have been carried forward.
           </p>
           {!customRangeMode && (
             <button onClick={handleRemoveHoliday} disabled={isSaving} className="px-6 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50 mx-auto">
-              <Trash2 size={20} /> {isSaving ? 'Unlocking Entry...' : 'Cancel Holiday & Unlock Entry'}
+              <Trash2 size={20} /> {isSaving ? 'Unlocking...' : 'Cancel Holiday & Unlock'}
             </button>
           )}
         </div>
@@ -1115,19 +1193,19 @@ export default function DailyStock() {
           <div className={`grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10 animate-in fade-in transition-opacity ${pipelineWarning && !customRangeMode ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="bg-linear-to-br from-indigo-500 to-indigo-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
-              <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty (Auto)</p>
+              <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty</p>
               <h3 className="text-4xl font-black relative z-10">{dailySummary.totalSalesQty} <span className="text-lg font-medium opacity-80">Units</span></h3>
             </div>
 
             <div className="bg-linear-to-br from-emerald-500 to-emerald-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
-              <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Generated Revenue (Auto)</p>
+              <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Generated Revenue</p>
               <h3 className="text-4xl font-black relative z-10">{formatRs(dailySummary.totalRevenue)}</h3>
             </div>
 
             <div className="bg-linear-to-br from-red-500 to-red-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Receipt size={120} /></div>
-              <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Expenses (Auto)</p>
+              <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Expenses</p>
               <h3 className="text-4xl font-black relative z-10">{formatRs(dailySummary.totalExpenses)}</h3>
             </div>
           </div>
@@ -1151,7 +1229,7 @@ export default function DailyStock() {
                   {loading ? (
                     <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
                   ) : stockRows.length === 0 ? (
-                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to add items.</td></tr>
+                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to register items.</td></tr>
                   ) : (
                     stockRows.map((row, index) => (
                       <tr key={row.brand_id} draggable={!customRangeMode} onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
@@ -1178,7 +1256,7 @@ export default function DailyStock() {
                         <td className="px-4 py-4 text-center">
                           <input 
                             type="number" 
-                            disabled={customRangeMode || isMultiDayRange}
+                            disabled={customRangeMode}
                             value={row.opening_balance} 
                             onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} 
                             className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
@@ -1187,9 +1265,9 @@ export default function DailyStock() {
                         
                         <td className="px-4 py-4 text-center">
                           <button 
-                            disabled={customRangeMode || isMultiDayRange}
+                            disabled={customRangeMode}
                             onClick={() => openPurchaseModal(row)}
-                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${(customRangeMode || isMultiDayRange) ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${customRangeMode ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
                           >
                             {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
                           </button>
@@ -1200,7 +1278,7 @@ export default function DailyStock() {
                             type="number" 
                             min="0" 
                             placeholder="Qty" 
-                            disabled={customRangeMode || isMultiDayRange}
+                            disabled={customRangeMode}
                             value={row.closing_balance} 
                             onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} 
                             className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
@@ -1271,14 +1349,14 @@ export default function DailyStock() {
         </>
       )}
 
-      {/* --- ADD PURCHASE MODAL (FIFO ENGINE) --- */}
+      {/* PURCHASE BATCH RECONCILIATION MODAL */}
       {purchaseModal.isOpen && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" style={{ zIndex: 90000 }}>
           <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
             
             <div className="flex justify-between items-center px-5 py-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 shrink-0">
               <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Package size={20} className="text-blue-500" /> Record New Purchase
+                <Package size={20} className="text-blue-500" /> Record Batch Purchase
               </h3>
               <button 
                 type="button"
@@ -1293,11 +1371,11 @@ export default function DailyStock() {
               
               <div className="bg-blue-50 dark:bg-blue-900/20 p-3.5 sm:p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
                 <h4 className="font-bold text-slate-800 dark:text-slate-100 text-base sm:text-lg">{purchaseModal.brand?.brand_name}</h4>
-                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">{purchaseModal.brand?.bottle_size} • Base MRP: ₹{purchaseModal.brand?.carried_mrp} • Base Sale: ₹{purchaseModal.brand?.carried_price}</p>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">{purchaseModal.brand?.bottle_size} • Baseline MRP: ₹{purchaseModal.brand?.carried_mrp} • Baseline Sale Price: ₹{purchaseModal.brand?.carried_price}</p>
               </div>
 
               <div>
-                <label className="block text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">New Quantity Added</label>
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Quantity Added</label>
                 <input 
                   type="number" 
                   required min="0" 
@@ -1309,9 +1387,9 @@ export default function DailyStock() {
                 />
               </div>
 
-              {/* MRP CHANGE SECTION */}
+              {/* MRP OVERRIDE OPTION */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there an MRP change for this new stock?</label>
+                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there an MRP change for this batch?</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1331,7 +1409,7 @@ export default function DailyStock() {
                       onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: true})} 
                       className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
                     />
-                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different MRP</span>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, custom batch MRP</span>
                   </label>
                 </div>
               </div>
@@ -1339,8 +1417,7 @@ export default function DailyStock() {
               {purchaseModal.isMrpChanged && (
                 <div className="animate-in fade-in slide-in-from-top-2 pt-1">
                   <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    <span>New MRP Price (₹)</span>
-                    <span className="text-[9px] text-purple-500 bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
+                    <span>Batch MRP Price (₹)</span>
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
@@ -1355,9 +1432,9 @@ export default function DailyStock() {
                 </div>
               )}
 
-              {/* SELLING PRICE CHANGE SECTION */}
+              {/* SELLING PRICE OVERRIDE OPTION */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there a sale price change for this new stock?</label>
+                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there a selling price change for this batch?</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1377,7 +1454,7 @@ export default function DailyStock() {
                       onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: true})} 
                       className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
                     />
-                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, different price</span>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, custom batch price</span>
                   </label>
                 </div>
               </div>
@@ -1385,8 +1462,7 @@ export default function DailyStock() {
               {purchaseModal.isPriceChanged && (
                 <div className="animate-in fade-in slide-in-from-top-2 pt-1">
                   <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    <span>New Selling Price (₹)</span>
-                    <span className="text-[9px] text-blue-500 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">FIFO Applied</span>
+                    <span>Batch Selling Price (₹)</span>
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
@@ -1401,22 +1477,22 @@ export default function DailyStock() {
                 </div>
               )}
 
-              <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed shrink-0">
-                * Note: Previous stock will continue to sell at older rates. These new rates will only apply to these {purchaseModal.qty || '0'} newly added bottles.
+              <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed font-semibold">
+                * Note: Older stock continues to sell at previous operational rates. New rates apply only to these new {purchaseModal.qty || '0'} batch bottles.
               </p>
 
               <button 
                 type="submit" 
                 className="w-full mt-2 sm:mt-4 bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2 shrink-0 text-sm"
               >
-                <CheckCircle2 size={18} /> Confirm Addition
+                <CheckCircle2 size={18} /> Reconcile Batch
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* --- BANK DEPOSIT & EXPENSES POPUP (MODAL) --- */}
+      {/* FINANCIAL OPERATIONS MODAL */}
       {isBankDepositOpen && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 90000 }}>
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
@@ -1424,7 +1500,7 @@ export default function DailyStock() {
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <div className="flex items-center gap-4">
                 <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                  <Landmark size={24} className="text-blue-500" /> Bank & Ledger Operations
+                  <Landmark size={24} className="text-blue-500" /> Operational Cash Ledger
                 </h3>
               </div>
               <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
@@ -1475,7 +1551,7 @@ export default function DailyStock() {
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
-                          <input type="text" required value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Light Bill" />
+                          <input type="text" required value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Electricity Bill" />
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Amount (₹)</label>
@@ -1541,7 +1617,7 @@ export default function DailyStock() {
                   <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
                     <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                       {popupTab === 'expense' ? <Receipt size={18} className="text-red-500"/> : <Landmark size={18} className="text-indigo-500"/>}
-                      {popupTab === 'expense' ? 'Daily Expenses Ledger' : 'Daily Online Collections'}
+                      {popupTab === 'expense' ? 'Daily Expenses Log' : 'Daily Online Collections'}
                     </h3>
                   </div>
                   
@@ -1557,7 +1633,7 @@ export default function DailyStock() {
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {(popupTab === 'expense' ? expenses : collections).length === 0 ? (
-                          <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">No records found for selected date.</td></tr>
+                          <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">No records found for the selected date.</td></tr>
                         ) : (
                           (popupTab === 'expense' ? expenses : collections).map((row) => (
                             <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
