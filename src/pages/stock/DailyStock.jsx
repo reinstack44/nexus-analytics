@@ -33,6 +33,28 @@ FormDateInput.displayName = "FormDateInput";
 
 const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Scales historical queue batches proportionally when opening stock is manually altered to ensure mathematical FIFO integrity
+const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedMrp) => {
+  const currentSum = batches.reduce((acc, b) => acc + b.qty, 0);
+  if (currentSum === targetBaseOpening) return batches;
+  if (targetBaseOpening <= 0) return [];
+  if (currentSum === 0) {
+    return [{ qty: targetBaseOpening, price: carriedPrice, mrp: carriedMrp }];
+  }
+  const result = batches.map(b => ({ ...b }));
+  const scale = targetBaseOpening / currentSum;
+  let runningSum = 0;
+  for (let i = 0; i < result.length; i++) {
+    if (i === result.length - 1) {
+      result[i].qty = targetBaseOpening - runningSum;
+    } else {
+      result[i].qty = Math.round(result[i].qty * scale);
+      runningSum += result[i].qty;
+    }
+  }
+  return result.filter(b => b.qty > 0);
+};
+
 const recalculateRow = (row) => {
   let sQty = 0; let sAmt = 0; let sMrpAmt = 0;
   let cAmt = 0; let cMrpAmt = 0;
@@ -64,6 +86,12 @@ const recalculateRow = (row) => {
         salesRemaining = 0;
       }
     }
+
+    // Safety Fallback: Handle physical discrepancies if logged sales exceed the calculations queue
+    if (salesRemaining > 0) {
+      sAmt += salesRemaining * (parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0);
+      sMrpAmt += salesRemaining * (parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0);
+    }
   }
 
   queue.forEach(b => {
@@ -89,8 +117,25 @@ export default function DailyStock() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0); 
+  const [isDirty, setIsDirty] = useState(false); 
 
-  // Isolated DailyStock Calendar configuration memory to prevent global leaks
+  // Store isDirty status in a mutable ref to safely handle realtime database checks 
+  // without repeatedly mounting and unmounting the subscription channel
+  const isDirtyRef = useRef(false);
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
+
+  // Safe Timezone Date Formatter (Prevents DST shifts)
+  const formatDateForDB = useCallback((dateObj) => {
+    if (!dateObj) return '';
+    const d = new Date(dateObj);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('dailyStock_startDate');
     return saved ? new Date(saved) : new Date();
@@ -108,7 +153,6 @@ export default function DailyStock() {
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0, totalMrpRevenue: 0 });
 
-  // Custom Modal State Handlers
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', isDanger: false, onConfirm: null });
   const [alertModal, setAlertModal] = useState({ isOpen: false, title: '', message: '' });
   const [holidayModal, setHolidayModal] = useState({ isOpen: false, date: null, dateStr: '' });
@@ -127,16 +171,9 @@ export default function DailyStock() {
   const [pipelineWarning, setPipelineWarning] = useState(null);
   const [customRangeMode, setCustomRangeMode] = useState(false);
 
-  // Database-driven Highlight Arrays
   const [markedHolidays, setMarkedHolidays] = useState([]);
   const [filledDates, setFilledDates] = useState([]);
-  const [lockedRanges, setLockedRanges] = useState([]); // Database Combined Ranges
-
-  const formatDateForDB = useCallback((dateObj) => {
-    if (!dateObj) return '';
-    const d = new Date(dateObj);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  }, []);
+  const [lockedRanges, setLockedRanges] = useState([]); 
 
   const normalizeDateStr = useCallback((dStr) => {
     if (!dStr) return '';
@@ -165,13 +202,13 @@ export default function DailyStock() {
   
   const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
 
-  // Auto-redirect Click Events if selected inside an existing locked range block
   const getRedirectedDate = useCallback((date) => {
     if (!date) return null;
     const dateStr = formatDateForDB(date);
     const matchedRange = lockedRanges.find(r => dateStr >= r.start_date && dateStr <= r.end_date);
     if (matchedRange) {
-      return new Date(matchedRange.end_date);
+      const parts = matchedRange.end_date.split('-');
+      return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
     }
     return date;
   }, [lockedRanges, formatDateForDB]);
@@ -181,19 +218,11 @@ export default function DailyStock() {
     return lockedRanges.some(r => r.end_date === endStr);
   }, [lockedRanges, startDate, endDate, formatDateForDB]);
 
-  // Combined Block Unmerging - Safe Range splitting and absolute database purging
-  // Combined Block Unmerging - Splitting Range Safely (With instant state reset)
-  // Combined Block Unmerging - Splitting Range Safely (With Dynamic Range Identification)
   const handleResetRangeData = async () => {
     const activeEndStr = formatDateForDB(endDate || startDate);
-    
-    // Find the true range metadata from lockedRanges state using activeEndStr
     const matchedRange = lockedRanges.find(r => r.end_date === activeEndStr);
-    
     const rangeStartStr = matchedRange ? matchedRange.start_date : activeEndStr;
     const rangeEndStr = matchedRange ? matchedRange.end_date : activeEndStr;
-
-    // Convert range start string to standard Date object for proper calendar view restoration
     const [startYear, startMonth, startDay] = rangeStartStr.split('-').map(Number);
     const trueStartObj = new Date(startYear, startMonth - 1, startDay);
 
@@ -206,36 +235,15 @@ export default function DailyStock() {
         setIsSaving(true);
         closeConfirm();
         try {
-          // 1. Delete matching metadata record using the true range boundaries
-          const { error: rangeError } = await supabase
-            .from('locked_ranges')
-            .delete()
-            .eq('user_id', user.id)
-            .eq('start_date', rangeStartStr)
-            .eq('end_date', rangeEndStr);
-
-          if (rangeError) throw rangeError;
-
-          // 2. Delete ALL daily stock records within the true range boundaries from database
-          const { error: stockError } = await supabase
-            .from('daily_stock')
-            .delete()
-            .eq('user_id', user.id)
-            .gte('date', rangeStartStr)
-            .lte('date', rangeEndStr);
-
-          if (stockError) throw stockError;
-
-          // 3. Immediately clear local states to instantly reset calendar styling on screen
+          await supabase.from('locked_ranges').delete().eq('user_id', user.id).eq('start_date', rangeStartStr).eq('end_date', rangeEndStr);
+          await supabase.from('daily_stock').delete().eq('user_id', user.id).gte('date', rangeStartStr).lte('date', rangeEndStr);
           setLockedRanges(prev => prev.filter(r => !(r.start_date === rangeStartStr && r.end_date === rangeEndStr)));
           setFilledDates(prev => prev.filter(d => !(d >= rangeStartStr && d <= rangeEndStr)));
-
-          // 4. Reset date selection back to the start date of the split range so user can start filling
           setStartDate(trueStartObj);
           setEndDate(trueStartObj);
-
           setSaveMessage({ type: 'success', text: 'Combined range successfully split. All intermediate days unlocked.' });
           setRefreshTrigger(prev => prev + 1);
+          setIsDirty(false);
         } catch (err) {
           setAlertModal({ isOpen: true, title: "Split Range Failed", message: err.message });
         } finally {
@@ -247,19 +255,22 @@ export default function DailyStock() {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setRefreshTrigger(prev => prev + 1);
+      if (!isDirtyRef.current && !isSaving && !isSubmitting) {
+        setRefreshTrigger(prev => prev + 1);
+      }
     }, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isSaving, isSubmitting]);
 
+  // Realtime Database Sync Configuration
   useEffect(() => {
     const channel = supabase
       .channel('dailystock-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'locked_ranges' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'locked_ranges' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
       .subscribe();
 
     return () => {
@@ -294,22 +305,20 @@ export default function DailyStock() {
   const handleStartDateChange = (date) => {
     const redirected = getRedirectedDate(date);
     const dateStr = formatDateForDB(redirected || date);
-    
     if (!customRangeMode) {
       if (markedHolidays.includes(dateStr)) {
         setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
         return;
       }
     }
-
     setStartDate(redirected || date);
     setEndDate(redirected || date); 
+    setIsDirty(false);
   };
 
   const handleEndDateChange = (date) => {
     const redirected = getRedirectedDate(date);
     const dateStr = formatDateForDB(redirected || date);
-    
     if (!customRangeMode) {
       if (markedHolidays.includes(dateStr)) {
         setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
@@ -319,17 +328,12 @@ export default function DailyStock() {
         setAlertModal({ isOpen: true, title: "Invalid Selection", message: "End date must fall on or after the start date." });
         return;
       }
-
       if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
         const range = getDatesInRange(startDate, redirected || date);
-        
-        // 1. Check for holidays in the requested range
         if (range.some(d => markedHolidays.includes(d))) {
           setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays. Range selection blocked." });
           return;
         }
-
-        // 2. Check for previously filled daily stock entries in the requested range (excluding end date if they are updating)
         const rangeToCheck = range.slice(0, -1);
         if (rangeToCheck.some(d => filledDates.includes(d))) {
           setAlertModal({ isOpen: true, title: "Overlaps Existing Entries", message: "Selected range overlaps with previously saved daily stock records. Range selection blocked." });
@@ -338,6 +342,7 @@ export default function DailyStock() {
       }
     }
     setEndDate(redirected || date);
+    setIsDirty(false);
   };
 
   const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
@@ -356,23 +361,19 @@ export default function DailyStock() {
   const prevDatesRef = useRef({ start: null, end: null });
   const hasLoadedRef = useRef(false);
 
-  // Cumulative chronological reconstruction algorithm with robust decoupled price tracking
   useEffect(() => {
     let isMounted = true;
-
     const fetchDailyData = async () => {
       await Promise.resolve(); 
       if (!isMounted) return;
 
       const startStr = formatDateForDB(startDate);
       const endStr = endDate ? formatDateForDB(endDate) : startStr;
-
       const datesChanged = prevDatesRef.current.start !== startStr || prevDatesRef.current.end !== endStr;
       if (datesChanged || !hasLoadedRef.current) {
         setLoading(true);
       }
       prevDatesRef.current = { start: startStr, end: endStr };
-      
       setSaveMessage(null);
       setPipelineWarning(null);
 
@@ -390,7 +391,6 @@ export default function DailyStock() {
         }
       }
 
-      // Linear Retrieval of full historical stock to build highly accurate FIFO chains
       const [
         { data: brandsData },
         { data: allHistoricalStock },
@@ -411,9 +411,8 @@ export default function DailyStock() {
       if (brandsData) {
         const brandBatches = {};
         const prevClosing = {};
-        const lastActivePrice = {}; // Track last recorded operational price
-        const lastActiveMrp = {};   // Track last recorded operational MRP
-        
+        const lastActivePrice = {}; 
+        const lastActiveMrp = {};   
         const targetStart = normalizeDateStr(startStr);
 
         allHistoricalStock?.forEach(s => {
@@ -423,8 +422,6 @@ export default function DailyStock() {
                 const brand = brandsData.find(b => b.id === s.brand_id);
                 if (!brand) return;
 
-                // Track the last recorded prices unconditionally to avoid timezone / blank day carry-over losses
-                // If it is different from master baseline, we preserve it as custom active rate
                 if (s.unit_price !== undefined && s.unit_price !== null && parseFloat(s.unit_price) > 0) {
                     if (parseFloat(s.unit_price) !== parseFloat(brand.selling_price)) {
                         lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
@@ -451,7 +448,6 @@ export default function DailyStock() {
                 }
 
                 const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
-                
                 if (clBal !== null) {
                     let sales = Math.max(0, opBal - clBal);
                     while (sales > 0 && queue.length > 0) {
@@ -475,7 +471,6 @@ export default function DailyStock() {
           const starting_batches = brandBatches[brand.id] || [];
           const baseOpening = starting_batches.reduce((acc, b) => acc + b.qty, 0);
           
-          // Gap continuity fix: Fallback to lastActivePrice/lastActiveMrp if starting queue is temporarily empty
           let carriedPrice = parseFloat(brand.selling_price) || 0;
           if (lastActivePrice[brand.id] !== undefined && lastActivePrice[brand.id] > 0) {
             carriedPrice = lastActivePrice[brand.id];
@@ -495,11 +490,17 @@ export default function DailyStock() {
           
           if (exactRecord) {
             const opBal = parseInt(exactRecord.opening_balance) || 0;
-            const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
-            
-            const pQty = Math.max(0, opBal - baseOpening);
-            const pPrice = pQty > 0 ? (parseFloat(exactRecord.unit_price) || carriedPrice) : carriedPrice;
-            const pMrp = pQty > 0 ? (parseFloat(exactRecord.unit_mrp) || carriedMrp) : carriedMrp;
+          const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
+          const pQty = Math.max(0, opBal - baseOpening);
+          
+          // Air-tight historical isolation: If a record already exists, use its stored values directly 
+          // to prevent future BrandMaster edits or subsequent updates from cascading backwards.
+          const pPrice = (exactRecord.unit_price !== null && parseFloat(exactRecord.unit_price) > 0)
+            ? parseFloat(exactRecord.unit_price)
+            : carriedPrice;
+          const pMrp = (exactRecord.unit_mrp !== null && parseFloat(exactRecord.unit_mrp) > 0)
+            ? parseFloat(exactRecord.unit_mrp)
+            : carriedMrp;
 
             let initialRow = { 
               brand_id: brand.id, 
@@ -535,7 +536,6 @@ export default function DailyStock() {
                 if (log.unit_price) latestUnitPrice = parseFloat(log.unit_price);
                 if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
              }
-             
              if (log.closing_balance !== null) {
                  currentPrevClosing = parseInt(log.closing_balance);
              } else {
@@ -588,7 +588,6 @@ export default function DailyStock() {
     } else {
       setTimeout(() => { if (isMounted) setLoading(false); }, 0);
     }
-    
     return () => { isMounted = false; };
   }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode, formatDateForDB, normalizeDateStr, isMultiDayRange]);
 
@@ -662,6 +661,7 @@ export default function DailyStock() {
 
         setRefreshTrigger(prev => prev + 1);
         setIsSaving(false);
+        setIsDirty(false);
         closeConfirm();
       }
     });
@@ -673,6 +673,7 @@ export default function DailyStock() {
     await supabase.from('daily_stock').delete().eq('user_id', user.id).in('date', selectedDates);
     setRefreshTrigger(prev => prev + 1); 
     setIsSaving(false);
+    setIsDirty(false);
   };
 
   const handleSort = async () => {
@@ -693,6 +694,7 @@ export default function DailyStock() {
   };
 
   const handleInputChange = (brandId, field, value) => {
+    setIsDirty(true);
     const numericValue = value === '' ? '' : parseInt(value) || 0;
 
     setStockRows(prevRows => {
@@ -702,6 +704,10 @@ export default function DailyStock() {
           if (field === 'purchase_qty') {
             const currentPurchase = value === '' ? 0 : parseInt(value) || 0;
             updatedRow.opening_balance = updatedRow.base_opening + currentPurchase;
+          } else if (field === 'opening_balance') {
+            const targetBaseOpening = Math.max(0, numericValue - (parseInt(row.purchase_qty) || 0));
+            updatedRow.base_opening = targetBaseOpening;
+            updatedRow.starting_batches = scaleStartingBatches(row.starting_batches, targetBaseOpening, row.carried_price, row.carried_mrp);
           }
           updatedRow = recalculateRow(updatedRow);
           return updatedRow;
@@ -736,44 +742,87 @@ export default function DailyStock() {
     });
   };
 
-  const handlePurchaseSubmit = (e) => {
+  const handlePurchaseSubmit = async (e) => {
     e.preventDefault();
+    setIsSaving(true);
+    
     const newQty = parseInt(purchaseModal.qty) || 0;
     const newPrice = parseFloat(purchaseModal.price) || purchaseModal.brand.carried_price;
     const newMrp = parseFloat(purchaseModal.mrp) || purchaseModal.brand.carried_mrp;
+    const targetDateStr = formatDateForDB(endDate || startDate);
 
-    setStockRows(prevRows => {
-      const updatedRows = prevRows.map(row => {
-        if (row.brand_id === purchaseModal.brand.brand_id) {
-          let updatedRow = { 
-            ...row, 
-            purchase_qty: newQty, 
-            purchase_price: newPrice, 
-            purchase_mrp: newMrp,
-            opening_balance: row.base_opening + newQty 
-          };
-          updatedRow = recalculateRow(updatedRow);
-          return updatedRow;
-        }
-        return row;
+    try {
+      const targetRow = stockRows.find(row => row.brand_id === purchaseModal.brand.brand_id);
+      if (!targetRow) return;
+
+      const newOpeningBalance = targetRow.base_opening + newQty;
+      const currentClosing = targetRow.closing_balance === '' ? null : parseInt(targetRow.closing_balance);
+
+      const upsertData = {
+        user_id: user.id,
+        date: targetDateStr,
+        brand_id: purchaseModal.brand.brand_id,
+        opening_balance: newOpeningBalance,
+        closing_balance: currentClosing,
+        unit_price: newPrice,
+        unit_mrp: newMrp
+      };
+
+      const { error: upsertError } = await supabase
+        .from('daily_stock')
+        .upsert([upsertData], { onConflict: 'date, brand_id, user_id' });
+
+      if (upsertError) throw upsertError;
+
+      // Log to price history only if the new purchase price actually differs from the prior carried operational price
+      if (newQty > 0 && newPrice > 0 && newPrice !== parseFloat(targetRow.carried_price)) {
+        await supabase.from('brand_price_history').insert([{
+          brand_id: targetRow.brand_id,
+          user_id: user.id,
+          old_price: parseFloat(targetRow.carried_price),
+          new_price: newPrice,
+          effective_date: targetDateStr
+        }]);
+      }
+
+      setStockRows(prevRows => {
+        const updatedRows = prevRows.map(row => {
+          if (row.brand_id === purchaseModal.brand.brand_id) {
+            let updatedRow = { 
+              ...row, 
+              purchase_qty: newQty, 
+              purchase_price: newPrice, 
+              purchase_mrp: newMrp,
+              opening_balance: newOpeningBalance 
+            };
+            updatedRow = recalculateRow(updatedRow);
+            return updatedRow;
+          }
+          return row;
+        });
+
+        let tQty = 0; let tRev = 0; let tMrpRev = 0;
+        updatedRows.forEach(r => { 
+          if (r.closing_balance !== '') {
+            tQty += r.sales_qty; 
+            tRev += r.sales_amount; 
+            tMrpRev += r.sales_mrp_amount;
+          }
+        });
+        setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev, totalMrpRevenue: tMrpRev }));
+        return updatedRows;
       });
 
-      let tQty = 0; let tRev = 0; let tMrpRev = 0;
-      updatedRows.forEach(r => { 
-        if (r.closing_balance !== '') {
-          tQty += r.sales_qty; 
-          tRev += r.sales_amount; 
-          tMrpRev += r.sales_mrp_amount;
-        }
-      });
-      setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev, totalMrpRevenue: tMrpRev }));
-      return updatedRows;
-    });
-
-    setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
+      setRefreshTrigger(prev => prev + 1);
+      setIsDirty(false);
+    } catch (err) {
+      setAlertModal({ isOpen: true, title: "Reconciliation Failed", message: err.message });
+    } finally {
+      setIsSaving(false);
+      setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
+    }
   };
 
-  // Safe Multi-Day & Single-Day Database Save Execution
   const handleSaveStock = async () => {
     setIsSaving(true);
     setSaveMessage(null);
@@ -782,12 +831,10 @@ export default function DailyStock() {
 
     try {
       if (isMultiDayRange) {
-        // Safe Range Entry commit to "locked_ranges"
         await supabase
           .from('locked_ranges')
           .upsert([{ user_id: user.id, start_date: startStr, end_date: endStr }], { onConflict: 'user_id, start_date, end_date' });
 
-        // Zero down intermediate sales to keep downstream chronological chains intact
         for (let i = 0; i < selectedDates.length; i++) {
           const dateStr = selectedDates[i];
           const isLastDay = i === selectedDates.length - 1;
@@ -813,7 +860,6 @@ export default function DailyStock() {
           await supabase.from('daily_stock').upsert(upsertBatch, { onConflict: 'date, brand_id, user_id' });
         }
       } else {
-        // Standard single-day record save
         const upsertData = stockRows.map(row => ({
           user_id: user.id, 
           date: endStr, 
@@ -828,29 +874,18 @@ export default function DailyStock() {
         if (error) throw error;
       }
 
-      // Safeguard: ONLY update brands master baseline price if a direct purchase is made
       const brandUpdates = stockRows.map(async (row) => {
         if (parseInt(row.purchase_qty) > 0) {
           const activePrice = parseFloat(row.purchase_price);
-          const activeMrp = parseFloat(row.purchase_mrp);
-          
-          if ((activePrice > 0 && activePrice !== parseFloat(row.selling_price)) || 
-              (activeMrp > 0 && activeMrp !== parseFloat(row.mrp_price))) {
-            
-            await supabase
-              .from('brands')
-              .update({ selling_price: activePrice, mrp_price: activeMrp })
-              .eq('id', row.brand_id);
-
-            if (activePrice !== parseFloat(row.selling_price)) {
-              await supabase.from('brand_price_history').insert([{
-                brand_id: row.brand_id,
-                user_id: user.id,
-                old_price: parseFloat(row.selling_price),
-                new_price: activePrice,
-                effective_date: endStr
-              }]);
-            }
+          // Compare against the dynamic carried prior operational price instead of static baseline
+          if (activePrice > 0 && activePrice !== parseFloat(row.carried_price)) {
+            await supabase.from('brand_price_history').insert([{
+              brand_id: row.brand_id,
+              user_id: user.id,
+              old_price: parseFloat(row.carried_price),
+              new_price: activePrice,
+              effective_date: endStr
+            }]);
           }
         }
       });
@@ -859,6 +894,7 @@ export default function DailyStock() {
       setSaveMessage({ type: 'success', text: `Inventory metrics saved successfully!` });
       setTimeout(() => setSaveMessage(null), 3000);
       setRefreshTrigger(prev => prev + 1);
+      setIsDirty(false);
     } catch (err) {
       setAlertModal({ isOpen: true, title: "Database Error", message: err.message });
     } finally {
@@ -961,19 +997,15 @@ export default function DailyStock() {
   const inputClass = "w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-semibold";
   const numInputClass = "w-20 px-2 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm text-center font-bold";
 
-  // Calendar Day Styling Matrix (Styles applied dynamically by dayClassName)
   const getDayClassName = (date) => {
     const dateStr = formatDateForDB(date);
     if (markedHolidays.includes(dateStr)) {
       return "react-datepicker__day--highlighted-holiday";
     }
-    
-    // Check locked_ranges table data
     const isLockedRange = lockedRanges.some(r => dateStr >= r.start_date && dateStr <= r.end_date);
     if (isLockedRange) {
       return "react-datepicker__day--highlighted-combined";
     }
-    
     if (filledDates.includes(dateStr)) {
       return "react-datepicker__day--highlighted-filled";
     }
@@ -1279,25 +1311,108 @@ export default function DailyStock() {
                         
                         <td className="px-3 py-4">
                           <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center flex-wrap gap-1">
-                            <span>{row.bottle_size} |</span>
-                            {row.purchase_qty > 0 ? (
-                              <span className="inline-flex items-center gap-1.5 ml-1 flex-wrap">
-                                <span>Old: {row.base_opening} (MRP: {formatRs(row.carried_mrp)} | Sale: {formatRs(row.carried_price)})</span>
-                                <span className="text-slate-300 dark:text-slate-600">•</span>
-                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">New: {row.purchase_qty} (MRP: {formatRs(row.purchase_mrp)} | Sale: {formatRs(row.purchase_price)})</span>
-                              </span>
-                            ) : (
-                              <span className="ml-1">MRP: {formatRs(row.purchase_mrp || row.carried_mrp || row.mrp_price)} | Sale: {formatRs(row.purchase_price || row.carried_price || row.selling_price)}</span>
-                            )}
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-col gap-1">
+                            <span className="font-semibold uppercase tracking-wider text-[10px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded w-fit">{row.bottle_size}</span>
+                            <div className="flex flex-col gap-1 bg-slate-50/50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-800/80 mt-1">
+                              {(() => {
+                                // Assemble temporary batch queue for dynamic left-qty calculation
+                                const activeBatches = [];
+                                
+                                if (row.starting_batches && row.starting_batches.length > 0) {
+                                  row.starting_batches.forEach((b, idx) => {
+                                    activeBatches.push({ 
+                                      label: `Old Batch ${row.starting_batches.length > 1 ? idx + 1 : ''}`, 
+                                      qty: b.qty, 
+                                      mrp: b.mrp, 
+                                      price: b.price, 
+                                      isNew: false 
+                                    });
+                                  });
+                                } else if (row.base_opening > 0) {
+                                  activeBatches.push({ 
+                                    label: 'Old Stock', 
+                                    qty: row.base_opening, 
+                                    mrp: row.carried_mrp, 
+                                    price: row.carried_price, 
+                                    isNew: false 
+                                  });
+                                }
+
+                                if (row.purchase_qty > 0) {
+                                  activeBatches.push({ 
+                                    label: 'New Batch', 
+                                    qty: row.purchase_qty, 
+                                    mrp: row.purchase_mrp, 
+                                    price: row.purchase_price, 
+                                    isNew: true 
+                                  });
+                                }
+
+                                // Distribute Closing Balance from newest to oldest batch
+                                if (row.closing_balance !== '' && row.closing_balance !== null) {
+                                  let remainingStock = parseInt(row.closing_balance) || 0;
+                                  for (let i = activeBatches.length - 1; i >= 0; i--) {
+                                    const allocated = Math.min(activeBatches[i].qty, remainingStock);
+                                    activeBatches[i].left = allocated;
+                                    remainingStock -= allocated;
+                                  }
+                                } else {
+                                  // If closing balance isn't inputted yet, default 'left' to the starting quantity
+                                  activeBatches.forEach(b => { b.left = b.qty; });
+                                }
+
+                                if (activeBatches.length === 0) {
+                                  return (
+                                    <div className="text-[11px] text-slate-400">
+                                      Baseline (MRP: {formatRs(row.purchase_mrp || row.carried_mrp || row.mrp_price)} | Sale: {formatRs(row.purchase_price || row.carried_price || row.selling_price)})
+                                    </div>
+                                  );
+                                }
+
+                                return activeBatches.map((batch, idx) => {
+                                  const isStockZero = batch.left === 0;
+                                  
+                                  // Theme-fluid responsive status capsules
+                                  const statusBadgeClass = isStockZero
+                                    ? "bg-rose-50/80 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border-rose-200/40 dark:border-rose-900/20"
+                                    : "bg-amber-50/80 dark:bg-amber-950/10 text-amber-600 dark:text-amber-400 border-amber-200/40 dark:border-amber-900/20";
+
+                                  return (
+                                    <div 
+                                      key={`batch-row-${idx}`} 
+                                      className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5 ${idx > 0 ? 'border-t border-slate-100 dark:border-slate-800/40' : ''} ${batch.isNew ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-600 dark:text-slate-300'}`}
+                                    >
+                                      {/* Left side: Fully detailed responsive layout (Ellipsis removed) */}
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
+                                        <span className="font-extrabold text-slate-800 dark:text-slate-100 shrink-0">{batch.label}:</span>
+                                        <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">{batch.qty} Qty</span>
+                                        <span className="text-slate-300 dark:text-slate-700 text-[9px] select-none shrink-0">•</span>
+                                        <span className="font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                          MRP: {formatRs(batch.mrp)}
+                                        </span>
+                                        <span className="text-slate-300 dark:text-slate-700 text-[9px] select-none shrink-0">•</span>
+                                        <span className="font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                          Sale: {formatRs(batch.price)}
+                                        </span>
+                                      </div>
+                                      
+                                      {/* Right side: Sleek compact status badge with no-wrap constraint */}
+                                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase border shrink-0 whitespace-nowrap transition-all ${statusBadgeClass}`}>
+                                        {batch.left} left
+                                      </span>
+                                    </div>
+                                  );
+                                });
+                              })()}
+                            </div>
                           </div>
                         </td>
 
                         <td className="px-4 py-4 text-center">
                           <input 
                             type="number" 
-                            disabled={customRangeMode}
-                            value={row.opening_balance} 
+                            disabled={isHolidaySelected}
+                            value={row.opening_balance ?? ''} 
                             onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} 
                             className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
                           />
@@ -1305,9 +1420,9 @@ export default function DailyStock() {
                         
                         <td className="px-4 py-4 text-center">
                           <button 
-                            disabled={customRangeMode}
+                            disabled={isHolidaySelected}
                             onClick={() => openPurchaseModal(row)}
-                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${customRangeMode ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${isHolidaySelected ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
                           >
                             {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
                           </button>
@@ -1318,8 +1433,8 @@ export default function DailyStock() {
                             type="number" 
                             min="0" 
                             placeholder="Qty" 
-                            disabled={customRangeMode}
-                            value={row.closing_balance} 
+                            disabled={isHolidaySelected}
+                            value={row.closing_balance ?? ''} 
                             onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} 
                             className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
                           />
@@ -1378,7 +1493,7 @@ export default function DailyStock() {
                     <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
                       <td colSpan="7" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
                       <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
-                        {formatRs(dailySummary.totalRevenue - dailySummary.totalExpenses - dailySummary.totalCollections)}
+                        {formatRs((parseFloat(dailySummary.totalRevenue) || 0) - (parseFloat(dailySummary.totalExpenses) || 0) - (parseFloat(dailySummary.totalCollections) || 0))}
                       </td>
                     </tr>
                   </tfoot>
@@ -1419,7 +1534,7 @@ export default function DailyStock() {
                 <input 
                   type="number" 
                   required min="0" 
-                  value={purchaseModal.qty} 
+                  value={purchaseModal.qty ?? ''} 
                   onChange={(e) => setPurchaseModal({...purchaseModal, qty: e.target.value})} 
                   className={inputClass} 
                   placeholder="e.g., 240" 
@@ -1464,7 +1579,7 @@ export default function DailyStock() {
                     <input 
                       type="number" 
                       required min="0" step="any" 
-                      value={purchaseModal.mrp} 
+                      value={purchaseModal.mrp ?? ''} 
                       onChange={(e) => setPurchaseModal({...purchaseModal, mrp: e.target.value})} 
                       className={`${inputClass} pl-8.5 font-bold border-purple-300 dark:border-purple-800 focus:ring-purple-500`} 
                     />
@@ -1509,7 +1624,7 @@ export default function DailyStock() {
                     <input 
                       type="number" 
                       required min="0" step="any" 
-                      value={purchaseModal.price} 
+                      value={purchaseModal.price ?? ''} 
                       onChange={(e) => setPurchaseModal({...purchaseModal, price: e.target.value})} 
                       className={`${inputClass} pl-8.5 font-bold border-blue-300 dark:border-blue-800 focus:ring-blue-500`} 
                     />
@@ -1591,11 +1706,11 @@ export default function DailyStock() {
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
-                          <input type="text" required value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Electricity Bill" />
+                          <input type="text" required value={expenseForm.description ?? ''} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Electricity Bill" />
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Amount (₹)</label>
-                          <input type="number" required min="1" step="any" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
+                          <input type="number" required min="1" step="any" value={expenseForm.amount ?? ''} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                         </div>
                         
                         {editingExpenseId ? (
@@ -1624,16 +1739,16 @@ export default function DailyStock() {
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
-                          <input type="text" required value={collectionForm.description} onChange={(e) => setCollectionForm({ ...collectionForm, description: e.target.value })} className={inputClass} />
+                          <input type="text" required value={collectionForm.description ?? ''} onChange={(e) => setCollectionForm({ ...collectionForm, description: e.target.value })} className={inputClass} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div>
                             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Amount (₹)</label>
-                            <input type="number" required min="1" value={collectionForm.amount} onChange={(e) => setCollectionForm({ ...collectionForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
+                            <input type="number" required min="1" value={collectionForm.amount ?? ''} onChange={(e) => setCollectionForm({ ...collectionForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                           </div>
                           <div>
                             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Mode</label>
-                            <select value={collectionForm.mode} onChange={(e) => setCollectionForm({ ...collectionForm, mode: e.target.value })} className={inputClass}>
+                            <select value={collectionForm.mode ?? 'UPI/Bank'} onChange={(e) => setCollectionForm({ ...collectionForm, mode: e.target.value })} className={inputClass}>
                               <option value="UPI/Bank">UPI/Bank</option>
                               <option value="Cash">Cash</option>
                             </select>
@@ -1686,7 +1801,7 @@ export default function DailyStock() {
                                 </td>
                               )}
                               <td className={`px-6 py-4 text-right font-bold ${popupTab === 'expense' ? 'text-red-600 dark:text-red-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
-                                  ₹{parseFloat(row.amount).toLocaleString()}
+                                  ₹{parseFloat(row.amount || 0).toLocaleString()}
                                 </td>
                                 <td className="px-4 py-4 text-center">
                                   <div className="flex justify-center gap-2">

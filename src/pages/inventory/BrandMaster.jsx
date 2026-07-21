@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { Plus, Tag, Edit2, Trash2, X, AlertTriangle, History, Search, Wine, Layers } from 'lucide-react';
@@ -6,20 +6,31 @@ import { Plus, Tag, Edit2, Trash2, X, AlertTriangle, History, Search, Wine, Laye
 export default function BrandMaster() {
   const { user } = useAuth();
   const [brands, setBrands] = useState([]);
+  const [latestPrices, setLatestPrices] = useState({}); // Stores computed active/latest prices
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const isMountedRef = useRef(true);
 
   // Realtime Database Sync
   useEffect(() => {
+    isMountedRef.current = true;
     const channel = supabase
       .channel('brandmaster-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brand_price_history' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => {
+        if (isMountedRef.current) setRefreshTrigger(prev => prev + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brand_price_history' }, () => {
+        if (isMountedRef.current) setRefreshTrigger(prev => prev + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => {
+        if (isMountedRef.current) setRefreshTrigger(prev => prev + 1);
+      })
       .subscribe();
 
     return () => {
+      isMountedRef.current = false;
       supabase.removeChannel(channel);
     };
   }, []);
@@ -43,49 +54,73 @@ export default function BrandMaster() {
   const [priceHistory, setPriceHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  const fetchBrands = async () => {
-    const { data, error } = await supabase
+  const fetchBrands = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+
+    const { data: brandsData, error: brandsError } = await supabase
       .from('brands')
       .select('*')
       .order('display_order', { ascending: true })
       .order('brand_name', { ascending: true });
       
-    if (!error) {
-      const sortedBrands = (data || []).sort((a, b) => {
+    if (!brandsError && brandsData && isMountedRef.current) {
+      const sortedBrands = [...brandsData].sort((a, b) => {
         const orderA = a.display_order ?? Number.MAX_SAFE_INTEGER;
         const orderB = b.display_order ?? Number.MAX_SAFE_INTEGER;
         if (orderA !== orderB) return orderA - orderB;
         return (a.brand_name || '').localeCompare(b.brand_name || '');
       });
       setBrands(sortedBrands);
+
+      // Rebuild the latest operational prices from recent daily_stock entries with a sensible limit
+      let stockQuery = supabase
+        .from('daily_stock')
+        .select('brand_id, unit_price, unit_mrp, date')
+        .order('date', { ascending: false })
+        .limit(5000);
+
+      if (user?.id) {
+        stockQuery = stockQuery.eq('user_id', user.id);
+      }
+
+      const { data: stockLogs } = await stockQuery;
+      
+      const pricesMap = {};
+      stockLogs?.forEach(s => {
+        if (!pricesMap[s.brand_id]) {
+          pricesMap[s.brand_id] = { price: null, mrp: null };
+        }
+        if (pricesMap[s.brand_id].price === null && s.unit_price !== null && parseFloat(s.unit_price) > 0) {
+          pricesMap[s.brand_id].price = parseFloat(s.unit_price);
+        }
+        if (pricesMap[s.brand_id].mrp === null && s.unit_mrp !== null && parseFloat(s.unit_mrp) > 0) {
+          pricesMap[s.brand_id].mrp = parseFloat(s.unit_mrp);
+        }
+      });
+      
+      if (isMountedRef.current) {
+        setLatestPrices(pricesMap);
+      }
     }
-    setLoading(false);
-  };
+    if (isMountedRef.current) {
+      setLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     let isMounted = true;
-    const loadInitialBrands = async () => {
-      const { data, error } = await supabase
-        .from('brands')
-        .select('*')
-        .order('display_order', { ascending: true })
-        .order('brand_name', { ascending: true });
-        
-      if (isMounted && !error) {
-        const sortedBrands = (data || []).sort((a, b) => {
-          const orderA = a.display_order ?? Number.MAX_SAFE_INTEGER;
-          const orderB = b.display_order ?? Number.MAX_SAFE_INTEGER;
-          if (orderA !== orderB) return orderA - orderB;
-          return (a.brand_name || '').localeCompare(b.brand_name || '');
-        });
-        setBrands(sortedBrands);
-        setLoading(false);
+    const executeFetch = async () => {
+      await Promise.resolve();
+      if (isMounted && isMountedRef.current) {
+        fetchBrands();
       }
     };
-    
-    loadInitialBrands();
-    return () => { isMounted = false; };
-  }, [refreshTrigger]);
+    executeFetch();
+    return () => {
+      isMounted = false;
+    };
+  }, [refreshTrigger, fetchBrands]);
 
   const categoriesCount = useMemo(() => new Set(brands.map(b => b.category)).size, [brands]);
   
@@ -96,7 +131,8 @@ export default function BrandMaster() {
   const handleAddBrand = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    const initialPrice = parseFloat(formData.sellingPrice);
+    
+    const initialPrice = parseFloat(formData.sellingPrice) || 0;
     const mrpPrice = parseFloat(formData.mrpPrice) || 0;
     
     const { data: brandData, error: brandError } = await supabase
@@ -112,16 +148,18 @@ export default function BrandMaster() {
       .select();
 
     if (!brandError && brandData && brandData[0]) {
+      const today = new Date();
+      const localDateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      
       await supabase.from('brand_price_history').insert([{ 
         brand_id: brandData[0].id, 
         user_id: user.id, 
         old_price: null, 
         new_price: initialPrice, 
-        effective_date: new Date().toISOString().split('T')[0] 
+        effective_date: localDateStr
       }]);
       
       setFormData({ brandName: '', category: 'Whisky', bottleSize: '750ml', sellingPrice: '', mrpPrice: '' });
-      setLoading(true);
       fetchBrands();
     }
     setIsSubmitting(false);
@@ -130,9 +168,11 @@ export default function BrandMaster() {
   const openEditModal = (brand) => {
     setSelectedBrand(brand);
     setEditFormData({ 
-      brandName: brand.brand_name, 
-      category: brand.category, 
-      bottleSize: brand.bottle_size 
+      brandName: brand.brand_name || '', 
+      category: brand.category || 'Whisky', 
+      bottleSize: brand.bottle_size || '750ml',
+      mrpPrice: brand.mrp_price || '',
+      sellingPrice: brand.selling_price || ''
     });
     setIsEditModalOpen(true);
   };
@@ -146,13 +186,14 @@ export default function BrandMaster() {
       .update({ 
         brand_name: editFormData.brandName, 
         category: editFormData.category, 
-        bottle_size: editFormData.bottleSize 
+        bottle_size: editFormData.bottleSize,
+        mrp_price: parseFloat(editFormData.mrpPrice) || 0,
+        selling_price: parseFloat(editFormData.sellingPrice) || 0
       })
       .eq('id', selectedBrand.id);
 
     if (!updateError) {
       setIsEditModalOpen(false); 
-      setLoading(true);
       fetchBrands(); 
     } else {
       alert("Error updating brand: " + updateError.message);
@@ -169,13 +210,13 @@ export default function BrandMaster() {
     if (!brandToDelete) return;
     setIsSubmitting(true);
     try { 
-      await supabase.from('brands').delete().eq('id', brandToDelete.id); 
+      const { error } = await supabase.from('brands').delete().eq('id', brandToDelete.id); 
+      if (error) throw error;
       setIsDeleteModalOpen(false); 
       setBrandToDelete(null); 
-      setLoading(true);
       fetchBrands(); 
-    } catch { 
-      alert("Error deleting brand. It might be linked to existing stock records."); 
+    } catch (err) { 
+      alert("Error deleting brand: " + (err.message || "It might be linked to existing stock records.")); 
     } finally { 
       setIsSubmitting(false); 
     }
@@ -192,8 +233,10 @@ export default function BrandMaster() {
       .eq('brand_id', brand.id)
       .order('created_at', { ascending: false });
       
-    setPriceHistory(data || []); 
-    setHistoryLoading(false);
+    if (isMountedRef.current) {
+      setPriceHistory(data || []); 
+      setHistoryLoading(false);
+    }
   };
 
   const inputClass = "w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 outline-none transition-all text-sm";
@@ -309,6 +352,7 @@ export default function BrandMaster() {
                 <input 
                   type="number" 
                   required min="0" 
+                  step="any"
                   value={formData.mrpPrice} 
                   onChange={(e) => setFormData({ ...formData, mrpPrice: e.target.value })} 
                   className={inputClass} 
@@ -323,6 +367,7 @@ export default function BrandMaster() {
                 <input 
                   type="number" 
                   required min="0" 
+                  step="any"
                   value={formData.sellingPrice} 
                   onChange={(e) => setFormData({ ...formData, sellingPrice: e.target.value })} 
                   className={inputClass} 
@@ -368,8 +413,8 @@ export default function BrandMaster() {
                 <tr>
                   <th className="px-6 py-4">Brand Profile</th>
                   <th className="px-6 py-4">Category</th>
-                  <th className="px-6 py-4 text-right">Baseline MRP</th>
-                  <th className="px-6 py-4 text-right">Baseline Sale Price</th>
+                  <th className="px-6 py-4 text-right">Latest MRP</th>
+                  <th className="px-6 py-4 text-right">Latest Sale Price</th>
                   <th className="px-6 py-4 text-center">Actions</th>
                 </tr>
               </thead>
@@ -387,54 +432,59 @@ export default function BrandMaster() {
                     </td>
                   </tr>
                 ) : (
-                  filteredBrands.map((brand) => (
-                    <tr key={brand.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group">
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-slate-800 dark:text-slate-100 text-base">
-                          {brand.brand_name}
-                        </div>
-                        <div className="text-xs text-slate-500 font-medium mt-0.5">
-                          {brand.bottle_size}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 rounded-md text-[11px] font-bold uppercase tracking-wider border border-slate-200 dark:border-slate-700">
-                          {brand.category}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right font-black text-slate-500 dark:text-slate-400 text-base">
-                        ₹{brand.mrp_price !== undefined && brand.mrp_price !== null ? brand.mrp_price : '0'}
-                      </td>
-                      <td className="px-6 py-4 text-right font-black text-slate-800 dark:text-slate-100 text-base">
-                        ₹{brand.selling_price}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-center items-center gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => fetchPriceHistory(brand)} 
-                            title="Price History" 
-                            className="p-2 text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg outline-none transition-colors"
-                          >
-                            <History size={16} />
-                          </button>
-                          <button 
-                            onClick={() => openEditModal(brand)} 
-                            title="Edit Info" 
-                            className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg outline-none transition-colors"
-                          >
-                            <Edit2 size={16} />
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteClick(brand)} 
-                            title="Delete Product" 
-                            className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg outline-none transition-colors"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  filteredBrands.map((brand) => {
+                    const activePrice = latestPrices[brand.id]?.price ?? brand.selling_price;
+                    const activeMrp = latestPrices[brand.id]?.mrp ?? brand.mrp_price;
+
+                    return (
+                      <tr key={brand.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group">
+                        <td className="px-6 py-4">
+                          <div className="font-bold text-slate-800 dark:text-slate-100 text-base">
+                            {brand.brand_name}
+                          </div>
+                          <div className="text-xs text-slate-500 font-medium mt-0.5">
+                            {brand.bottle_size}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 rounded-md text-[11px] font-bold uppercase tracking-wider border border-slate-200 dark:border-slate-700">
+                            {brand.category}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right font-black text-slate-500 dark:text-slate-400 text-base">
+                          ₹{activeMrp !== undefined && activeMrp !== null ? activeMrp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                        </td>
+                        <td className="px-6 py-4 text-right font-black text-slate-800 dark:text-slate-100 text-base">
+                          ₹{activePrice !== undefined && activePrice !== null ? activePrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex justify-center items-center gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => fetchPriceHistory(brand)} 
+                              title="Price History" 
+                              className="p-2 text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg outline-none transition-colors"
+                            >
+                              <History size={16} />
+                            </button>
+                            <button 
+                              onClick={() => openEditModal(brand)} 
+                              title="Edit Info" 
+                              className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg outline-none transition-colors"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteClick(brand)} 
+                              title="Delete Product" 
+                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg outline-none transition-colors"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -475,7 +525,7 @@ export default function BrandMaster() {
         </div>
       )}
 
-      {/* Edit Modal (Prices Protected from Direct Modification) */}
+      {/* Edit Modal */}
       {isEditModalOpen && (
         <div className="fixed inset-0 z-9999 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
@@ -500,7 +550,7 @@ export default function BrandMaster() {
                 <input 
                   type="text" 
                   required 
-                  value={editFormData.brandName} 
+                  value={editFormData.brandName ?? ''} 
                   onChange={(e) => setEditFormData({ ...editFormData, brandName: e.target.value })} 
                   className={inputClass} 
                 />
@@ -512,7 +562,7 @@ export default function BrandMaster() {
                     Category
                   </label>
                   <select 
-                    value={editFormData.category} 
+                    value={editFormData.category ?? 'Whisky'} 
                     onChange={(e) => setEditFormData({ ...editFormData, category: e.target.value })} 
                     className={inputClass}
                   >
@@ -531,7 +581,7 @@ export default function BrandMaster() {
                     Bottle Size
                   </label>
                   <select 
-                    value={editFormData.bottleSize} 
+                    value={editFormData.bottleSize ?? '750ml'} 
                     onChange={(e) => setEditFormData({ ...editFormData, bottleSize: e.target.value })} 
                     className={inputClass}
                   >
@@ -547,8 +597,37 @@ export default function BrandMaster() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    Baseline MRP (₹)
+                  </label>
+                  <input 
+                    type="number" 
+                    step="any"
+                    required
+                    value={editFormData.mrpPrice ?? ''} 
+                    onChange={(e) => setEditFormData({ ...editFormData, mrpPrice: e.target.value })} 
+                    className={inputClass} 
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                    Baseline Sale Price (₹)
+                  </label>
+                  <input 
+                    type="number" 
+                    step="any"
+                    required
+                    value={editFormData.sellingPrice ?? ''} 
+                    onChange={(e) => setEditFormData({ ...editFormData, sellingPrice: e.target.value })} 
+                    className={inputClass} 
+                  />
+                </div>
+              </div>
+
               <div className="p-3 bg-amber-50 dark:bg-amber-950/40 text-[11px] text-amber-700 dark:text-amber-400 rounded-xl border border-amber-200 dark:border-amber-900/50 leading-relaxed">
-                Note: Baseline Prices cannot be edited here to prevent retroactive discrepancies. Batch prices can be updated through the Daily Stock ledger on new purchases.
+                Note: Baseline prices edited here will set the starting default rate for new stock entries. This will never overwrite historical transaction prices already locked in Daily Stock.
               </div>
               
               <button 

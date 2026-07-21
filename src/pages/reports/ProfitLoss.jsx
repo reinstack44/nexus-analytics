@@ -1,5 +1,6 @@
 import { useState, useEffect, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
+import { useAuth } from '../../context/AuthContext';
 import { Calendar, Wallet, Landmark, IndianRupee, TrendingUp, TrendingDown, ChevronDown } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -19,22 +20,23 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 CustomDateInput.displayName = "CustomDateInput";
 
 export default function ProfitLoss() {
+  const { user } = useAuth();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // एकीकृत साझा कीज़ (Unified Session Storage)
+  // Isolated local memory keys for Profit & Loss page
   const [startDate, setStartDate] = useState(() => {
-    const saved = sessionStorage.getItem('global_startDate');
+    const saved = sessionStorage.getItem('profitLoss_startDate');
     return saved ? new Date(saved) : new Date();
   });
   
   const [endDate, setEndDate] = useState(() => {
-    const saved = sessionStorage.getItem('global_endDate');
+    const saved = sessionStorage.getItem('profitLoss_endDate');
     return saved ? new Date(saved) : new Date();
   });
 
   useEffect(() => {
-    if (startDate) sessionStorage.setItem('global_startDate', startDate.toISOString());
-    if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
+    if (startDate) sessionStorage.setItem('profitLoss_startDate', startDate.toISOString());
+    if (endDate) sessionStorage.setItem('profitLoss_endDate', endDate.toISOString());
   }, [startDate, endDate]);
 
   const [summary, setSummary] = useState({
@@ -54,19 +56,22 @@ export default function ProfitLoss() {
     return `${year}-${month}-${day}`;
   };
 
-  const parseDBDate = (str) => {
-    if (!str) return new Date();
-    const [y, m, d] = str.split('-');
-    return new Date(y, m - 1, d);
+  const normalizeDateStr = (dStr) => {
+    if (!dStr) return '';
+    if (typeof dStr !== 'string') return '';
+    if (dStr.includes('T')) {
+      return dStr.split('T')[0];
+    }
+    return dStr;
   };
 
-  // रीयल-टाइम डेटाबेस लिसनर
+  // Realtime Database Sync
   useEffect(() => {
     const channel = supabase
       .channel('pl-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => setRefreshTrigger(prev => prev + 1))
       .subscribe();
 
@@ -79,22 +84,39 @@ export default function ProfitLoss() {
     let isMounted = true;
     
     const fetchReportData = async () => {
+      if (!user) return;
+      
       const startStr = formatDateForDB(startDate);
       const endStr = formatDateForDB(endDate);
+      const isMultiDayRange = startStr !== endStr;
 
       try {
+        let expQuery = supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr);
+        let withQuery = supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr);
+        let traderTxQuery = supabase.from('trader_transactions').select('purchase_amount').gte('date', startStr).lte('date', endStr);
+        let brandsQuery = supabase.from('brands').select('id, brand_name, selling_price, mrp_price');
+        
+        // Fetch all historical stock to rebuild exactly identical FIFO chains as DailyStock
+        let stockQuery = supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').lte('date', endStr).order('date', { ascending: true });
+
+        if (user?.id) {
+          expQuery = expQuery.eq('user_id', user.id);
+          withQuery = withQuery.eq('user_id', user.id);
+          stockQuery = stockQuery.eq('user_id', user.id);
+        }
+
         const [
           { data: expData },
           { data: withData },
-          { data: purchData },
+          { data: traderTxData },
           { data: brandsData },
           { data: stockData }
         ] = await Promise.all([
-          supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr),
-          supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr),
-          supabase.from('purchases').select('date, brand_id, quantity, total_amount').gte('date', startStr).lte('date', endStr),
-          supabase.from('brands').select('id, brand_name, selling_price'),
-          supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date', { ascending: true })
+          expQuery,
+          withQuery,
+          traderTxQuery,
+          brandsQuery,
+          stockQuery
         ]);
 
         let tExpenses = 0;
@@ -104,81 +126,188 @@ export default function ProfitLoss() {
         withData?.forEach(w => tWithdrawals += parseFloat(w.amount) || 0);
 
         let tPurchases = 0;
-        purchData?.forEach(p => tPurchases += parseFloat(p.total_amount) || 0);
+        traderTxData?.forEach(t => tPurchases += parseFloat(t.purchase_amount) || 0);
 
-        const brandMap = {};
-        brandsData?.forEach(b => brandMap[b.id] = b);
+        // --- UNIFIED CHRONOLOGICAL FIFO RECONSTRUCTION (Exact DailyStock Match) ---
+        const brandBatches = {};
+        const prevClosing = {};
+        const lastActivePrice = {};
+        const lastActiveMrp = {};
+        const targetStart = normalizeDateStr(startStr);
 
-        // मानक FIFO सिमुलेशन इंजन
-        let tSales = 0;
-        const prevClosings = {};
-        const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
-        beforeStock?.forEach(s => {
-          if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
-            prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
-          }
-        });
-
-        const stockByDate = {};
         stockData?.forEach(s => {
-          const sDate = parseDBDate(s.date);
-          if (sDate) {
-            const dateKey = formatDateForDB(sDate);
-            if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
-            stockByDate[dateKey].push(s);
-          }
-        });
-
-        const sortedDates = Object.keys(stockByDate).sort();
-        let runningStates = {};
-        brandsData?.forEach(b => {
-          const pc = prevClosings[b.id];
-          runningStates[b.id] = { closing: pc ? pc.closing_balance : 0, price: pc?.price || parseFloat(b.selling_price) };
-        });
-
-        sortedDates.forEach(date => {
-          stockByDate[date].forEach(row => {
-            const brand = brandMap[row.brand_id];
+          const logDate = normalizeDateStr(s.date);
+          if (logDate < targetStart) {
+            let queue = brandBatches[s.brand_id] || [];
+            const brand = brandsData?.find(b => b.id === s.brand_id);
             if (!brand) return;
 
-            const state = runningStates[brand.id] || { closing: 0, price: parseFloat(brand.selling_price) };
-            const baseOpening = state.closing;
-            const carriedPrice = state.price;
-
-            const opening = parseInt(row.opening_balance || 0);
-            const purchaseQty = Math.max(0, opening - baseOpening);
-            const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
-            const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
-
-            if (closing !== '') {
-              const sQty = Math.max(0, opening - closing);
-              let rem = sQty;
-              let sAmt = 0;
-
-              const qtyOld = Math.min(rem, baseOpening);
-              sAmt += qtyOld * carriedPrice;
-              rem -= qtyOld;
-
-              if (rem > 0 && purchaseQty > 0) {
-                sAmt += Math.min(rem, purchaseQty) * pPrice;
+            if (s.unit_price !== undefined && s.unit_price !== null && parseFloat(s.unit_price) > 0) {
+              if (parseFloat(s.unit_price) !== parseFloat(brand.selling_price)) {
+                lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
+              } else if (lastActivePrice[s.brand_id] === undefined) {
+                lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
               }
-
-              tSales += sAmt;
-              runningStates[brand.id] = { closing: closing, price: pPrice };
             }
-          });
+            if (s.unit_mrp !== undefined && s.unit_mrp !== null && parseFloat(s.unit_mrp) > 0) {
+              if (parseFloat(s.unit_mrp) !== parseFloat(brand.mrp_price)) {
+                lastActiveMrp[s.brand_id] = parseFloat(s.unit_mrp);
+              } else if (lastActiveMrp[s.brand_id] === undefined) {
+                lastActiveMrp[s.brand_id] = parseFloat(s.unit_mrp);
+              }
+            }
+
+            const opBal = parseInt(s.opening_balance) || 0;
+            const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
+            
+            const pPrice = parseFloat(s.unit_price) || lastActivePrice[s.brand_id] || parseFloat(brand.selling_price) || 0;
+            const pMrp = parseFloat(s.unit_mrp) || lastActiveMrp[s.brand_id] || parseFloat(brand.mrp_price) || 0;
+
+            if (pQty > 0) {
+              queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
+            }
+
+            const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+            
+            if (clBal !== null) {
+              let sales = Math.max(0, opBal - clBal);
+              while (sales > 0 && queue.length > 0) {
+                if (queue[0].qty <= sales) {
+                  sales -= queue[0].qty;
+                  queue.shift();
+                } else {
+                  queue[0].qty -= sales;
+                  sales = 0;
+                }
+              }
+              prevClosing[s.brand_id] = clBal;
+            } else {
+              prevClosing[s.brand_id] = opBal;
+            }
+            brandBatches[s.brand_id] = queue;
+          }
+        });
+
+        let tSales = 0;
+
+        brandsData?.forEach(brand => {
+          const starting_batches = brandBatches[brand.id] || [];
+          const baseOpening = starting_batches.reduce((acc, b) => acc + b.qty, 0);
+          
+          let carriedPrice = parseFloat(brand.selling_price) || 0;
+          if (lastActivePrice[brand.id] !== undefined && lastActivePrice[brand.id] > 0) {
+            carriedPrice = lastActivePrice[brand.id];
+          } else if (starting_batches.length > 0) {
+            carriedPrice = starting_batches[0].price;
+          }
+            
+          let carriedMrp = parseFloat(brand.mrp_price) || 0;
+          if (lastActiveMrp[brand.id] !== undefined && lastActiveMrp[brand.id] > 0) {
+            carriedMrp = lastActiveMrp[brand.id];
+          } else if (starting_batches.length > 0) {
+            carriedMrp = starting_batches[0].mrp;
+          }
+
+          const brandRangeLogs = stockData?.filter(s => s.brand_id === brand.id && normalizeDateStr(s.date) >= targetStart && normalizeDateStr(s.date) <= normalizeDateStr(endStr)) || [];
+          const exactRecord = !isMultiDayRange ? brandRangeLogs.find(log => normalizeDateStr(log.date) === targetStart) : null;
+          
+          let rowData;
+
+          if (exactRecord) {
+            const opBal = parseInt(exactRecord.opening_balance) || 0;
+            const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
+            
+            const pQty = Math.max(0, opBal - baseOpening);
+            const pPrice = pQty > 0 ? (parseFloat(exactRecord.unit_price) || carriedPrice) : carriedPrice;
+            const pMrp = pQty > 0 ? (parseFloat(exactRecord.unit_mrp) || carriedMrp) : carriedMrp;
+
+            rowData = { 
+              purchase_price: pPrice, 
+              purchase_mrp: pMrp,
+              purchase_qty: pQty, 
+              opening_balance: opBal, 
+              closing_balance: clBal === '' ? '' : String(clBal),
+              starting_batches: starting_batches
+            };
+          } else {
+            let totalPurchasesQty = 0;
+            let latestUnitPrice = carriedPrice;
+            let latestUnitMrp = carriedMrp;
+            let currentPrevClosing = baseOpening;
+            
+            brandRangeLogs.forEach(log => {
+               const opBal = parseInt(log.opening_balance) || 0;
+               const pQty = Math.max(0, opBal - currentPrevClosing);
+               totalPurchasesQty += pQty;
+               
+               if (pQty > 0) {
+                  if (log.unit_price) latestUnitPrice = parseFloat(log.unit_price);
+                  if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
+               }
+               
+               if (log.closing_balance !== null) {
+                   currentPrevClosing = parseInt(log.closing_balance);
+               } else {
+                   currentPrevClosing = opBal;
+               }
+            });
+
+            const finalClosing = brandRangeLogs.length > 0 && brandRangeLogs[brandRangeLogs.length - 1].closing_balance !== null 
+              ? String(brandRangeLogs[brandRangeLogs.length - 1].closing_balance) 
+              : '';
+
+            rowData = { 
+              purchase_price: latestUnitPrice, 
+              purchase_mrp: latestUnitMrp,
+              purchase_qty: totalPurchasesQty, 
+              opening_balance: baseOpening + totalPurchasesQty, 
+              closing_balance: finalClosing,
+              starting_batches: starting_batches
+            };
+          }
+
+          // Exact same calculation execution
+          let sAmt = 0;
+          let queue = Array.isArray(rowData.starting_batches) ? rowData.starting_batches.map(b => ({...b})) : [];
+          
+          if (parseInt(rowData.purchase_qty) > 0) {
+            queue.push({
+              qty: parseInt(rowData.purchase_qty),
+              price: parseFloat(rowData.purchase_price) || 0,
+              mrp: parseFloat(rowData.purchase_mrp) || 0
+            });
+          }
+
+          if (rowData.closing_balance !== '') {
+            let salesRemaining = Math.max(0, parseInt(rowData.opening_balance) - parseInt(rowData.closing_balance));
+
+            while (salesRemaining > 0 && queue.length > 0) {
+              if (queue[0].qty <= salesRemaining) {
+                sAmt += queue[0].qty * queue[0].price;
+                salesRemaining -= queue[0].qty;
+                queue.shift(); 
+              } else {
+                sAmt += salesRemaining * queue[0].price;
+                queue[0].qty -= salesRemaining; 
+                salesRemaining = 0;
+              }
+            }
+            tSales += sAmt;
+          }
         });
 
         if (!isMounted) return;
 
         const netProfit = tSales - tPurchases - tExpenses;
+        const retainedCash = tSales - tExpenses - tWithdrawals;
+
         setSummary({
           totalSales: tSales,
           totalPurchases: tPurchases,
           totalExpenses: tExpenses,
           netProfit: netProfit,
           totalWithdrawn: tWithdrawals,
-          retainedCash: netProfit - tWithdrawals 
+          retainedCash: retainedCash
         });
       } catch (err) {
         console.error("P&L Compile Error:", err);
@@ -190,7 +319,7 @@ export default function ProfitLoss() {
     return () => {
       isMounted = false;
     };
-  }, [startDate, endDate, refreshTrigger]);
+  }, [startDate, endDate, refreshTrigger, user]);
 
   return (
     <div className="space-y-6 transition-colors duration-300">
@@ -263,17 +392,17 @@ export default function ProfitLoss() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 relative z-10">
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
           <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Gross Revenue</p>
-          <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalSales.toLocaleString()}</h3>
+          <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalSales.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
           <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Purchase Cost</p>
-          <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalPurchases.toLocaleString()}</h3>
+          <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalPurchases.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
           <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Business Expenses</p>
-          <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalExpenses.toLocaleString()}</h3>
+          <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
 
         <div className={`p-6 rounded-2xl shadow-sm relative overflow-hidden group border ${summary.netProfit >= 0 ? 'bg-linear-to-br from-emerald-500 to-emerald-700 border-emerald-600' : 'bg-linear-to-br from-red-500 to-red-700 border-red-600'}`}>
@@ -281,7 +410,7 @@ export default function ProfitLoss() {
             {summary.netProfit >= 0 ? <TrendingUp size={120} className="text-white"/> : <TrendingDown size={120} className="text-white"/>}
           </div>
           <p className="text-white/80 font-bold text-sm tracking-wider uppercase mb-2 relative z-10">Net Profit / Loss</p>
-          <h3 className="text-4xl font-black text-white relative z-10">₹{summary.netProfit.toLocaleString()}</h3>
+          <h3 className="text-4xl font-black text-white relative z-10">₹{summary.netProfit.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
       </div>
 
@@ -292,7 +421,7 @@ export default function ProfitLoss() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Online Collections</h3>
-            <p className="text-2xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalWithdrawn.toLocaleString()}</p>
+            <p className="text-2xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalWithdrawn.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </div>
         </div>
         <div className="h-10 w-px bg-blue-200 dark:bg-blue-800 hidden sm:block"></div>
@@ -302,7 +431,7 @@ export default function ProfitLoss() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cash Left In Hand</h3>
-            <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">₹{summary.retainedCash.toLocaleString()}</p>
+            <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">₹{summary.retainedCash.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </div>
         </div>
       </div>

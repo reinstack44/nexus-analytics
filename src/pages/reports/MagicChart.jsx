@@ -16,10 +16,14 @@ const CustomMonthInput = forwardRef(({ value, onClick }, ref) => (
 ));
 CustomMonthInput.displayName = "CustomMonthInput";
 
+// DST-safe date formatting matching standard daily_stock keys
 const formatDateForDB = (dateObj) => {
   if (!dateObj) return '';
   const d = new Date(dateObj);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -35,13 +39,7 @@ export default function MagicChart() {
 
   const [syncTrigger, setSyncTrigger] = useState(0);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setSyncTrigger(prev => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
+  // Robust Event-driven Realtime DB Synchronization (No performance-killing 1s polling interval)
   useEffect(() => {
     const channel = supabase
       .channel('magicchart-realtime')
@@ -89,8 +87,8 @@ export default function MagicChart() {
       try {
         const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: traderTxData } ] = await Promise.all([
           supabase.from('brands').select('*'),
-          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', currEndStr + 'T23:59:59').order('date', { ascending: true }),
-          supabase.from('expenses').select('amount, date').eq('user_id', user.id).lte('date', currEndStr + 'T23:59:59'),
+          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', currEndStr).order('date', { ascending: true }),
+          supabase.from('expenses').select('amount, date').eq('user_id', user.id).lte('date', currEndStr),
           supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', currEndStr)
         ]);
 
@@ -178,14 +176,23 @@ export default function MagicChart() {
           const nextDateStr = sortedDates[dIdx + 1];
           const isLastDayOfM = !nextDateStr || nextDateStr.substring(0, 7) !== yearMonthKey;
           if (isLastDayOfM) {
+            // Check if actual closing balances are inputted for this month-end date
+            const dayRecordsForEnd = stockByDateStr[dateStr] || [];
             let totalMrpValuation = 0;
-            brands?.forEach(b => {
-              const queue = brandBatches[b.id] || [];
-              queue.forEach(batch => {
-                totalMrpValuation += batch.qty * batch.mrp;
-              });
+            let anyClosingEntered = false;
+
+            dayRecordsForEnd.forEach(s => {
+              if (s.closing_balance !== null && s.closing_balance !== undefined) {
+                anyClosingEntered = true;
+                const brand = brandMap[s.brand_id];
+                const clQty = parseInt(s.closing_balance) || 0;
+                const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+                totalMrpValuation += clQty * mrp;
+              }
             });
-            monthlyProfits[yearMonthKey].closingMrp = totalMrpValuation;
+
+            // If no closing balance is entered on the end date, set the valuation strictly to 0
+            monthlyProfits[yearMonthKey].closingMrp = anyClosingEntered ? totalMrpValuation : 0;
           }
         });
 
@@ -235,19 +242,62 @@ export default function MagicChart() {
         const selectedMonthKey = `${currYear}-${String(currMonth + 1).padStart(2, '0')}`;
         const currMonthData = monthlyProfits[selectedMonthKey] || { sales: 0, closingMrp: 0, openingMrp: 0, purchases: 0, expenses: 0 };
 
-        setSalesAmount(currMonthData.sales);
-        setLedgerClosing(currMonthData.closingMrp);
-        setLedgerOpening(currMonthData.openingMrp);
-        setLedgerPurchases(currMonthData.purchases);
-        setExpensesAmount(currMonthData.expenses);
+        // Fail-safe null guard to prevent rendering crashes if Supabase returns empty payload
+        if (!brands || !allStock) return;
 
+        // 1. Assign Sales, Purchases, and Expenses directly from the processed active month structure
+        setSalesAmount(currMonthData.sales || 0);
+        setLedgerPurchases(currMonthData.purchases || 0);
+        setExpensesAmount(currMonthData.expenses || 0);
+
+        // 2. Safe Dynamic Opening Stock with smart calendar carryover fallback
+        const activeMonthDates = sortedDates.filter(d => d.startsWith(selectedMonthKey));
+        const firstSavedDate = activeMonthDates[0];
+        const startDayRecords = firstSavedDate ? (stockByDateStr[firstSavedDate] || []) : [];
+        let computedOpeningMrp = 0;
+
+        if (firstSavedDate) {
+          startDayRecords.forEach(s => {
+            const brand = brandMap[s.brand_id];
+            const opQty = parseInt(s.opening_balance) || 0;
+            const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+            computedOpeningMrp += opQty * mrp;
+          });
+        } else {
+          // Smart Carryover: If no records exist for the selected month yet,
+          // automatically display the closing stock valuation of the most recent saved month in history.
+          const previousMonths = sortedMonths.filter(m => m < selectedMonthKey);
+          if (previousMonths.length > 0) {
+            const lastActiveMonthKey = previousMonths[previousMonths.length - 1];
+            computedOpeningMrp = monthlyProfits[lastActiveMonthKey]?.closingMrp || 0;
+          }
+        }
+        setLedgerOpening(computedOpeningMrp);
+
+        // 3. Strict Calendar End-Date Closing Stock: Strictly bound to the final calendar date of the active month
+        const endDayRecords = stockByDateStr[currEndStr] || [];
+        let computedClosingMrp = 0;
+        let anyClosingEnteredForEnd = false;
+        endDayRecords.forEach(s => {
+          if (s.closing_balance !== null && s.closing_balance !== undefined) {
+            anyClosingEnteredForEnd = true;
+            const brand = brandMap[s.brand_id];
+            const clQty = parseInt(s.closing_balance) || 0;
+            const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+            computedClosingMrp += clQty * mrp;
+          }
+        });
+        // If the month-end date is not saved or closing values are empty, default strictly to 0
+        const finalClosingMrp = anyClosingEnteredForEnd ? computedClosingMrp : 0;
+        setLedgerClosing(finalClosingMrp);
+
+        // 4. Calculate clean previous months' net profit (excluding current active selected month)
         let computedPrevNetProfit = 0;
         sortedMonths.forEach(mKey => {
           if (mKey < selectedMonthKey) {
             computedPrevNetProfit += monthlyProfits[mKey]?.netProfit || 0;
           }
         });
-
         setPrevMonthNetProfit(computedPrevNetProfit);
 
       } catch (error) {
@@ -261,18 +311,19 @@ export default function MagicChart() {
     return () => { isMounted = false; };
   }, [selectedMonth, user, syncTrigger]);
 
-  const box1Val = salesAmount;
-  const box2Val = ledgerClosing;
+  // Defensive Math Checks: Enforce absolute fallback to 0 to prevent UI anomalies or NaN displays
+  const box1Val = salesAmount || 0;
+  const box2Val = ledgerClosing || 0;
   const box3Val = box1Val + box2Val;
 
-  const box4Val = ledgerOpening;
-  const box5Val = ledgerPurchases;
+  const box4Val = ledgerOpening || 0;
+  const box5Val = ledgerPurchases || 0;
   const box6Val = box4Val + box5Val;
 
   const box7Val = box3Val - box6Val; 
-  const netProfitVal = box7Val - expensesAmount; 
+  const netProfitVal = box7Val - (expensesAmount || 0); 
 
-  const cumulativeProfitVal = prevMonthNetProfit + netProfitVal; 
+  const cumulativeProfitVal = (prevMonthNetProfit || 0) + netProfitVal; 
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300">

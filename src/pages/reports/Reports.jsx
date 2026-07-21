@@ -185,12 +185,8 @@ export default function Reports() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const prevDatesRef = useRef({ start: null, end: null });
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setRefreshTrigger(prev => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // Discard the performance-killing 1-second interval loop.
+  // Realtime subscription is extremely efficient and handles seamless live-reloading instantly.
 
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('global_startDate');
@@ -281,9 +277,7 @@ export default function Reports() {
         const { data: brandsData } = await supabase.from('brands').select('*');
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
-        const expQueryLimit = endStr + 'T23:59:59';
-        const stockQueryLimit = endStr + 'T23:59:59';
-
+        // Clean, DST-safe date boundary queries without timezone shifting string appends
         const [ 
           { data: expData }, 
           { data: withData }, 
@@ -291,10 +285,10 @@ export default function Reports() {
           { data: allTraderTxData }, 
           { data: traderRangeTxData } 
         ] = await Promise.all([
-          supabase.from('expenses').select('*').eq('user_id', user.id).lte('date', expQueryLimit).order('date'),
-          supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date'),
-          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', stockQueryLimit).order('date', { ascending: true }),
-          supabase.from('trader_transactions').select('*, traders(trader_name)').eq('user_id', user.id).lte('date', endStr + 'T23:59:59').order('date').order('created_at'),
+          supabase.from('expenses').select('*').eq('user_id', user.id).lte('date', endStr).order('date'),
+          supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr).order('date'),
+          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }),
+          supabase.from('trader_transactions').select('*, traders(trader_name)').eq('user_id', user.id).lte('date', endStr).order('date').order('created_at'),
           supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', endStr)
         ]);
 
@@ -302,12 +296,12 @@ export default function Reports() {
 
         let tExpenses = 0;
         expData?.forEach(e => {
-          if (e.date >= startStr && e.date <= endStr + 'T23:59:59') {
-            tExpenses += parseFloat(e.amount);
+          if (e.date >= startStr && e.date <= endStr) {
+            tExpenses += parseFloat(e.amount || 0);
           }
         });
         
-        const tWithdrawals = withData?.reduce((sum, w) => sum + parseFloat(w.amount), 0) || 0;
+        const tWithdrawals = withData?.reduce((sum, w) => sum + parseFloat(w.amount || 0), 0) || 0;
 
         const txList = []; const balances = {};
         allTraderTxData?.forEach(tx => {
@@ -466,7 +460,7 @@ export default function Reports() {
             brandBatches[b.id] = [];
           });
 
-          sortedDates.forEach((dateStr, dIdx) => {
+          sortedDates.forEach((dateStr) => {
             const yearMonthKey = dateStr.substring(0, 7); 
             if (!monthlyProfits[yearMonthKey]) {
               monthlyProfits[yearMonthKey] = { sales: 0, purchases: 0, expenses: 0, openingMrp: 0, closingMrp: 0 };
@@ -523,17 +517,28 @@ export default function Reports() {
               }
             });
 
-            const nextDateStr = sortedDates[dIdx + 1];
-            const isLastDayOfM = !nextDateStr || nextDateStr.substring(0, 7) !== yearMonthKey;
-            if (isLastDayOfM) {
+            // Extract the exact calendar last day of this processed month
+            const [yearPart, monthPart] = yearMonthKey.split('-');
+            const calendarLastDayObj = new Date(parseInt(yearPart), parseInt(monthPart), 0);
+            const calendarEndStr = formatDateForDB(calendarLastDayObj);
+
+            // Strictly evaluate month-end closing stock ONLY if we are processing the actual calendar end-date
+            if (dateStr === calendarEndStr) {
+              const dayRecordsForEnd = stockByDateStrAll[dateStr] || [];
               let totalMrpValuation = 0;
-              brandsData?.forEach(b => {
-                const queue = brandBatches[b.id] || [];
-                queue.forEach(batch => {
-                  totalMrpValuation += batch.qty * batch.mrp;
-                });
+              let anyClosingEntered = false;
+
+              dayRecordsForEnd.forEach(s => {
+                if (s.closing_balance !== null && s.closing_balance !== undefined) {
+                  anyClosingEntered = true;
+                  const brand = brandMap[s.brand_id];
+                  const clQty = parseInt(s.closing_balance) || 0;
+                  const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+                  totalMrpValuation += clQty * mrp;
+                }
               });
-              monthlyProfits[yearMonthKey].closingMrp = totalMrpValuation;
+
+              monthlyProfits[yearMonthKey].closingMrp = anyClosingEntered ? totalMrpValuation : 0;
             }
           });
 
@@ -590,18 +595,55 @@ export default function Reports() {
             }
           });
 
-          setPrevMonthNetProfit(computedPrevNetProfit);
+          if (isMounted) {
+            setPrevMonthNetProfit(computedPrevNetProfit);
 
-          setMagicChartData({
-            box1: currMonthData.sales,
-            box2: currMonthData.closingMrp,
-            box3: currMonthData.sales + currMonthData.closingMrp,
-            box4: currMonthData.openingMrp,
-            box5: currMonthData.purchases,
-            box6: currMonthData.openingMrp + currMonthData.purchases,
-            box7: (currMonthData.sales + currMonthData.closingMrp) - (currMonthData.openingMrp + currMonthData.purchases),
-            currExp: currMonthData.expenses
-          });
+            // 1. Dynamic Opening Stock with smart calendar carryover fallback
+            const activeMonthDates = sortedDates.filter(d => d.startsWith(currentMonthKey));
+            const firstSavedDate = activeMonthDates[0];
+            const startDayRecords = firstSavedDate ? (stockByDateStrAll[firstSavedDate] || []) : [];
+            let computedOpeningMrp = 0;
+            if (firstSavedDate) {
+              startDayRecords.forEach(s => {
+                const brand = brandMap[s.brand_id];
+                const opQty = parseInt(s.opening_balance) || 0;
+                const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+                computedOpeningMrp += opQty * mrp;
+              });
+            } else {
+              const previousMonths = sortedMonths.filter(m => m < currentMonthKey);
+              if (previousMonths.length > 0) {
+                const lastActiveMonthKey = previousMonths[previousMonths.length - 1];
+                computedOpeningMrp = monthlyProfits[lastActiveMonthKey]?.closingMrp || 0;
+              }
+            }
+
+            // 2. Strict Calendar End-Date Closing Stock (strictly bound to endStr, which represents the calendar end date of the month range)
+            const endDayRecords = stockByDateStrAll[endStr] || [];
+            let computedClosingMrp = 0;
+            let anyClosingEnteredForEnd = false;
+            endDayRecords.forEach(s => {
+              if (s.closing_balance !== null && s.closing_balance !== undefined) {
+                anyClosingEnteredForEnd = true;
+                const brand = brandMap[s.brand_id];
+                const clQty = parseInt(s.closing_balance) || 0;
+                const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
+                computedClosingMrp += clQty * mrp;
+              }
+            });
+            const finalClosingMrp = anyClosingEnteredForEnd ? computedClosingMrp : 0;
+
+            setMagicChartData({
+              box1: currMonthData.sales || 0,
+              box2: finalClosingMrp,
+              box3: (currMonthData.sales || 0) + finalClosingMrp,
+              box4: computedOpeningMrp,
+              box5: currMonthData.purchases || 0,
+              box6: computedOpeningMrp + (currMonthData.purchases || 0),
+              box7: ((currMonthData.sales || 0) + finalClosingMrp) - (computedOpeningMrp + (currMonthData.purchases || 0)),
+              currExp: currMonthData.expenses || 0
+            });
+          }
         }
 
       } catch (error) { console.error("Error generating report:", error); }
@@ -650,18 +692,19 @@ export default function Reports() {
     return acc;
   }, {});
 
-  const ledgerBox1 = magicChartData.box1; 
-  const ledgerBox2 = magicChartData.box2; 
+  // Fail-safe calculations fallback to prevent temporary NaN displays in UI
+  const ledgerBox1 = magicChartData.box1 || 0; 
+  const ledgerBox2 = magicChartData.box2 || 0; 
   const ledgerBox3 = ledgerBox1 + ledgerBox2;
 
-  const ledgerBox4 = magicChartData.box4; 
-  const ledgerBox5 = magicChartData.box5; 
+  const ledgerBox4 = magicChartData.box4 || 0; 
+  const ledgerBox5 = magicChartData.box5 || 0; 
   const ledgerBox6 = ledgerBox4 + ledgerBox5;
 
   const ledgerBox7 = ledgerBox3 - ledgerBox6; 
-  const ledgerNetProfit = ledgerBox7 - magicChartData.currExp; 
+  const ledgerNetProfit = ledgerBox7 - (magicChartData.currExp || 0); 
 
-  const cumulativeProfitVal = prevMonthNetProfit + ledgerNetProfit; 
+  const cumulativeProfitVal = (prevMonthNetProfit || 0) + ledgerNetProfit; 
 
   return (
     <div className="space-y-6 transition-colors duration-300">
