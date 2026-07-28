@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
-import { Wine, Mail, Lock, ArrowRight, AlertCircle, Loader2, BarChart3, TrendingUp, ShieldCheck, Activity, LineChart } from 'lucide-react';
+import { Mail, Lock, ArrowRight, AlertCircle, Loader2 } from 'lucide-react';
+import logoImg from '../../assets/nx diary logo.png';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -8,196 +9,310 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  const canvasRef = useRef(null);
+  const [mousePos, setMousePos] = useState({ x: -300, y: -300 });
+
+  // High-performance HTML5 Canvas Shimmer Powder Engine (Strictly matching the reference image)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let animationFrameId;
+
+    const resizeCanvas = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    let particles = [];
+
+    class ShimmerPowder {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        
+        // Multi-layered particle definitions strictly matching the reference image texture
+        const randType = Math.random();
+        if (randType > 0.88) {
+          // 1. Intense bright white star glint
+          this.type = 'glint';
+          this.size = Math.random() * 1.4 + 1.1;
+          this.color = '#ffffff';
+        } else if (randType > 0.65) {
+          // 2. Soft out-of-focus royal blue circular bokeh halos
+          this.type = 'bokeh';
+          this.size = Math.random() * 7 + 4;
+          this.color = Math.random() > 0.5 ? '#1d4ed8' : '#2563eb';
+        } else {
+          // 3. Sharp microscopic cyan/indigo metallic dust specks
+          this.type = 'speck';
+          this.size = Math.random() * 1.1 + 0.4;
+          this.color = Math.random() > 0.6 ? '#06b6d4' : '#1e40af';
+        }
+        
+        // Micro-kinematics for a quiet, professional drift
+        this.vx = (Math.random() - 0.5) * 1.0;
+        this.vy = (Math.random() - 0.5) * 1.0 - 0.2; // Gentle floating upward drift
+        this.alpha = 1.0;
+        this.decay = Math.random() * 0.016 + 0.010;
+        this.twinkleSpeed = Math.random() * 0.12 + 0.05;
+      }
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.alpha -= this.decay;
+      }
+      draw(context) {
+        context.save();
+        
+        // Twitch twinkle frequency
+        const shimmer = Math.abs(Math.sin(Date.now() * this.twinkleSpeed)) * 0.7 + 0.3;
+        context.globalAlpha = this.alpha * shimmer;
+
+        if (this.type === 'bokeh') {
+          // Ambient soft circular background glow matching reference image
+          context.shadowBlur = 15;
+          context.shadowColor = this.color;
+          context.fillStyle = 'rgba(37, 99, 235, 0.12)';
+          context.beginPath();
+          context.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+          context.fill();
+        } else if (this.type === 'glint') {
+          // Brilliant sharp starry flash
+          context.shadowBlur = 12;
+          context.shadowColor = '#3b82f6';
+          context.fillStyle = '#ffffff';
+          context.beginPath();
+          context.moveTo(this.x, this.y - this.size * 2);
+          context.lineTo(this.x + this.size * 0.6, this.y);
+          context.lineTo(this.x, this.y + this.size * 2);
+          context.lineTo(this.x - this.size * 0.6, this.y);
+          context.closePath();
+          context.fill();
+        } else {
+          // Sharp microscopic neon cyan/blue metallic dust speck
+          context.shadowBlur = 8;
+          context.shadowColor = this.color;
+          context.fillStyle = this.color;
+          context.fillRect(this.x, this.y, this.size, this.size);
+        }
+        
+        context.restore();
+      }
+    }
+
+    const render = () => {
+      // Obsidian-slate clearing to eliminate stutters and create royal blue trails
+      ctx.fillStyle = 'rgba(3, 5, 16, 0.22)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      particles.forEach((p, idx) => {
+        p.update();
+        p.draw(ctx);
+        if (p.alpha <= 0) {
+          particles.splice(idx, 1);
+        }
+      });
+
+      animationFrameId = requestAnimationFrame(render);
+    };
+    render();
+
+    let lastX = 0;
+    let lastY = 0;
+
+    const handleMouseMove = (e) => {
+      setMousePos({ x: e.clientX, y: e.clientY });
+
+      // Spawns particles ONLY when cursor has traveled at least 8 pixels (Minimal & Non-intrusive)
+      const distance = Math.hypot(e.clientX - lastX, e.clientY - lastY);
+      if (distance > 8) {
+        particles.push(new ShimmerPowder(e.clientX, e.clientY));
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+
+    return () => {
+      window.removeEventListener('resize', resizeCanvas);
+      window.removeEventListener('mousemove', handleMouseMove);
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, []);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { error: loginError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (error) {
-      setError(error.message);
+    if (loginError) {
+      setError(loginError.message);
     }
     setLoading(false);
   };
 
-  // Ultra-crisp modern input styling
-  const inputClass = "w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 rounded-xl focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-medium shadow-xs";
+  // High-fidelity borderless translucent inputs
+  const inputClass = "w-full pl-11 pr-4 py-4 bg-slate-950/60 dark:bg-slate-950/90 border border-white/5 text-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/40 outline-none transition-all duration-300 text-sm font-semibold shadow-[0_0_20px_rgba(6,182,212,0.03)] placeholder-slate-650";
 
   return (
-    <div className="min-h-screen w-full flex bg-white dark:bg-[#0B1121] font-sans transition-colors duration-500">
+    <div className="min-h-screen w-full flex items-center justify-center bg-[#030510] px-4 sm:px-6 lg:px-8 font-sans transition-colors duration-500 relative overflow-hidden perspective-3d">
       
-      {/* ================= LEFT PANEL (ULTRA-PREMIUM ERP THEME) ================= */}
-      <div className="hidden lg:flex w-[55%] relative overflow-hidden bg-slate-950 items-center justify-center p-12 border-r border-slate-800/60 shadow-2xl">
+      {/* Dynamic 3D Electric Grid Style Injection */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes grid-move {
+          0% { transform: translateY(0); }
+          100% { transform: translateY(50px); }
+        }
+        .perspective-3d {
+          perspective: 1000px;
+        }
+        .grid-3d-floor {
+          transform: rotateX(65deg) scale(2.2);
+          background-image: 
+            linear-gradient(to right, rgba(37, 99, 235, 0.04) 1.5px, transparent 1px),
+            linear-gradient(to bottom, rgba(37, 99, 235, 0.04) 1.5px, transparent 1px);
+          background-size: 50px 50px;
+          animation: grid-move 5s linear infinite;
+        }
+      `}} />
+
+      {/* ================= GPU-ACCELERATED SHIMMERING CANVASES ================= */}
+      <canvas ref={canvasRef} className="absolute inset-0 z-10 pointer-events-none block" />
+
+      {/* ================= 3D ENVIRONMENT BACKDROP ================= */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        {/* Neon electric floor grid */}
+        <div className="absolute inset-0 grid-3d-floor origin-center"></div>
         
-        {/* Dynamic Abstract Background Elements */}
-        {/* Linter Fix: Used inline style for background size to be 100% error-free & cross-compatible */}
+        {/* Soft atmospheric gradient masking */}
         <div 
-          className="absolute inset-0 opacity-[0.03]" 
+          className="absolute inset-0" 
           style={{ 
-            backgroundImage: 'linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px)', 
-            backgroundSize: '32px 32px' 
+            background: 'radial-gradient(circle at 50% 50%, rgba(3, 5, 16, 0) 0%, #030510 85%)' 
           }}
         ></div>
-        
-        {/* Linter Fixes: Applied w-125 and h-125 instead of arbitrary px values */}
-        <div className="absolute top-[-10%] left-[-10%] w-125 h-125 bg-blue-600/20 rounded-full blur-[120px] pointer-events-none mix-blend-screen animate-pulse duration-10000"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-125 h-125 bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none mix-blend-screen"></div>
 
-        {/* Realistic Glassmorphism Dashboard Preview Layer */}
-        <div className="relative z-10 w-full max-w-lg backdrop-blur-xl bg-white/5 border border-white/10 p-8 rounded-3xl shadow-[0_0_40px_rgba(0,0,0,0.5)] animate-in fade-in slide-in-from-bottom-8 duration-1000">
-          
-          {/* Mock Header */}
-          <div className="flex items-center justify-between mb-8 pb-6 border-b border-white/10">
-            <div className="flex items-center gap-4">
-              <div className="h-12 w-12 bg-linear-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30 border border-blue-400/20">
-                <Wine className="text-white" size={24} />
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-white tracking-tight">Nexus Diary</h3>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">System Active</p>
-                </div>
-              </div>
-            </div>
-            <div className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-slate-300 text-xs font-medium flex items-center gap-2">
-              <Activity size={14} className="text-blue-400" /> Live Sync
-            </div>
-          </div>
-          
-          {/* Mock Charts & Data (Enhancing Realism) */}
-          <div className="space-y-4">
-            <div className="bg-slate-900/50 border border-white/5 rounded-2xl p-5 hover:bg-slate-900/80 transition-colors duration-300 relative overflow-hidden">
-               <div className="absolute right-0 bottom-0 opacity-10 transform translate-x-4 translate-y-4">
-                 <LineChart size={100} />
-               </div>
-               <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">
-                 <BarChart3 size={16} className="text-blue-400"/> Daily Gross Revenue
-               </div>
-               <div className="text-4xl font-black text-white tracking-tight relative z-10">₹2.84<span className="text-xl text-slate-500 font-bold ml-1">L</span></div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-slate-900/50 border border-white/5 rounded-2xl p-5 hover:bg-slate-900/80 transition-colors duration-300">
-                 <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">
-                   <TrendingUp size={14} className="text-emerald-400"/> Avg. Margin
-                 </div>
-                 <div className="text-2xl font-black text-emerald-400 tracking-tight">+32<span className="text-lg opacity-80">%</span></div>
-              </div>
-              <div className="bg-slate-900/50 border border-white/5 rounded-2xl p-5 hover:bg-slate-900/80 transition-colors duration-300">
-                 <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">
-                   <ShieldCheck size={14} className="text-indigo-400"/> Ledger Status
-                 </div>
-                 <div className="text-xl font-bold text-white tracking-tight mt-1">Reconciled</div>
-              </div>
-            </div>
-          </div>
-
-        </div>
+        {/* Breathing backdrop lights */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-140 h-140 bg-indigo-600/5 rounded-full blur-[140px]"></div>
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-100 h-100 bg-blue-600/5 rounded-full blur-[120px]"></div>
       </div>
 
-      {/* ================= RIGHT PANEL (COMPACT & CRISP LOGIN) ================= */}
-      <div className="flex-1 flex flex-col justify-center px-6 sm:px-12 lg:px-24 bg-slate-50 dark:bg-[#0B1121] relative z-10">
+      {/* ================= INTERACTIVE DUAL-GLOW AURA ================= */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        {/* Deep royal-blue breathing spotlight */}
+        <div 
+          className="absolute w-96 h-96 bg-linear-to-r from-blue-600/10 to-indigo-600/10 rounded-full blur-[90px] transition-all duration-300 ease-out"
+          style={{ 
+            left: `${mousePos.x - 192}px`, 
+            top: `${mousePos.y - 192}px` 
+          }}
+        ></div>
+      </div>
+
+      {/* ================= SEAMLESS BORDERLESS FORM CONSOLE ================= */}
+      <div className="relative z-20 w-full max-w-sm flex flex-col gap-8 animate-in fade-in zoom-in-95 duration-700">
         
-        {/* Linter Fix: Applied max-w-90 canonical class */}
-        <div className="mx-auto w-full max-w-90 animate-in fade-in slide-in-from-right-8 duration-700">
-          
-          {/* Mobile Logo (Visible only on small screens) */}
-          <div className="lg:hidden flex justify-center mb-8">
-            <div className="h-16 w-16 bg-linear-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30 border border-blue-400/20">
-              <Wine className="text-white" size={32} />
-            </div>
+        {/* Brand Logo & Typography with custom halo flare */}
+        <div className="flex flex-col items-center select-none">
+          <div className="relative mb-4 group">
+            {/* Bright cyan-purple flare behind logo */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 bg-linear-to-r from-blue-500/20 to-indigo-500/20 rounded-full blur-2xl pointer-events-none group-hover:opacity-100 transition-all duration-500"></div>
+            
+            <img 
+              src={logoImg} 
+              alt="Nexus Diary Logo" 
+              className="h-20 w-auto object-contain relative z-10 filter drop-shadow-[0_2px_20px_rgba(37,99,235,0.3)] animate-pulse duration-10000"
+            />
           </div>
-
-          <div className="text-center lg:text-left mb-8">
-            <h2 className="text-2xl sm:text-3xl font-black text-slate-800 dark:text-white tracking-tight">
-              Log In
-            </h2>
-            <p className="text-slate-500 dark:text-slate-400 mt-2 text-sm font-medium">
-              Securely access your business dashboard.
-            </p>
-          </div>
-
-          {/* Error Alert */}
-          {error && (
-            <div className="flex items-start gap-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 p-3.5 rounded-xl mb-6 text-sm font-semibold animate-in slide-in-from-top-2 shadow-sm">
-              <AlertCircle size={18} className="shrink-0 mt-0.5" />
-              <p className="leading-relaxed">{error}</p>
-            </div>
-          )}
-
-          {/* Compact Form */}
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">
-                Email Address
-              </label>
-              <div className="relative group">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 group-focus-within:text-blue-500 transition-colors">
-                  <Mail size={16} />
-                </span>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className={inputClass}
-                  placeholder="Enter your email"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">
-                Secure Password
-              </label>
-              <div className="relative group">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 group-focus-within:text-blue-500 transition-colors">
-                  <Lock size={16} />
-                </span>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className={inputClass}
-                  placeholder="••••••••"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full mt-4 bg-linear-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold py-3 px-4 rounded-xl focus:ring-4 focus:ring-blue-100 dark:focus:ring-blue-900 transition-all duration-300 disabled:opacity-70 flex justify-center items-center gap-2 shadow-[0_4px_14px_0_rgba(37,99,235,0.39)] hover:shadow-[0_6px_20px_rgba(37,99,235,0.23)] hover:-translate-y-0.5 text-sm"
-            >
-              {loading ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" /> Authenticating...
-                </>
-              ) : (
-                <>
-                  Access System <ArrowRight size={16} />
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Footer Note */}
-          <div className="mt-12 text-center lg:text-left">
-            <p className="text-[11px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-              © {new Date().getFullYear()} Nexus Diary
-            </p>
-          </div>
-          
+          <h2 className="text-xl font-black text-white tracking-widest uppercase relative z-10">
+            Nexus Diary
+          </h2>
+          <p className="text-slate-500 text-[10px] font-bold uppercase tracking-[0.25em] mt-1.5 relative z-10">
+            Secure Business Dashboard
+          </p>
         </div>
+
+        {/* Alert console */}
+        {error && (
+          <div className="flex items-start gap-3 bg-red-950/20 border border-red-900/30 text-red-400 p-4 rounded-2xl text-xs font-semibold animate-in slide-in-from-top-2">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{error}</p>
+          </div>
+        )}
+
+        {/* Input Fields */}
+        <form onSubmit={handleLogin} className="space-y-6">
+          <div>
+            <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-2.5">
+              Email Address
+            </label>
+            <div className="relative group">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors duration-300">
+                <Mail size={16} />
+              </span>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={inputClass}
+                placeholder="Enter your email"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-2.5">
+              Secure Password
+            </label>
+            <div className="relative group">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors duration-300">
+                <Lock size={16} />
+              </span>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={inputClass}
+                placeholder="••••••••"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full mt-6 bg-linear-to-r from-blue-600 to-indigo-650 hover:from-blue-700 hover:to-indigo-750 text-white font-bold py-3.5 px-4 rounded-2xl transition-all duration-300 disabled:opacity-70 flex justify-center items-center gap-2 shadow-[0_8px_30px_rgba(37,99,235,0.15)] dark:shadow-[0_12px_45px_rgba(79,70,229,0.25)] hover:shadow-[0_16px_50px_rgba(37,99,235,0.35)] hover:-translate-y-0.5 text-sm cursor-pointer"
+          >
+            {loading ? (
+              <>
+                <Loader2 size={16} className="animate-spin" /> Authenticating System...
+              </>
+            ) : (
+              <>
+                Access System <ArrowRight size={16} />
+              </>
+            )}
+          </button>
+        </form>
+
+        {/* Footer info */}
+        <div className="mt-6 border-t border-white/5 pt-6 text-center select-none">
+          <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+            © {new Date().getFullYear()} Nexus Diary
+          </p>
+        </div>
+
       </div>
     </div>
   );
