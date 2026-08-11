@@ -19,6 +19,11 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 ));
 CustomDateInput.displayName = "CustomDateInput";
 
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
 export default function ProfitLoss() {
   const { user } = useAuth();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -59,10 +64,7 @@ export default function ProfitLoss() {
   const normalizeDateStr = (dStr) => {
     if (!dStr) return '';
     if (typeof dStr !== 'string') return '';
-    if (dStr.includes('T')) {
-      return dStr.split('T')[0];
-    }
-    return dStr;
+    return dStr.includes('T') ? dStr.split('T')[0] : dStr;
   };
 
   // Realtime Database Sync
@@ -96,7 +98,6 @@ export default function ProfitLoss() {
         let traderTxQuery = supabase.from('trader_transactions').select('purchase_amount').gte('date', startStr).lte('date', endStr);
         let brandsQuery = supabase.from('brands').select('id, brand_name, selling_price, mrp_price');
         
-        // Fetch all historical stock to rebuild exactly identical FIFO chains as DailyStock
         let stockQuery = supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').lte('date', endStr).order('date', { ascending: true });
 
         if (user?.id) {
@@ -120,15 +121,15 @@ export default function ProfitLoss() {
         ]);
 
         let tExpenses = 0;
-        expData?.forEach(e => tExpenses += parseFloat(e.amount) || 0);
+        expData?.forEach(e => tExpenses = safeRound(tExpenses + (parseFloat(e.amount) || 0)));
 
         let tWithdrawals = 0;
-        withData?.forEach(w => tWithdrawals += parseFloat(w.amount) || 0);
+        withData?.forEach(w => tWithdrawals = safeRound(tWithdrawals + (parseFloat(w.amount) || 0)));
 
         let tPurchases = 0;
-        traderTxData?.forEach(t => tPurchases += parseFloat(t.purchase_amount) || 0);
+        traderTxData?.forEach(t => tPurchases = safeRound(tPurchases + (parseFloat(t.purchase_amount) || 0)));
 
-        // --- UNIFIED CHRONOLOGICAL FIFO RECONSTRUCTION (Exact DailyStock Match) ---
+        // --- UNIFIED CHRONOLOGICAL FIFO RECONSTRUCTION ---
         const brandBatches = {};
         const prevClosing = {};
         const lastActivePrice = {};
@@ -157,7 +158,7 @@ export default function ProfitLoss() {
               }
             }
 
-            const opBal = parseInt(s.opening_balance) || 0;
+            const opBal = parseInt(s.opening_balance, 10) || 0;
             const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
             
             const pPrice = parseFloat(s.unit_price) || lastActivePrice[s.brand_id] || parseFloat(brand.selling_price) || 0;
@@ -167,7 +168,7 @@ export default function ProfitLoss() {
               queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
             }
 
-            const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+            const clBal = s.closing_balance !== null ? parseInt(s.closing_balance, 10) : null;
             
             if (clBal !== null) {
               let sales = Math.max(0, opBal - clBal);
@@ -214,8 +215,8 @@ export default function ProfitLoss() {
           let rowData;
 
           if (exactRecord) {
-            const opBal = parseInt(exactRecord.opening_balance) || 0;
-            const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
+            const opBal = parseInt(exactRecord.opening_balance, 10) || 0;
+            const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance, 10) : '';
             
             const pQty = Math.max(0, opBal - baseOpening);
             const pPrice = pQty > 0 ? (parseFloat(exactRecord.unit_price) || carriedPrice) : carriedPrice;
@@ -236,7 +237,7 @@ export default function ProfitLoss() {
             let currentPrevClosing = baseOpening;
             
             brandRangeLogs.forEach(log => {
-               const opBal = parseInt(log.opening_balance) || 0;
+               const opBal = parseInt(log.opening_balance, 10) || 0;
                const pQty = Math.max(0, opBal - currentPrevClosing);
                totalPurchasesQty += pQty;
                
@@ -246,7 +247,7 @@ export default function ProfitLoss() {
                }
                
                if (log.closing_balance !== null) {
-                   currentPrevClosing = parseInt(log.closing_balance);
+                   currentPrevClosing = parseInt(log.closing_balance, 10);
                } else {
                    currentPrevClosing = opBal;
                }
@@ -266,40 +267,39 @@ export default function ProfitLoss() {
             };
           }
 
-          // Exact same calculation execution
           let sAmt = 0;
-          let queue = Array.isArray(rowData.starting_batches) ? rowData.starting_batches.map(b => ({...b})) : [];
+          let queue = Array.isArray(rowData.starting_batches) ? rowData.starting_batches.map(b => ({ ...b })) : [];
           
-          if (parseInt(rowData.purchase_qty) > 0) {
+          if (parseInt(rowData.purchase_qty, 10) > 0) {
             queue.push({
-              qty: parseInt(rowData.purchase_qty),
+              qty: parseInt(rowData.purchase_qty, 10),
               price: parseFloat(rowData.purchase_price) || 0,
               mrp: parseFloat(rowData.purchase_mrp) || 0
             });
           }
 
           if (rowData.closing_balance !== '') {
-            let salesRemaining = Math.max(0, parseInt(rowData.opening_balance) - parseInt(rowData.closing_balance));
+            let salesRemaining = Math.max(0, parseInt(rowData.opening_balance, 10) - parseInt(rowData.closing_balance, 10));
 
             while (salesRemaining > 0 && queue.length > 0) {
               if (queue[0].qty <= salesRemaining) {
-                sAmt += queue[0].qty * queue[0].price;
+                sAmt = safeRound(sAmt + (queue[0].qty * queue[0].price));
                 salesRemaining -= queue[0].qty;
-                queue.shift(); 
+                queue.shift();
               } else {
-                sAmt += salesRemaining * queue[0].price;
+                sAmt = safeRound(sAmt + (salesRemaining * queue[0].price));
                 queue[0].qty -= salesRemaining; 
                 salesRemaining = 0;
               }
             }
-            tSales += sAmt;
+            tSales = safeRound(tSales + sAmt);
           }
         });
 
         if (!isMounted) return;
 
-        const netProfit = tSales - tPurchases - tExpenses;
-        const retainedCash = tSales - tExpenses - tWithdrawals;
+        const netProfit = safeRound(tSales - tPurchases - tExpenses);
+        const retainedCash = safeRound(tSales - tExpenses - tWithdrawals);
 
         setSummary({
           totalSales: tSales,
@@ -324,7 +324,6 @@ export default function ProfitLoss() {
   return (
     <div className="space-y-6 transition-colors duration-300">
       
-      {/* Premium Unified DatePicker Styles */}
       <style>{`
         .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
         .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }

@@ -1,10 +1,16 @@
 import { useState, useEffect, useRef, forwardRef, useCallback, useMemo } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
-import { Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, Receipt, X, Sigma, IndianRupee, Edit2, Trash2, Coffee, CalendarOff, Info, Lock, ArrowRightLeft } from 'lucide-react';
+import { 
+  Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, 
+  GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, 
+  Receipt, X, Sigma, IndianRupee, Edit2, Trash2, Coffee, 
+  CalendarOff, Info, Lock, ArrowRightLeft 
+} from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
+// Strict timezone-neutral formatting helper
 const formatDisplayDate = (dateObj) => {
   if (!dateObj) return '';
   const d = new Date(dateObj);
@@ -12,8 +18,40 @@ const formatDisplayDate = (dateObj) => {
   return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
 };
 
+// Fixed scale helper to prevent decimal bottle units
+const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedMrp) => {
+  const currentSum = batches.reduce((acc, b) => acc + b.qty, 0);
+  if (currentSum === targetBaseOpening) return batches;
+  if (targetBaseOpening <= 0) return [];
+  if (currentSum === 0) {
+    return [{ qty: targetBaseOpening, price: carriedPrice, mrp: carriedMrp }];
+  }
+  const result = batches.map(b => ({ ...b }));
+  const scale = targetBaseOpening / currentSum;
+  let runningSum = 0;
+  for (let i = 0; i < result.length; i++) {
+    if (i === result.length - 1) {
+      result[i].qty = Math.max(0, targetBaseOpening - runningSum);
+    } else {
+      result[i].qty = Math.round(result[i].qty * scale);
+      runningSum += result[i].qty;
+    }
+  }
+  return result.filter(b => b.qty > 0);
+};
+
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
 const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
-  <button type="button" onClick={onClick} ref={ref} className="flex items-center justify-between px-3 py-2 h-10.5 w-40 sm:w-44 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap">
+  <button 
+    type="button" 
+    onClick={onClick} 
+    ref={ref} 
+    className="flex items-center justify-between px-3 py-2 h-10.5 w-40 sm:w-44 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap"
+  >
     <div className="flex items-center overflow-hidden">
       <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
       <span className="truncate">{value || placeholder}</span>
@@ -31,72 +69,54 @@ const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
 ));
 FormDateInput.displayName = "FormDateInput";
 
-const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// Scales historical queue batches proportionally when opening stock is manually altered to ensure mathematical FIFO integrity
-const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedMrp) => {
-  const currentSum = batches.reduce((acc, b) => acc + b.qty, 0);
-  if (currentSum === targetBaseOpening) return batches;
-  if (targetBaseOpening <= 0) return [];
-  if (currentSum === 0) {
-    return [{ qty: targetBaseOpening, price: carriedPrice, mrp: carriedMrp }];
-  }
-  const result = batches.map(b => ({ ...b }));
-  const scale = targetBaseOpening / currentSum;
-  let runningSum = 0;
-  for (let i = 0; i < result.length; i++) {
-    if (i === result.length - 1) {
-      result[i].qty = targetBaseOpening - runningSum;
-    } else {
-      result[i].qty = Math.round(result[i].qty * scale);
-      runningSum += result[i].qty;
-    }
-  }
-  return result.filter(b => b.qty > 0);
-};
+const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const recalculateRow = (row) => {
-  let sQty = 0; let sAmt = 0; let sMrpAmt = 0;
-  let cAmt = 0; let cMrpAmt = 0;
+  let sQty = 0; 
+  let sAmt = 0; 
+  let sMrpAmt = 0;
+  let cAmt = 0; 
+  let cMrpAmt = 0;
 
-  let queue = Array.isArray(row.starting_batches) ? row.starting_batches.map(b => ({...b})) : [];
+  let queue = Array.isArray(row.starting_batches) ? row.starting_batches.map(b => ({ ...b })) : [];
   
-  if (parseInt(row.purchase_qty) > 0) {
+  if (parseInt(row.purchase_qty, 10) > 0) {
     queue.push({
-      qty: parseInt(row.purchase_qty),
+      qty: parseInt(row.purchase_qty, 10),
       price: parseFloat(row.purchase_price) || 0,
       mrp: parseFloat(row.purchase_mrp) || 0
     });
   }
 
   if (row.closing_balance !== '') {
-    sQty = Math.max(0, parseInt(row.opening_balance) - parseInt(row.closing_balance));
+    sQty = Math.max(0, parseInt(row.opening_balance, 10) - parseInt(row.closing_balance, 10));
     let salesRemaining = sQty;
 
     while (salesRemaining > 0 && queue.length > 0) {
       if (queue[0].qty <= salesRemaining) {
-        sAmt += queue[0].qty * queue[0].price;
-        sMrpAmt += queue[0].qty * queue[0].mrp;
+        sAmt = safeRound(sAmt + (queue[0].qty * queue[0].price));
+        sMrpAmt = safeRound(sMrpAmt + (queue[0].qty * queue[0].mrp));
         salesRemaining -= queue[0].qty;
         queue.shift(); 
       } else {
-        sAmt += salesRemaining * queue[0].price;
-        sMrpAmt += salesRemaining * queue[0].mrp;
+        sAmt = safeRound(sAmt + (salesRemaining * queue[0].price));
+        sMrpAmt = safeRound(sMrpAmt + (salesRemaining * queue[0].mrp));
         queue[0].qty -= salesRemaining; 
         salesRemaining = 0;
       }
     }
 
-    // Safety Fallback: Handle physical discrepancies if logged sales exceed the calculations queue
     if (salesRemaining > 0) {
-      sAmt += salesRemaining * (parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0);
-      sMrpAmt += salesRemaining * (parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0);
+      const fallbackPrice = parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0;
+      const fallbackMrp = parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0;
+      sAmt = safeRound(sAmt + (salesRemaining * fallbackPrice));
+      sMrpAmt = safeRound(sMrpAmt + (salesRemaining * fallbackMrp));
     }
   }
 
   queue.forEach(b => {
-    cAmt += b.qty * b.price;
-    cMrpAmt += b.qty * b.mrp;
+    cAmt = safeRound(cAmt + (b.qty * b.price));
+    cMrpAmt = safeRound(cMrpAmt + (b.qty * b.mrp));
   });
 
   return { 
@@ -119,14 +139,12 @@ export default function DailyStock() {
   const [refreshTrigger, setRefreshTrigger] = useState(0); 
   const [isDirty, setIsDirty] = useState(false); 
 
-  // Store isDirty status in a mutable ref to safely handle realtime database checks 
-  // without repeatedly mounting and unmounting the subscription channel
   const isDirtyRef = useRef(false);
   useEffect(() => {
     isDirtyRef.current = isDirty;
   }, [isDirty]);
 
-  // Safe Timezone Date Formatter (Prevents DST shifts)
+  // Strict timezone-neutral DB serialization helper
   const formatDateForDB = useCallback((dateObj) => {
     if (!dateObj) return '';
     const d = new Date(dateObj);
@@ -156,8 +174,18 @@ export default function DailyStock() {
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', isDanger: false, onConfirm: null });
   const [alertModal, setAlertModal] = useState({ isOpen: false, title: '', message: '' });
   const [holidayModal, setHolidayModal] = useState({ isOpen: false, date: null, dateStr: '' });
-  const closeConfirm = () => setConfirmModal({ ...confirmModal, isOpen: false });
-  const closeAlert = () => setAlertModal({ ...alertModal, isOpen: false });
+  const [pipelineWarning, setPipelineWarning] = useState(null);
+  const [customRangeMode, setCustomRangeMode] = useState(false);
+
+  const [markedHolidays, setMarkedHolidays] = useState([]);
+  const [filledDates, setFilledDates] = useState([]);
+  const [lockedRanges, setLockedRanges] = useState([]); 
+  const [popupDate, setPopupDate] = useState(new Date());
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [editingCollectionId, setEditingCollectionId] = useState(null);
+
+  const closeConfirm = () => setConfirmModal(prev => ({ ...prev, isOpen: false }));
+  const closeAlert = () => setAlertModal(prev => ({ ...prev, isOpen: false }));
 
   const handleCancelHolidayFromModal = async (dateStr) => {
     setIsSaving(true);
@@ -168,28 +196,22 @@ export default function DailyStock() {
     setIsSaving(false);
   };
 
-  const [pipelineWarning, setPipelineWarning] = useState(null);
-  const [customRangeMode, setCustomRangeMode] = useState(false);
-
-  const [markedHolidays, setMarkedHolidays] = useState([]);
-  const [filledDates, setFilledDates] = useState([]);
-  const [lockedRanges, setLockedRanges] = useState([]); 
-
   const normalizeDateStr = useCallback((dStr) => {
     if (!dStr) return '';
     if (typeof dStr !== 'string') return '';
-    if (dStr.includes('T')) {
-      return dStr.split('T')[0];
-    }
-    return dStr;
+    return dStr.includes('T') ? dStr.split('T')[0] : dStr;
   }, []);
 
   const getDatesInRange = useCallback((start, end) => {
     const dates = [];
     let current = new Date(start);
     const last = new Date(end || start);
-    current.setHours(0,0,0,0); last.setHours(0,0,0,0);
-    while (current <= last) { dates.push(formatDateForDB(current)); current.setDate(current.getDate() + 1); }
+    current.setHours(0,0,0,0); 
+    last.setHours(0,0,0,0);
+    while (current <= last) { 
+      dates.push(formatDateForDB(current)); 
+      current.setDate(current.getDate() + 1); 
+    }
     return dates;
   }, [formatDateForDB]);
 
@@ -202,13 +224,14 @@ export default function DailyStock() {
   
   const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
 
+  // UTC redirection helper
   const getRedirectedDate = useCallback((date) => {
     if (!date) return null;
     const dateStr = formatDateForDB(date);
     const matchedRange = lockedRanges.find(r => dateStr >= r.start_date && dateStr <= r.end_date);
     if (matchedRange) {
       const parts = matchedRange.end_date.split('-');
-      return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
     }
     return date;
   }, [lockedRanges, formatDateForDB]);
@@ -217,6 +240,50 @@ export default function DailyStock() {
     const endStr = formatDateForDB(endDate || startDate);
     return lockedRanges.some(r => r.end_date === endStr);
   }, [lockedRanges, startDate, endDate, formatDateForDB]);
+
+  // DATE HANDLERS
+  const handleStartDateChange = (date) => {
+    const redirected = getRedirectedDate(date);
+    const dateStr = formatDateForDB(redirected || date);
+    if (!customRangeMode) {
+      if (markedHolidays.includes(dateStr)) {
+        setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
+        return;
+      }
+    }
+    setStartDate(redirected || date);
+    setEndDate(redirected || date); 
+    setIsDirty(false);
+  };
+
+  const handleEndDateChange = (date) => {
+    const redirected = getRedirectedDate(date);
+    const dateStr = formatDateForDB(redirected || date);
+    if (!customRangeMode) {
+      if (markedHolidays.includes(dateStr)) {
+        setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
+        return;
+      }
+      if ((redirected || date) < startDate) {
+        setAlertModal({ isOpen: true, title: "Invalid Selection", message: "End date must fall on or after the start date." });
+        return;
+      }
+      if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
+        const range = getDatesInRange(startDate, redirected || date);
+        if (range.some(d => markedHolidays.includes(d))) {
+          setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays. Range selection blocked." });
+          return;
+        }
+        const rangeToCheck = range.slice(0, -1);
+        if (rangeToCheck.some(d => filledDates.includes(d))) {
+          setAlertModal({ isOpen: true, title: "Overlaps Existing Entries", message: "Selected range overlaps with previously saved daily stock records. Range selection blocked." });
+          return;
+        }
+      }
+    }
+    setEndDate(redirected || date);
+    setIsDirty(false);
+  };
 
   const handleResetRangeData = async () => {
     const activeEndStr = formatDateForDB(endDate || startDate);
@@ -262,88 +329,140 @@ export default function DailyStock() {
     return () => clearInterval(interval);
   }, [isSaving, isSubmitting]);
 
-  // Realtime Database Sync Configuration
-  useEffect(() => {
-    const channel = supabase
-      .channel('dailystock-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'locked_ranges' }, () => { if(!isDirtyRef.current) setRefreshTrigger(prev => prev + 1); })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
+  // SECURED CALENDAR & RETROSPECTIVE CHRONOLOGICAL PIPELINE HANDLER
   useEffect(() => {
     let isMounted = true;
     const fetchCloudPreferences = async () => {
       if (!user) return;
-      const [
-        { data: holidayData },
-        { data: filledData },
-        { data: rangeData }
-      ] = await Promise.all([
-        supabase.from('holidays').select('date').eq('user_id', user.id),
-        supabase.from('daily_stock').select('date').eq('user_id', user.id).not('closing_balance', 'is', null),
-        supabase.from('locked_ranges').select('start_date, end_date').eq('user_id', user.id)
-      ]);
       
-      if (isMounted) {
-        if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
-        if (filledData) setFilledDates([...new Set(filledData.map(d => d.date))].sort());
-        if (rangeData) setLockedRanges(rangeData);
+      try {
+        const [
+          { data: holidayData },
+          { data: stockEntries },
+          { data: activeBrands },
+          { data: rangeData }
+        ] = await Promise.all([
+          supabase.from('holidays').select('date').eq('user_id', user.id),
+          supabase.from('daily_stock').select('date, closing_balance').eq('user_id', user.id),
+          supabase.from('brands').select('id'),
+          supabase.from('locked_ranges').select('start_date, end_date').eq('user_id', user.id)
+        ]);
+        
+        const activeBrandsCount = activeBrands ? activeBrands.length : 0;
+
+        if (isMounted) {
+          if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
+          if (rangeData) setLockedRanges(rangeData);
+
+          const dateCounts = {};
+          
+          stockEntries?.forEach(entry => {
+            if (entry.closing_balance !== null && entry.closing_balance !== undefined) {
+              dateCounts[entry.date] = (dateCounts[entry.date] || 0) + 1;
+            }
+          });
+
+          // A date is colored green ONLY if all active brands have a non-null saved closing balance
+          const fullyFilledDates = Object.keys(dateCounts).filter(dateStr => dateCounts[dateStr] >= activeBrandsCount);
+          setFilledDates(fullyFilledDates);
+        }
+
+        // Execute the chronological verification asynchronously within this flow to avoid eslint warning
+        if (!customRangeMode) {
+          const { data: firstRec } = await supabase
+            .from('daily_stock')
+            .select('date')
+            .eq('user_id', user.id)
+            .order('date', { ascending: true })
+            .limit(1);
+
+          if (!firstRec || firstRec.length === 0) {
+            if (isMounted) setPipelineWarning(null);
+            return;
+          }
+
+          const firstDateStr = firstRec[0].date.split('T')[0];
+          const selectedStartStr = formatDateForDB(startDate);
+
+          if (selectedStartStr <= firstDateStr) {
+            if (isMounted) setPipelineWarning(null);
+            return;
+          }
+
+          const firstDateObj = new Date(firstDateStr);
+          const dayBeforeStartObj = new Date(startDate);
+          dayBeforeStartObj.setDate(dayBeforeStartObj.getDate() - 1);
+
+          const checkDates = [];
+          let cur = new Date(firstDateObj);
+          while (cur <= dayBeforeStartObj) {
+            checkDates.push(formatDateForDB(cur));
+            cur.setDate(cur.getDate() + 1);
+          }
+
+          if (checkDates.length === 0) {
+            if (isMounted) setPipelineWarning(null);
+            return;
+          }
+
+          const { data: holidays } = await supabase
+            .from('holidays')
+            .select('date')
+            .eq('user_id', user.id)
+            .in('date', checkDates);
+
+          const holidayDates = holidays ? holidays.map(h => h.date) : [];
+          const requiredWorkingDates = checkDates.filter(d => !holidayDates.includes(d));
+
+          if (requiredWorkingDates.length === 0) {
+            if (isMounted) setPipelineWarning(null);
+            return;
+          }
+
+          const { data: stockRecords } = await supabase
+            .from('daily_stock')
+            .select('date, closing_balance')
+            .eq('user_id', user.id)
+            .in('date', requiredWorkingDates);
+
+          const recordsByDate = {};
+          stockRecords?.forEach(r => {
+            if (!recordsByDate[r.date]) {
+              recordsByDate[r.date] = { count: 0, hasNull: false };
+            }
+            recordsByDate[r.date].count++;
+            if (r.closing_balance === null || r.closing_balance === undefined) {
+              recordsByDate[r.date].hasNull = true;
+            }
+          });
+
+          let earliestIncompleteDate = null;
+          for (const dateStr of requiredWorkingDates) {
+            const dayInfo = recordsByDate[dateStr];
+            if (!dayInfo || dayInfo.count < activeBrandsCount || dayInfo.hasNull) {
+              earliestIncompleteDate = dateStr;
+              break;
+            }
+          }
+
+          if (isMounted) {
+            if (earliestIncompleteDate) {
+              setPipelineWarning(earliestIncompleteDate);
+            } else {
+              setPipelineWarning(null);
+            }
+          }
+        } else {
+          if (isMounted) setPipelineWarning(null);
+        }
+      } catch (err) {
+        console.error("Calendar preferences compilation error:", err);
       }
     };
+    
     fetchCloudPreferences();
     return () => { isMounted = false; };
-  }, [user, refreshTrigger]);
-
-  const handleStartDateChange = (date) => {
-    const redirected = getRedirectedDate(date);
-    const dateStr = formatDateForDB(redirected || date);
-    if (!customRangeMode) {
-      if (markedHolidays.includes(dateStr)) {
-        setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
-        return;
-      }
-    }
-    setStartDate(redirected || date);
-    setEndDate(redirected || date); 
-    setIsDirty(false);
-  };
-
-  const handleEndDateChange = (date) => {
-    const redirected = getRedirectedDate(date);
-    const dateStr = formatDateForDB(redirected || date);
-    if (!customRangeMode) {
-      if (markedHolidays.includes(dateStr)) {
-        setHolidayModal({ isOpen: true, date: redirected || date, dateStr });
-        return;
-      }
-      if ((redirected || date) < startDate) {
-        setAlertModal({ isOpen: true, title: "Invalid Selection", message: "End date must fall on or after the start date." });
-        return;
-      }
-      if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
-        const range = getDatesInRange(startDate, redirected || date);
-        if (range.some(d => markedHolidays.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays. Range selection blocked." });
-          return;
-        }
-        const rangeToCheck = range.slice(0, -1);
-        if (rangeToCheck.some(d => filledDates.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Overlaps Existing Entries", message: "Selected range overlaps with previously saved daily stock records. Range selection blocked." });
-          return;
-        }
-      }
-    }
-    setEndDate(redirected || date);
-    setIsDirty(false);
-  };
+  }, [user, refreshTrigger, startDate, customRangeMode, formatDateForDB]);
 
   const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
   const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
@@ -352,10 +471,6 @@ export default function DailyStock() {
   const [collections, setCollections] = useState([]);
   const [expenseForm, setExpenseForm] = useState({ date: new Date(), description: '', amount: '' });
   const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
-  const [popupDate, setPopupDate] = useState(new Date());
-  const [editingExpenseId, setEditingExpenseId] = useState(null);
-  const [editingCollectionId, setEditingCollectionId] = useState(null);
-
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
   const prevDatesRef = useRef({ start: null, end: null });
@@ -375,21 +490,6 @@ export default function DailyStock() {
       }
       prevDatesRef.current = { start: startStr, end: endStr };
       setSaveMessage(null);
-      setPipelineWarning(null);
-
-      let targetPrevDate = new Date(startDate);
-      targetPrevDate.setDate(targetPrevDate.getDate() - 1);
-      while (markedHolidays.includes(formatDateForDB(targetPrevDate))) {
-          targetPrevDate.setDate(targetPrevDate.getDate() - 1);
-      }
-      const prevDateStr = formatDateForDB(targetPrevDate);
-
-      if (!customRangeMode) {
-        const { data: pData } = await supabase.from('daily_stock').select('closing_balance').eq('date', prevDateStr);
-        if (pData && pData.length > 0 && pData.some(r => r.closing_balance === null)) {
-            setPipelineWarning(prevDateStr);
-        }
-      }
 
       const [
         { data: brandsData },
@@ -405,8 +505,8 @@ export default function DailyStock() {
 
       if (!isMounted) return;
 
-      let tExp = 0; if (expData) expData.forEach(e => tExp += parseFloat(e.amount));
-      let tColl = 0; if (collData) collData.forEach(c => tColl += parseFloat(c.amount));
+      let tExp = 0; if (expData) expData.forEach(e => tExp = safeRound(tExp + parseFloat(e.amount)));
+      let tColl = 0; if (collData) collData.forEach(c => tColl = safeRound(tColl + parseFloat(c.amount)));
 
       if (brandsData) {
         const brandBatches = {};
@@ -437,7 +537,7 @@ export default function DailyStock() {
                     }
                 }
 
-                const opBal = parseInt(s.opening_balance) || 0;
+                const opBal = parseInt(s.opening_balance, 10) || 0;
                 const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
                 
                 const pPrice = parseFloat(s.unit_price) || lastActivePrice[s.brand_id] || parseFloat(brand.selling_price) || 0;
@@ -447,7 +547,7 @@ export default function DailyStock() {
                     queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
                 }
 
-                const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+                const clBal = s.closing_balance !== null ? parseInt(s.closing_balance, 10) : null;
                 if (clBal !== null) {
                     let sales = Math.max(0, opBal - clBal);
                     while (sales > 0 && queue.length > 0) {
@@ -489,18 +589,11 @@ export default function DailyStock() {
           const exactRecord = !isMultiDayRange ? brandRangeLogs.find(log => normalizeDateStr(log.date) === targetStart) : null;
           
           if (exactRecord) {
-            const opBal = parseInt(exactRecord.opening_balance) || 0;
-          const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance) : '';
-          const pQty = Math.max(0, opBal - baseOpening);
-          
-          // Air-tight historical isolation: If a record already exists, use its stored values directly 
-          // to prevent future BrandMaster edits or subsequent updates from cascading backwards.
-          const pPrice = (exactRecord.unit_price !== null && parseFloat(exactRecord.unit_price) > 0)
-            ? parseFloat(exactRecord.unit_price)
-            : carriedPrice;
-          const pMrp = (exactRecord.unit_mrp !== null && parseFloat(exactRecord.unit_mrp) > 0)
-            ? parseFloat(exactRecord.unit_mrp)
-            : carriedMrp;
+            const opBal = parseInt(exactRecord.opening_balance, 10) || 0;
+            const clBal = exactRecord.closing_balance !== null ? parseInt(exactRecord.closing_balance, 10) : '';
+            const pQty = Math.max(0, opBal - baseOpening);
+            const pPrice = (exactRecord.unit_price !== null && parseFloat(exactRecord.unit_price) > 0) ? parseFloat(exactRecord.unit_price) : carriedPrice;
+            const pMrp = (exactRecord.unit_mrp !== null && parseFloat(exactRecord.unit_mrp) > 0) ? parseFloat(exactRecord.unit_mrp) : carriedMrp;
 
             let initialRow = { 
               brand_id: brand.id, 
@@ -528,7 +621,7 @@ export default function DailyStock() {
           let currentPrevClosing = baseOpening;
           
           brandRangeLogs.forEach(log => {
-             const opBal = parseInt(log.opening_balance) || 0;
+             const opBal = parseInt(log.opening_balance, 10) || 0;
              const pQty = Math.max(0, opBal - currentPrevClosing);
              totalPurchasesQty += pQty;
              
@@ -537,7 +630,7 @@ export default function DailyStock() {
                 if (log.unit_mrp) latestUnitMrp = parseFloat(log.unit_mrp);
              }
              if (log.closing_balance !== null) {
-                 currentPrevClosing = parseInt(log.closing_balance);
+                 currentPrevClosing = parseInt(log.closing_balance, 10);
              } else {
                  currentPrevClosing = opBal;
              }
@@ -567,12 +660,14 @@ export default function DailyStock() {
           return recalculateRow(initialRow);
         });
 
-        let tQty = 0; let tRev = 0; let tMrpRev = 0;
+        let tQty = 0; 
+        let tRev = 0; 
+        let tMrpRev = 0;
         rows.forEach(r => { 
           if (r.closing_balance !== '') {
             tQty += r.sales_qty; 
-            tRev += r.sales_amount; 
-            tMrpRev += r.sales_mrp_amount;
+            tRev = safeRound(tRev + r.sales_amount); 
+            tMrpRev = safeRound(tMrpRev + r.sales_mrp_amount);
           }
         });
 
@@ -599,28 +694,12 @@ export default function DailyStock() {
     if (collData) setCollections(collData);
   };
 
-  useEffect(() => {
-    let isMounted = true;
-    const loadData = async () => {
-      if (!isBankDepositOpen) return;
-      const dateToFetch = popupTab === 'expense' ? expenseForm.date : collectionForm.date;
-      const dateStr = formatDateForDB(dateToFetch);
-      const { data: expData } = await supabase.from('expenses').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
-      const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
-      if (isMounted) {
-        if (expData) setExpenses(expData);
-        if (collData) setCollections(collData);
-      }
-    };
-    loadData();
-    return () => { isMounted = false; };
-  }, [isBankDepositOpen, popupTab, expenseForm.date, collectionForm.date, user.id, formatDateForDB]);
-
   const handleOpenBankDeposit = () => {
     setIsBankDepositOpen(true);
-    setPopupDate(endDate || startDate);
-    setExpenseForm(prev => ({ ...prev, date: endDate || startDate }));
-    setCollectionForm(prev => ({ ...prev, date: endDate || startDate }));
+    const activeDate = endDate || startDate;
+    setPopupDate(activeDate);
+    setExpenseForm(prev => ({ ...prev, date: activeDate }));
+    setCollectionForm(prev => ({ ...prev, date: activeDate }));
     setEditingExpenseId(null);
     setEditingCollectionId(null);
   };
@@ -649,8 +728,8 @@ export default function DailyStock() {
           const upsertPromises = selectedDates.map(dateStr => {
              const upsertData = holidayRows.map(row => ({
                 user_id: user.id, date: dateStr, brand_id: row.brand_id,
-                opening_balance: parseInt(row.opening_balance) || 0,
-                closing_balance: parseInt(row.closing_balance) || 0,
+                opening_balance: parseInt(row.opening_balance, 10) || 0,
+                closing_balance: parseInt(row.closing_balance, 10) || 0,
                 unit_price: parseFloat(row.purchase_price) || 0,
                 unit_mrp: parseFloat(row.purchase_mrp) || 0
              }));
@@ -695,17 +774,17 @@ export default function DailyStock() {
 
   const handleInputChange = (brandId, field, value) => {
     setIsDirty(true);
-    const numericValue = value === '' ? '' : parseInt(value) || 0;
+    const numericValue = value === '' ? '' : parseInt(value, 10) || 0;
 
     setStockRows(prevRows => {
       const updatedRows = prevRows.map(row => {
         if (row.brand_id === brandId) {
           let updatedRow = { ...row, [field]: numericValue };
           if (field === 'purchase_qty') {
-            const currentPurchase = value === '' ? 0 : parseInt(value) || 0;
+            const currentPurchase = value === '' ? 0 : parseInt(value, 10) || 0;
             updatedRow.opening_balance = updatedRow.base_opening + currentPurchase;
           } else if (field === 'opening_balance') {
-            const targetBaseOpening = Math.max(0, numericValue - (parseInt(row.purchase_qty) || 0));
+            const targetBaseOpening = Math.max(0, numericValue - (parseInt(row.purchase_qty, 10) || 0));
             updatedRow.base_opening = targetBaseOpening;
             updatedRow.starting_batches = scaleStartingBatches(row.starting_batches, targetBaseOpening, row.carried_price, row.carried_mrp);
           }
@@ -715,12 +794,14 @@ export default function DailyStock() {
         return row;
       });
 
-      let tQty = 0; let tRev = 0; let tMrpRev = 0;
+      let tQty = 0; 
+      let tRev = 0; 
+      let tMrpRev = 0;
       updatedRows.forEach(r => { 
         if (r.closing_balance !== '') {
           tQty += r.sales_qty; 
-          tRev += r.sales_amount; 
-          tMrpRev += r.sales_mrp_amount;
+          tRev = safeRound(tRev + r.sales_amount); 
+          tMrpRev = safeRound(tMrpRev + r.sales_mrp_amount);
         }
       });
       setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev, totalMrpRevenue: tMrpRev }));
@@ -746,7 +827,7 @@ export default function DailyStock() {
     e.preventDefault();
     setIsSaving(true);
     
-    const newQty = parseInt(purchaseModal.qty) || 0;
+    const newQty = parseInt(purchaseModal.qty, 10) || 0;
     const newPrice = parseFloat(purchaseModal.price) || purchaseModal.brand.carried_price;
     const newMrp = parseFloat(purchaseModal.mrp) || purchaseModal.brand.carried_mrp;
     const targetDateStr = formatDateForDB(endDate || startDate);
@@ -756,7 +837,7 @@ export default function DailyStock() {
       if (!targetRow) return;
 
       const newOpeningBalance = targetRow.base_opening + newQty;
-      const currentClosing = targetRow.closing_balance === '' ? null : parseInt(targetRow.closing_balance);
+      const currentClosing = targetRow.closing_balance === '' ? null : parseInt(targetRow.closing_balance, 10);
 
       const upsertData = {
         user_id: user.id,
@@ -774,7 +855,6 @@ export default function DailyStock() {
 
       if (upsertError) throw upsertError;
 
-      // Log to price history only if the new purchase price actually differs from the prior carried operational price
       if (newQty > 0 && newPrice > 0 && newPrice !== parseFloat(targetRow.carried_price)) {
         await supabase.from('brand_price_history').insert([{
           brand_id: targetRow.brand_id,
@@ -801,12 +881,14 @@ export default function DailyStock() {
           return row;
         });
 
-        let tQty = 0; let tRev = 0; let tMrpRev = 0;
+        let tQty = 0; 
+        let tRev = 0; 
+        let tMrpRev = 0;
         updatedRows.forEach(r => { 
           if (r.closing_balance !== '') {
             tQty += r.sales_qty; 
-            tRev += r.sales_amount; 
-            tMrpRev += r.sales_mrp_amount;
+            tRev = safeRound(tRev + r.sales_amount); 
+            tMrpRev = safeRound(tMrpRev + r.sales_mrp_amount);
           }
         });
         setDailySummary(prev => ({ ...prev, totalSalesQty: tQty, totalRevenue: tRev, totalMrpRevenue: tMrpRev }));
@@ -840,10 +922,10 @@ export default function DailyStock() {
           const isLastDay = i === selectedDates.length - 1;
 
           const upsertBatch = stockRows.map(row => {
-            const op = parseInt(row.opening_balance) || 0;
-            const pQty = parseInt(row.purchase_qty) || 0;
+            const op = parseInt(row.opening_balance, 10) || 0;
+            const pQty = parseInt(row.purchase_qty, 10) || 0;
             const cl = isLastDay 
-              ? (row.closing_balance === '' ? null : parseInt(row.closing_balance)) 
+              ? (row.closing_balance === '' ? null : parseInt(row.closing_balance, 10)) 
               : (op + pQty);
 
             return {
@@ -864,8 +946,8 @@ export default function DailyStock() {
           user_id: user.id, 
           date: endStr, 
           brand_id: row.brand_id,
-          opening_balance: parseInt(row.opening_balance) || 0,
-          closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance),
+          opening_balance: parseInt(row.opening_balance, 10) || 0,
+          closing_balance: row.closing_balance === '' ? null : parseInt(row.closing_balance, 10),
           unit_price: parseFloat(row.purchase_price) || parseFloat(row.carried_price) || parseFloat(row.selling_price) || 0,
           unit_mrp: parseFloat(row.purchase_mrp) || parseFloat(row.carried_mrp) || parseFloat(row.mrp_price) || 0
         }));
@@ -875,9 +957,8 @@ export default function DailyStock() {
       }
 
       const brandUpdates = stockRows.map(async (row) => {
-        if (parseInt(row.purchase_qty) > 0) {
+        if (parseInt(row.purchase_qty, 10) > 0) {
           const activePrice = parseFloat(row.purchase_price);
-          // Compare against the dynamic carried prior operational price instead of static baseline
           if (activePrice > 0 && activePrice !== parseFloat(row.carried_price)) {
             await supabase.from('brand_price_history').insert([{
               brand_id: row.brand_id,
@@ -964,34 +1045,34 @@ export default function DailyStock() {
     });
   };
 
-  const tableTotalOpeningQty = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance) || 0), 0);
-  const tableTotalClosingQty = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance) || 0), 0);
+  const tableTotalOpeningQty = stockRows.reduce((acc, row) => acc + (parseInt(row.opening_balance, 10) || 0), 0);
+  const tableTotalClosingQty = stockRows.reduce((acc, row) => acc + (parseInt(row.closing_balance, 10) || 0), 0);
 
   const tableTotalOpeningAmount = stockRows.reduce((acc, row) => {
-    const baseVal = row.starting_batches ? row.starting_batches.reduce((sum, b) => sum + (b.qty * b.price), 0) : 0;
-    const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_price || 0);
-    return acc + baseVal + purchaseVal;
+    const baseVal = row.starting_batches ? row.starting_batches.reduce((sum, b) => safeRound(sum + (b.qty * b.price)), 0) : 0;
+    const purchaseVal = safeRound((parseInt(row.purchase_qty, 10) || 0) * parseFloat(row.purchase_price || 0));
+    return safeRound(acc + baseVal + purchaseVal);
   }, 0);
 
   const tableTotalClosingAmount = stockRows.reduce((acc, row) => {
     if (row.closing_balance === '' || row.closing_balance === null) return acc;
-    return acc + (row.closing_amount || 0);
+    return safeRound(acc + (row.closing_amount || 0));
   }, 0);
 
   const tableTotalOpeningMrpAmount = stockRows.reduce((acc, row) => {
-    const baseVal = row.starting_batches ? row.starting_batches.reduce((sum, b) => sum + (b.qty * b.mrp), 0) : 0;
-    const purchaseVal = (parseInt(row.purchase_qty) || 0) * parseFloat(row.purchase_mrp || 0);
-    return acc + baseVal + purchaseVal;
+    const baseVal = row.starting_batches ? row.starting_batches.reduce((sum, b) => safeRound(sum + (b.qty * b.mrp)), 0) : 0;
+    const purchaseVal = safeRound((parseInt(row.purchase_qty, 10) || 0) * parseFloat(row.purchase_mrp || 0));
+    return safeRound(acc + baseVal + purchaseVal);
   }, 0);
 
   const tableTotalClosingMrpAmount = stockRows.reduce((acc, row) => {
     if (row.closing_balance === '' || row.closing_balance === null) return acc;
-    return acc + (row.closing_mrp_amount || 0);
+    return safeRound(acc + (row.closing_mrp_amount || 0));
   }, 0);
 
   const tableTotalMrpRevenue = stockRows.reduce((acc, row) => {
     if (row.closing_balance === '' || row.closing_balance === null) return acc;
-    return acc + (row.sales_mrp_amount || 0);
+    return safeRound(acc + (row.sales_mrp_amount || 0));
   }, 0);
 
   const inputClass = "w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-300 text-sm font-semibold";
@@ -1014,7 +1095,6 @@ export default function DailyStock() {
 
   return (
     <div className="space-y-6 transition-colors duration-300 relative">
-      
       <style>{`
         .hide-scrollbar::-webkit-scrollbar { display: none !important; }
         .hide-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }
@@ -1658,7 +1738,7 @@ export default function DailyStock() {
                   <Landmark size={24} className="text-blue-500" /> Operational Cash Ledger
                 </h3>
               </div>
-              <button onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
+              <button type="button" onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
             </div>
             
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
@@ -1667,6 +1747,7 @@ export default function DailyStock() {
                 <div className="bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit overflow-hidden">
                   <div className="flex border-b border-slate-100 dark:border-slate-800">
                     <button 
+                      type="button"
                       onClick={() => {
                         setPopupTab('expense');
                         setEditingCollectionId(null);
@@ -1677,6 +1758,7 @@ export default function DailyStock() {
                       Business Expense
                     </button>
                     <button 
+                      type="button"
                       onClick={() => {
                         setPopupTab('collection');
                         setEditingExpenseId(null);

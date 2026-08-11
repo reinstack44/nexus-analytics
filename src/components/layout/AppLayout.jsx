@@ -21,13 +21,13 @@ export default function AppLayout() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
 
-  // Function to get dynamic greeting
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return "Good Morning ☀️";
-    if (hour < 17) return "Good Afternoon 🌤️";
-    return "Good Evening 🔮";
-  };
+  // Compute greeting directly during render to prevent cascading renders
+  const hour = new Date().getHours();
+  const greeting = hour < 12 
+    ? t('header.goodMorning', 'Good Morning ☀️') 
+    : hour < 17 
+      ? t('header.goodAfternoon', 'Good Afternoon 🌤️') 
+      : t('header.goodEvening', 'Good Evening 🔮');
 
   useEffect(() => {
     const handleResize = () => {
@@ -66,7 +66,10 @@ export default function AppLayout() {
       {isMobileOpen && (
         <div 
           className="fixed inset-0 bg-slate-900/60 z-40 lg:hidden backdrop-blur-sm transition-opacity"
-          onClick={() => setIsMobileOpen(false)}
+          onClick={() => {
+            setIsMobileOpen(false);
+            setIsLangMenuOpen(false);
+          }}
         />
       )}
 
@@ -78,7 +81,11 @@ export default function AppLayout() {
         
         {!isMobile && (
           <button 
-            onClick={() => setIsCollapsed(!isCollapsed)}
+            type="button"
+            onClick={() => {
+              setIsCollapsed(!isCollapsed);
+              setIsLangMenuOpen(false);
+            }}
             className="absolute -right-3.5 top-8 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-full p-1.5 shadow-md hover:bg-blue-50 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-blue-400 transition-colors z-60 focus:outline-none"
           >
             {isCollapsed ? <ChevronRight size={14} strokeWidth={3} /> : <ChevronLeft size={14} strokeWidth={3} />}
@@ -86,9 +93,7 @@ export default function AppLayout() {
         )}
 
         <div className="h-20 flex items-center justify-between px-5 border-b border-slate-800/60 shrink-0">
-          
-          {/* --- NEW LOGO SECTION --- */}
-          <Link to="/" className="flex items-center overflow-hidden w-full h-full py-4">
+          <Link to="/" className="flex items-center overflow-hidden w-full h-full py-4" onClick={() => setIsLangMenuOpen(false)}>
              <img 
                src={nxDiaryLogo} 
                alt="NX Diary Logo" 
@@ -99,9 +104,15 @@ export default function AppLayout() {
                }`}
              />
           </Link>
-          {/* ------------------------ */}
 
-          <button className="lg:hidden text-slate-400 hover:text-white bg-slate-800/50 p-2 rounded-lg outline-none ml-2 shrink-0" onClick={() => setIsMobileOpen(false)}>
+          <button 
+            type="button"
+            className="lg:hidden text-slate-400 hover:text-white bg-slate-800/50 p-2 rounded-lg outline-none ml-2 shrink-0" 
+            onClick={() => {
+              setIsMobileOpen(false);
+              setIsLangMenuOpen(false);
+            }}
+          >
             <X size={20} />
           </button>
         </div>
@@ -115,7 +126,10 @@ export default function AppLayout() {
               <Link
                 key={index}
                 to={item.path}
-                onClick={() => isMobile && setIsMobileOpen(false)}
+                onClick={() => {
+                  if (isMobile) setIsMobileOpen(false);
+                  setIsLangMenuOpen(false);
+                }}
                 className={`flex items-center px-3 py-3.5 rounded-xl transition-all duration-300 group relative
                   ${isActive 
                     ? 'bg-blue-500/10 text-blue-400' 
@@ -146,6 +160,7 @@ export default function AppLayout() {
 
         <div className="p-4 border-t border-slate-800/60 shrink-0">
           <button 
+            type="button"
             onClick={handleLogout} 
             className="flex items-center px-3 py-3 w-full rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-all duration-300 group relative outline-none"
           >
@@ -169,9 +184,9 @@ export default function AppLayout() {
         
         <header className="h-20 bg-white/70 dark:bg-slate-900/70 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-30 sticky top-0 transition-colors duration-300">
           <div className="flex items-center gap-4">
-            
             {isMobile && (
               <button 
+                type="button"
                 className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors focus:ring-2 focus:ring-blue-100 dark:focus:ring-slate-700 outline-none"
                 onClick={() => setIsMobileOpen(true)}
               >
@@ -179,8 +194,8 @@ export default function AppLayout() {
               </button>
             )}
             
-            <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight hidden sm:block transition-colors duration-300">
-              {getGreeting()}
+            <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight hidden sm:block transition-colors duration-300 select-none">
+              {greeting}
             </h1>
           </div>
           
@@ -188,6 +203,7 @@ export default function AppLayout() {
 
             <div className="relative">
               <button 
+                type="button"
                 onClick={() => setIsLangMenuOpen(!isLangMenuOpen)} 
                 className="flex items-center gap-2 p-2.5 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all duration-300 outline-none shadow-sm font-semibold text-sm uppercase"
                 title="Change Language"
@@ -198,14 +214,15 @@ export default function AppLayout() {
               
               {isLangMenuOpen && (
                 <div className="absolute right-0 mt-2 w-36 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-lg py-2" style={{ zIndex: 99999 }}>
-                  <button onClick={() => changeLanguage('en')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'en' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>English</button>
-                  <button onClick={() => changeLanguage('hi')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'hi' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>हिन्दी (Hindi)</button>
-                  <button onClick={() => changeLanguage('mr')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'mr' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>मराठी (Marathi)</button>
+                  <button type="button" onClick={() => changeLanguage('en')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'en' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>English</button>
+                  <button type="button" onClick={() => changeLanguage('hi')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'hi' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>हिन्दी (Hindi)</button>
+                  <button type="button" onClick={() => changeLanguage('mr')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'mr' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>मराठी (Marathi)</button>
                 </div>
               )}
             </div>
 
             <button 
+              type="button"
               onClick={toggleTheme} 
               className="p-2.5 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all duration-300 outline-none shadow-sm"
               title="Toggle Theme"
@@ -220,7 +237,7 @@ export default function AppLayout() {
                 </span>
                 <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 transition-colors duration-300">{user?.email}</span>
               </div>
-              <div className="h-10 w-10 rounded-full bg-linear-to-br from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 border border-blue-200 dark:border-blue-700 flex items-center justify-center text-blue-700 dark:text-blue-300 font-bold shadow-sm ring-4 ring-white dark:ring-slate-950 transition-colors duration-300 shrink-0">
+              <div className="h-10 w-10 rounded-full bg-linear-to-br from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 border border-blue-200 dark:border-blue-700 flex items-center justify-center text-blue-700 dark:text-blue-300 font-bold shadow-sm ring-4 ring-white dark:ring-slate-950 transition-colors duration-300 shrink-0 select-none">
                 {user?.email?.charAt(0).toUpperCase()}
               </div>
             </div>

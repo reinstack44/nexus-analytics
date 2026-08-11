@@ -10,11 +10,12 @@ export default function Login() {
   const [error, setError] = useState(null);
 
   const canvasRef = useRef(null);
-  const [mousePos, setMousePos] = useState({ x: -300, y: -300 });
+  const containerRef = useRef(null);
 
-  // High-performance HTML5 Canvas Shimmer Powder Engine (Strictly matching the reference image)
+  // High-performance HTML5 Canvas Shimmer Powder Engine
   useEffect(() => {
     const canvas = canvasRef.current;
+    const container = containerRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     let animationFrameId;
@@ -33,26 +34,22 @@ export default function Login() {
         this.x = x;
         this.y = y;
         
-        // Multi-layered particle definitions strictly matching the reference image texture
+        // Multi-layered particle definitions
         const randType = Math.random();
         if (randType > 0.88) {
-          // 1. Intense bright white star glint
           this.type = 'glint';
           this.size = Math.random() * 1.4 + 1.1;
           this.color = '#ffffff';
         } else if (randType > 0.65) {
-          // 2. Soft out-of-focus royal blue circular bokeh halos
           this.type = 'bokeh';
           this.size = Math.random() * 7 + 4;
           this.color = Math.random() > 0.5 ? '#1d4ed8' : '#2563eb';
         } else {
-          // 3. Sharp microscopic cyan/indigo metallic dust specks
           this.type = 'speck';
           this.size = Math.random() * 1.1 + 0.4;
           this.color = Math.random() > 0.6 ? '#06b6d4' : '#1e40af';
         }
         
-        // Micro-kinematics for a quiet, professional drift
         this.vx = (Math.random() - 0.5) * 1.0;
         this.vy = (Math.random() - 0.5) * 1.0 - 0.2; // Gentle floating upward drift
         this.alpha = 1.0;
@@ -67,12 +64,10 @@ export default function Login() {
       draw(context) {
         context.save();
         
-        // Twitch twinkle frequency
         const shimmer = Math.abs(Math.sin(Date.now() * this.twinkleSpeed)) * 0.7 + 0.3;
-        context.globalAlpha = this.alpha * shimmer;
+        context.globalAlpha = Math.max(0, this.alpha * shimmer);
 
         if (this.type === 'bokeh') {
-          // Ambient soft circular background glow matching reference image
           context.shadowBlur = 15;
           context.shadowColor = this.color;
           context.fillStyle = 'rgba(37, 99, 235, 0.12)';
@@ -80,7 +75,6 @@ export default function Login() {
           context.arc(this.x, this.y, this.size, 0, Math.PI * 2);
           context.fill();
         } else if (this.type === 'glint') {
-          // Brilliant sharp starry flash
           context.shadowBlur = 12;
           context.shadowColor = '#3b82f6';
           context.fillStyle = '#ffffff';
@@ -92,7 +86,6 @@ export default function Login() {
           context.closePath();
           context.fill();
         } else {
-          // Sharp microscopic neon cyan/blue metallic dust speck
           context.shadowBlur = 8;
           context.shadowColor = this.color;
           context.fillStyle = this.color;
@@ -104,17 +97,17 @@ export default function Login() {
     }
 
     const render = () => {
-      // Obsidian-slate clearing to eliminate stutters and create royal blue trails
       ctx.fillStyle = 'rgba(3, 5, 16, 0.22)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      particles.forEach((p, idx) => {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
         p.update();
         p.draw(ctx);
         if (p.alpha <= 0) {
-          particles.splice(idx, 1);
+          particles.splice(i, 1);
         }
-      });
+      }
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -124,9 +117,12 @@ export default function Login() {
     let lastY = 0;
 
     const handleMouseMove = (e) => {
-      setMousePos({ x: e.clientX, y: e.clientY });
+      // Direct CSS variables updates on container to bypass React's virtual DOM
+      if (container) {
+        container.style.setProperty('--mouse-x', `${e.clientX}px`);
+        container.style.setProperty('--mouse-y', `${e.clientY}px`);
+      }
 
-      // Spawns particles ONLY when cursor has traveled at least 8 pixels (Minimal & Non-intrusive)
       const distance = Math.hypot(e.clientX - lastX, e.clientY - lastY);
       if (distance > 8) {
         particles.push(new ShimmerPowder(e.clientX, e.clientY));
@@ -141,6 +137,7 @@ export default function Login() {
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('mousemove', handleMouseMove);
       cancelAnimationFrame(animationFrameId);
+      particles = [];
     };
   }, []);
 
@@ -160,11 +157,13 @@ export default function Login() {
     setLoading(false);
   };
 
-  // High-fidelity borderless translucent inputs
   const inputClass = "w-full pl-11 pr-4 py-4 bg-slate-950/60 dark:bg-slate-950/90 border border-white/5 text-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/40 outline-none transition-all duration-300 text-sm font-semibold shadow-[0_0_20px_rgba(6,182,212,0.03)] placeholder-slate-650";
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-[#030510] px-4 sm:px-6 lg:px-8 font-sans transition-colors duration-500 relative overflow-hidden perspective-3d">
+    <div 
+      ref={containerRef}
+      className="min-h-screen w-full flex items-center justify-center bg-[#030510] px-4 sm:px-6 lg:px-8 font-sans transition-colors duration-500 relative overflow-hidden perspective-3d"
+    >
       
       {/* Dynamic 3D Electric Grid Style Injection */}
       <style dangerouslySetInnerHTML={{ __html: `
@@ -208,20 +207,20 @@ export default function Login() {
 
       {/* ================= INTERACTIVE DUAL-GLOW AURA ================= */}
       <div className="absolute inset-0 z-0 pointer-events-none">
-        {/* Deep royal-blue breathing spotlight */}
+        {/* Deep royal-blue spotlight driven via direct CSS variables */}
         <div 
           className="absolute w-96 h-96 bg-linear-to-r from-blue-600/10 to-indigo-600/10 rounded-full blur-[90px] transition-all duration-300 ease-out"
           style={{ 
-            left: `${mousePos.x - 192}px`, 
-            top: `${mousePos.y - 192}px` 
+            left: 'calc(var(--mouse-x, -300px) - 192px)', 
+            top: 'calc(var(--mouse-y, -300px) - 192px)' 
           }}
         ></div>
       </div>
 
-      {/* ================= SEAMLESS BORDERLESS FORM CONSOLE ================= */}
+      {/* ================= FORM CONSOLE ================= */}
       <div className="relative z-20 w-full max-w-sm flex flex-col gap-8 animate-in fade-in zoom-in-95 duration-700">
         
-        {/* Brand Logo & Typography with custom halo flare */}
+        {/* Brand Logo & Typography */}
         <div className="flex flex-col items-center select-none">
           <div className="relative mb-4 group">
             {/* Bright cyan-purple flare behind logo */}

@@ -46,8 +46,12 @@ const getDatesInRange = (start, end) => {
   const dates = [];
   let current = new Date(start);
   const last = new Date(end || start);
-  current.setHours(0,0,0,0); last.setHours(0,0,0,0);
-  while (current <= last) { dates.push(formatDateForDB(current)); current.setDate(current.getDate() + 1); }
+  current.setHours(0,0,0,0); 
+  last.setHours(0,0,0,0);
+  while (current <= last) { 
+    dates.push(formatDateForDB(current)); 
+    current.setDate(current.getDate() + 1); 
+  }
   return dates;
 };
 
@@ -67,7 +71,11 @@ const isFullCalendarMonth = (start, end) => {
   return sameYear && sameMonth && isFirstDay && isLastDay;
 };
 
-const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
+const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
   const firstDayRecords = allStock?.filter(s => {
@@ -79,9 +87,9 @@ const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
     let totalMrp = 0;
     firstDayRecords.forEach(s => {
       const brand = brands?.find(b => b.id === s.brand_id);
-      const opQty = parseInt(s.opening_balance) || 0;
+      const opQty = parseInt(s.opening_balance, 10) || 0;
       const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-      totalMrp += opQty * mrp;
+      totalMrp = safeRound(totalMrp + (opQty * mrp));
     });
     return totalMrp;
   }
@@ -104,9 +112,9 @@ const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
     let totalMrp = 0;
     earliestRecords.forEach(s => {
       const brand = brands?.find(b => b.id === s.brand_id);
-      const opQty = parseInt(s.opening_balance) || 0;
+      const opQty = parseInt(s.opening_balance, 10) || 0;
       const mrp = parseFloat(s.unit_mrp || (brand ? brand.mrp_price : 0) || 0);
-      totalMrp += opQty * mrp;
+      totalMrp = safeRound(totalMrp + (opQty * mrp));
     });
     return totalMrp;
   }
@@ -132,7 +140,7 @@ const getFifoStockValuationMrp = (brands, allStock, targetDateStr) => {
     const brand = brands?.find(b => b.id === s.brand_id);
     if (!brand) return;
 
-    const opBal = parseInt(s.opening_balance) || 0;
+    const opBal = parseInt(s.opening_balance, 10) || 0;
     const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
     const pPrice = parseFloat(s.unit_price) || parseFloat(brand.selling_price) || 0;
     const pMrp = parseFloat(s.unit_mrp) || parseFloat(brand.mrp_price) || 0;
@@ -141,7 +149,7 @@ const getFifoStockValuationMrp = (brands, allStock, targetDateStr) => {
       queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
     }
 
-    const clBal = s.closing_balance !== null ? parseInt(s.closing_balance) : null;
+    const clBal = s.closing_balance !== null ? parseInt(s.closing_balance, 10) : null;
     if (clBal !== null) {
       let sales = Math.max(0, opBal - clBal);
       while (sales > 0 && queue.length > 0) {
@@ -164,7 +172,7 @@ const getFifoStockValuationMrp = (brands, allStock, targetDateStr) => {
   brands?.forEach(b => {
     const queue = brandBatches[b.id] || [];
     queue.forEach(batch => {
-      totalMrpValuation += batch.qty * batch.mrp;
+      totalMrpValuation = safeRound(totalMrpValuation + (batch.qty * batch.mrp));
     });
   });
 
@@ -184,9 +192,6 @@ export default function Reports() {
   const [loading, setLoading] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const prevDatesRef = useRef({ start: null, end: null });
-
-  // Discard the performance-killing 1-second interval loop.
-  // Realtime subscription is extremely efficient and handles seamless live-reloading instantly.
 
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('global_startDate');
@@ -277,7 +282,6 @@ export default function Reports() {
         const { data: brandsData } = await supabase.from('brands').select('*');
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
-        // Clean, DST-safe date boundary queries without timezone shifting string appends
         const [ 
           { data: expData }, 
           { data: withData }, 
@@ -297,18 +301,18 @@ export default function Reports() {
         let tExpenses = 0;
         expData?.forEach(e => {
           if (e.date >= startStr && e.date <= endStr) {
-            tExpenses += parseFloat(e.amount || 0);
+            tExpenses = safeRound(tExpenses + parseFloat(e.amount || 0));
           }
         });
         
-        const tWithdrawals = withData?.reduce((sum, w) => sum + parseFloat(w.amount || 0), 0) || 0;
+        const tWithdrawals = withData?.reduce((sum, w) => safeRound(sum + parseFloat(w.amount || 0)), 0) || 0;
 
         const txList = []; const balances = {};
         allTraderTxData?.forEach(tx => {
           const traderId = tx.trader_id; const pAmt = parseFloat(tx.purchase_amount) || 0; const paidAmt = parseFloat(tx.paid_amount) || 0;
           if (!balances[traderId]) balances[traderId] = 0;
           if (tx.manual_remaining !== null && tx.manual_remaining !== undefined) balances[traderId] = parseFloat(tx.manual_remaining);
-          else balances[traderId] = balances[traderId] + pAmt - paidAmt;
+          else balances[traderId] = safeRound(balances[traderId] + pAmt - paidAmt);
           
           if (tx.date >= startStr) {
             txList.push({ ...tx, remaining_amount: balances[traderId] });
@@ -323,16 +327,18 @@ export default function Reports() {
         const validStockData = stockData?.filter(stock => stock.date >= startStr && stock.closing_balance !== null) || [];
         
         validStockData.forEach(stock => {
-          const openBal = parseInt(stock.opening_balance) || 0; const closeBal = parseInt(stock.closing_balance) || 0;
+          const openBal = parseInt(stock.opening_balance, 10) || 0; const closeBal = parseInt(stock.closing_balance, 10) || 0;
           let saleQty = openBal - closeBal; saleQty = saleQty < 0 ? 0 : saleQty;
           const brand = brandMap[stock.brand_id]; const sellingPrice = parseFloat(stock.unit_price) || (brand ? parseFloat(brand.selling_price) : 0);
-          const saleRev = saleQty * sellingPrice; tSales += saleRev;
+          const saleRev = safeRound(saleQty * sellingPrice); 
+          tSales = safeRound(tSales + saleRev);
 
           if (saleQty > 0 && brand) {
             if (!salesAggregation[brand.id]) {
               salesAggregation[brand.id] = { brand_name: brand.brand_name, bottle_size: brand.bottle_size, selling_price: sellingPrice, display_order: brand.display_order, total_qty: 0, total_revenue: 0 };
             }
-            salesAggregation[brand.id].total_qty += saleQty; salesAggregation[brand.id].total_revenue += saleRev;
+            salesAggregation[brand.id].total_qty += saleQty; 
+            salesAggregation[brand.id].total_revenue = safeRound(salesAggregation[brand.id].total_revenue + saleRev);
           }
         });
 
@@ -364,19 +370,19 @@ export default function Reports() {
           if (bStock && bStock.length > 0) {
             const firstEntry = bStock[0];
             const openPrice = firstEntry.unit_price ? parseFloat(firstEntry.unit_price) : parseFloat(b.selling_price);
-            openingSaleVal += (parseInt(firstEntry.opening_balance || 0) * openPrice);
+            openingSaleVal = safeRound(openingSaleVal + (parseInt(firstEntry.opening_balance, 10) * openPrice));
 
             const lastEntry = bStock[bStock.length - 1];
-            const closeQty = lastEntry.closing_balance !== null ? parseInt(lastEntry.closing_balance) : 0;
+            const closeQty = lastEntry.closing_balance !== null ? parseInt(lastEntry.closing_balance, 10) : 0;
             const closePrice = lastEntry.unit_price ? parseFloat(lastEntry.unit_price) : parseFloat(b.selling_price);
-            closingSaleVal += (closeQty * closePrice);
+            closingSaleVal = safeRound(closingSaleVal + (closeQty * closePrice));
           }
         });
 
         let rangePurchasesSale = 0;
         traderRangeTxData?.forEach(tx => {
           if (tx.date >= startStr) {
-            rangePurchasesSale += parseFloat(tx.purchase_amount || 0);
+            rangePurchasesSale = safeRound(rangePurchasesSale + parseFloat(tx.purchase_amount || 0));
           }
         });
 
@@ -389,7 +395,7 @@ export default function Reports() {
           .eq('user_id', user.id)
           .eq('date', prevEndStr);
           
-        prevStock?.forEach(s => { runningPrevClosing[s.brand_id] = s.closing_balance !== null ? parseInt(s.closing_balance) : 0; });
+        prevStock?.forEach(s => { runningPrevClosing[s.brand_id] = s.closing_balance !== null ? parseInt(s.closing_balance, 10) : 0; });
 
         const stockByDateStr = {};
         stockData?.forEach(s => {
@@ -411,27 +417,27 @@ export default function Reports() {
             let mrpPrice = parseFloat(b.mrp_price || 0);
             
             if (rec) {
-              opQty = parseInt(rec.opening_balance) || 0;
-              clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance) : opQty;
+              opQty = parseInt(rec.opening_balance, 10) || 0;
+              clQty = rec.closing_balance !== null ? parseInt(rec.closing_balance, 10) : opQty;
               mrpPrice = parseFloat(rec.unit_mrp || b.mrp_price || 0);
             }
             
             const purchaseQty = Math.max(0, opQty - prevClose);
             if (purchaseQty > 0) {
-              rangePurchasesMrp += purchaseQty * mrpPrice;
+              rangePurchasesMrp = safeRound(rangePurchasesMrp + (purchaseQty * mrpPrice));
             }
             runningPrevClosing[b.id] = clQty;
           });
         });
 
-        const netProfit = tSales - rangePurchasesSale - tExpenses;
+        const netProfit = safeRound(tSales - rangePurchasesSale - tExpenses);
         setSummary({ 
           grossProfit: tSales, 
           totalPurchases: rangePurchasesSale, 
           totalExpenses: tExpenses, 
           netProfit: netProfit, 
           totalWithdrawn: tWithdrawals, 
-          retainedCash: netProfit - tWithdrawals,
+          retainedCash: safeRound(netProfit - tWithdrawals),
           openingSale: openingSaleVal,
           openingMrp: openingMrpVal,
           closingSale: closingSaleVal,
@@ -476,7 +482,7 @@ export default function Reports() {
               const baseOpening = state.closing;
               const carriedPrice = state.price;
 
-              const opening = parseInt(row.opening_balance || 0);
+              const opening = parseInt(row.opening_balance, 10) || 0;
               const purchaseQty = Math.max(0, opening - baseOpening);
               const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
               const pMrp = row.unit_mrp ? parseFloat(row.unit_mrp) : (parseFloat(brand.mrp_price) || 0);
@@ -485,18 +491,18 @@ export default function Reports() {
                 brandBatches[brandId].push({ qty: purchaseQty, price: pPrice, mrp: pMrp });
               }
 
-              const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : null;
+              const closing = row.closing_balance !== null ? parseInt(row.closing_balance, 10) : null;
               if (closing !== null) {
                 const sQty = Math.max(0, opening - closing);
                 let rem = sQty;
                 let sAmt = 0;
 
                 const qtyOld = Math.min(rem, baseOpening);
-                sAmt += qtyOld * carriedPrice;
+                sAmt = safeRound(sAmt + (qtyOld * carriedPrice));
                 rem -= qtyOld;
 
                 if (rem > 0 && purchaseQty > 0) {
-                  sAmt += Math.min(rem, purchaseQty) * pPrice;
+                  sAmt = safeRound(sAmt + (Math.min(rem, purchaseQty) * pPrice));
                 }
 
                 let sellRem = sQty;
@@ -510,19 +516,17 @@ export default function Reports() {
                   }
                 }
 
-                monthlyProfits[yearMonthKey].sales += sAmt;
+                monthlyProfits[yearMonthKey].sales = safeRound(monthlyProfits[yearMonthKey].sales + sAmt);
                 brandStates[brandId] = { closing: closing, price: pPrice };
               } else {
                 brandStates[brandId] = { closing: opening, price: pPrice };
               }
             });
 
-            // Extract the exact calendar last day of this processed month
             const [yearPart, monthPart] = yearMonthKey.split('-');
-            const calendarLastDayObj = new Date(parseInt(yearPart), parseInt(monthPart), 0);
+            const calendarLastDayObj = new Date(parseInt(yearPart, 10), parseInt(monthPart, 10), 0);
             const calendarEndStr = formatDateForDB(calendarLastDayObj);
 
-            // Strictly evaluate month-end closing stock ONLY if we are processing the actual calendar end-date
             if (dateStr === calendarEndStr) {
               const dayRecordsForEnd = stockByDateStrAll[dateStr] || [];
               let totalMrpValuation = 0;
@@ -532,9 +536,9 @@ export default function Reports() {
                 if (s.closing_balance !== null && s.closing_balance !== undefined) {
                   anyClosingEntered = true;
                   const brand = brandMap[s.brand_id];
-                  const clQty = parseInt(s.closing_balance) || 0;
+                  const clQty = parseInt(s.closing_balance, 10) || 0;
                   const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-                  totalMrpValuation += clQty * mrp;
+                  totalMrpValuation = safeRound(totalMrpValuation + (clQty * mrp));
                 }
               });
 
@@ -546,7 +550,7 @@ export default function Reports() {
             const eDateStr = e.date ? e.date.split('T')[0] : '';
             const yearMonthKey = eDateStr.substring(0, 7);
             if (monthlyProfits[yearMonthKey]) {
-              monthlyProfits[yearMonthKey].expenses += parseFloat(e.amount || 0);
+              monthlyProfits[yearMonthKey].expenses = safeRound(monthlyProfits[yearMonthKey].expenses + parseFloat(e.amount || 0));
             }
           });
 
@@ -554,7 +558,7 @@ export default function Reports() {
             const txDateStr = tx.date ? tx.date.split('T')[0] : '';
             const yearMonthKey = txDateStr.substring(0, 7);
             if (monthlyProfits[yearMonthKey]) {
-              monthlyProfits[yearMonthKey].purchases += parseFloat(tx.purchase_amount || 0);
+              monthlyProfits[yearMonthKey].purchases = safeRound(monthlyProfits[yearMonthKey].purchases + parseFloat(tx.purchase_amount || 0));
             }
           });
 
@@ -566,9 +570,9 @@ export default function Reports() {
               let totalOpMrp = 0;
               firstDayRecords.forEach(s => {
                 const brand = brandMap[s.brand_id];
-                const opQty = parseInt(s.opening_balance) || 0;
+                const opQty = parseInt(s.opening_balance, 10) || 0;
                 const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-                totalOpMrp += opQty * mrp;
+                totalOpMrp = safeRound(totalOpMrp + (opQty * mrp));
               });
               monthlyProfits[mKey].openingMrp = totalOpMrp;
             } else {
@@ -579,10 +583,10 @@ export default function Reports() {
 
           sortedMonths.forEach(mKey => {
             const mData = monthlyProfits[mKey];
-            const box3 = mData.sales + mData.closingMrp;
-            const box6 = mData.openingMrp + mData.purchases;
-            const box7 = box3 - box6;
-            mData.netProfit = box7 - mData.expenses;
+            const box3 = safeRound(mData.sales + mData.closingMrp);
+            const box6 = safeRound(mData.openingMrp + mData.purchases);
+            const box7 = safeRound(box3 - box6);
+            mData.netProfit = safeRound(box7 - mData.expenses);
           });
 
           const currentMonthKey = `${startObj.getFullYear()}-${String(startObj.getMonth() + 1).padStart(2, '0')}`;
@@ -591,14 +595,13 @@ export default function Reports() {
           let computedPrevNetProfit = 0;
           sortedMonths.forEach(mKey => {
             if (mKey < currentMonthKey) {
-              computedPrevNetProfit += monthlyProfits[mKey]?.netProfit || 0;
+              computedPrevNetProfit = safeRound(computedPrevNetProfit + (monthlyProfits[mKey]?.netProfit || 0));
             }
           });
 
           if (isMounted) {
             setPrevMonthNetProfit(computedPrevNetProfit);
 
-            // 1. Dynamic Opening Stock with smart calendar carryover fallback
             const activeMonthDates = sortedDates.filter(d => d.startsWith(currentMonthKey));
             const firstSavedDate = activeMonthDates[0];
             const startDayRecords = firstSavedDate ? (stockByDateStrAll[firstSavedDate] || []) : [];
@@ -606,9 +609,9 @@ export default function Reports() {
             if (firstSavedDate) {
               startDayRecords.forEach(s => {
                 const brand = brandMap[s.brand_id];
-                const opQty = parseInt(s.opening_balance) || 0;
+                const opQty = parseInt(s.opening_balance, 10) || 0;
                 const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-                computedOpeningMrp += opQty * mrp;
+                computedOpeningMrp = safeRound(computedOpeningMrp + (opQty * mrp));
               });
             } else {
               const previousMonths = sortedMonths.filter(m => m < currentMonthKey);
@@ -618,7 +621,6 @@ export default function Reports() {
               }
             }
 
-            // 2. Strict Calendar End-Date Closing Stock (strictly bound to endStr, which represents the calendar end date of the month range)
             const endDayRecords = stockByDateStrAll[endStr] || [];
             let computedClosingMrp = 0;
             let anyClosingEnteredForEnd = false;
@@ -626,9 +628,9 @@ export default function Reports() {
               if (s.closing_balance !== null && s.closing_balance !== undefined) {
                 anyClosingEnteredForEnd = true;
                 const brand = brandMap[s.brand_id];
-                const clQty = parseInt(s.closing_balance) || 0;
+                const clQty = parseInt(s.closing_balance, 10) || 0;
                 const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-                computedClosingMrp += clQty * mrp;
+                computedClosingMrp = safeRound(computedClosingMrp + (clQty * mrp));
               }
             });
             const finalClosingMrp = anyClosingEnteredForEnd ? computedClosingMrp : 0;
@@ -636,11 +638,11 @@ export default function Reports() {
             setMagicChartData({
               box1: currMonthData.sales || 0,
               box2: finalClosingMrp,
-              box3: (currMonthData.sales || 0) + finalClosingMrp,
+              box3: safeRound((currMonthData.sales || 0) + finalClosingMrp),
               box4: computedOpeningMrp,
               box5: currMonthData.purchases || 0,
-              box6: computedOpeningMrp + (currMonthData.purchases || 0),
-              box7: ((currMonthData.sales || 0) + finalClosingMrp) - (computedOpeningMrp + (currMonthData.purchases || 0)),
+              box6: safeRound(computedOpeningMrp + (currMonthData.purchases || 0)),
+              box7: safeRound(((currMonthData.sales || 0) + finalClosingMrp) - (computedOpeningMrp + (currMonthData.purchases || 0))),
               currExp: currMonthData.expenses || 0
             });
           }
@@ -668,9 +670,9 @@ export default function Reports() {
   const printReport = () => { window.print(); setIsExportMenuOpen(false); };
 
   const salesTotalQty = salesList.reduce((acc, s) => acc + s.total_qty, 0);
-  const salesTotalRev = salesList.reduce((acc, s) => acc + s.total_revenue, 0);
-  const traderTotalPurchases = traderTransactions.reduce((acc, tx) => acc + tx.purchase_amount, 0);
-  const traderTotalPaid = traderTransactions.reduce((acc, tx) => acc + tx.paid_amount, 0);
+  const salesTotalRev = salesList.reduce((acc, s) => safeRound(acc + s.total_revenue), 0);
+  const traderTotalPurchases = traderTransactions.reduce((acc, tx) => safeRound(acc + tx.purchase_amount), 0);
+  const traderTotalPaid = traderTransactions.reduce((acc, tx) => safeRound(acc + tx.paid_amount), 0);
   const traderTotalRemaining = traderTransactions.length > 0 ? traderTransactions[traderTransactions.length - 1].remaining_amount : 0;
 
   const groupedTraderData = traderTransactions.reduce((acc, tx) => {
@@ -686,25 +688,24 @@ export default function Reports() {
       };
     }
     acc[traderId].transactions.push(tx);
-    acc[traderId].totalPurchases += parseFloat(tx.purchase_amount || 0);
-    acc[traderId].totalPaid += parseFloat(tx.paid_amount || 0);
+    acc[traderId].totalPurchases = safeRound(acc[traderId].totalPurchases + parseFloat(tx.purchase_amount || 0));
+    acc[traderId].totalPaid = safeRound(acc[traderId].totalPaid + parseFloat(tx.paid_amount || 0));
     acc[traderId].remainingBalance = tx.remaining_amount; 
     return acc;
   }, {});
 
-  // Fail-safe calculations fallback to prevent temporary NaN displays in UI
   const ledgerBox1 = magicChartData.box1 || 0; 
   const ledgerBox2 = magicChartData.box2 || 0; 
-  const ledgerBox3 = ledgerBox1 + ledgerBox2;
+  const ledgerBox3 = safeRound(ledgerBox1 + ledgerBox2);
 
   const ledgerBox4 = magicChartData.box4 || 0; 
   const ledgerBox5 = magicChartData.box5 || 0; 
-  const ledgerBox6 = ledgerBox4 + ledgerBox5;
+  const ledgerBox6 = safeRound(ledgerBox4 + ledgerBox5);
 
-  const ledgerBox7 = ledgerBox3 - ledgerBox6; 
-  const ledgerNetProfit = ledgerBox7 - (magicChartData.currExp || 0); 
+  const ledgerBox7 = safeRound(ledgerBox3 - ledgerBox6); 
+  const ledgerNetProfit = safeRound(ledgerBox7 - (magicChartData.currExp || 0)); 
 
-  const cumulativeProfitVal = (prevMonthNetProfit || 0) + ledgerNetProfit; 
+  const cumulativeProfitVal = safeRound((prevMonthNetProfit || 0) + ledgerNetProfit); 
 
   return (
     <div className="space-y-6 transition-colors duration-300">
@@ -1096,8 +1097,6 @@ export default function Reports() {
               <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling trader data...</p>
             ) : (
               <div className="space-y-10">
-                
-                {/* A. SEPARATE INDIVIDUAL TRADER TABLES */}
                 <div>
                   <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-indigo-400 pl-2">
                     A. Individual Trader Ledgers
@@ -1109,14 +1108,11 @@ export default function Reports() {
                     <div className="space-y-8">
                       {Object.values(groupedTraderData).map((trader, tIdx) => (
                         <div key={tIdx} className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none break-inside-avoid">
-                          
-                          {/* Trader Header */}
                           <div className="bg-slate-50/50 dark:bg-slate-800/30 px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
                             <span className="font-extrabold text-slate-800 dark:text-slate-100 text-base">{trader.name}</span>
                             <span className="text-xs font-semibold bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400 px-2 py-1 rounded-md">Trader Accounts</span>
                           </div>
 
-                          {/* Table */}
                           <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[10px] tracking-wider border-b border-slate-100 dark:border-slate-700">
                               <tr>
@@ -1151,7 +1147,6 @@ export default function Reports() {
                   )}
                 </div>
 
-                {/* B. CONSOLIDATED LEDGER */}
                 <div className="pt-4 break-inside-avoid">
                   <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-slate-400 pl-2">
                     B. Consolidated Ledger
@@ -1193,7 +1188,6 @@ export default function Reports() {
                     </table>
                   </div>
                 </div>
-
               </div>
             )}
           </div>
@@ -1214,15 +1208,12 @@ export default function Reports() {
                 <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling simulated charts...</p>
               ) : (
                 <div className="space-y-8 no-print:bg-[#0c111d] dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl p-6 overflow-hidden print:border-none print:shadow-none print:p-0">
-                  
-                  {/* Ledger Header */}
                   <div className="text-center">
                     <h3 className="text-lg font-black text-slate-700 dark:text-slate-300 print:text-indigo-950 tracking-widest uppercase">
                       *** माहे {startDate.toLocaleDateString('mr-IN', { month: 'long' })} {startDate.getFullYear()} ***
                     </h3>
                   </div>
 
-                  {/* 1. MAIN 7-COLUMN TABLE */}
                   <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300 overflow-hidden">
                     <table className="w-full text-center border-collapse min-w-225 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
@@ -1255,33 +1246,25 @@ export default function Reports() {
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
                             {formatRs(ledgerBox1)}
                           </td>
-                          
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
                             {formatRs(ledgerBox2)}
                           </td>
-
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5 print:text-xs print:bg-indigo-50 print-text-indigo">
                             {formatRs(ledgerBox3)}
                           </td>
-
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
                             {formatRs(ledgerBox4)}
                           </td>
-
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-slate-800 dark:text-slate-100 text-lg print:text-xs">
                             {formatRs(ledgerBox5)}
                           </td>
-
                           <td className="border-r border-slate-300 dark:border-slate-700 font-extrabold text-indigo-600 dark:text-indigo-400 text-lg bg-indigo-50/20 dark:bg-indigo-950/5 print:text-xs print:bg-indigo-50 print-text-indigo">
                             {formatRs(ledgerBox6)}
                           </td>
-
                           <td className={`font-black text-xl print:text-xs ${ledgerBox7 >= 0 ? 'text-emerald-600 dark:text-emerald-400 print-text-emerald' : 'text-red-500 print-text-rose'}`}>
                             {formatRs(ledgerBox7)}
                           </td>
                         </tr>
-                        
-                        {/* BOX NUMBERS ROW */}
                         <tr className="bg-slate-50/60 dark:bg-slate-800/40 text-xs text-slate-400 dark:text-slate-500 font-bold">
                           <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">1</td>
                           <td className="py-2 border-r border-slate-300 dark:border-slate-700 print:border-slate-300">2</td>
@@ -1295,7 +1278,6 @@ export default function Reports() {
                     </table>
                   </div>
 
-                  {/* 2. SETTLEMENT TABLE */}
                   <div className="overflow-hidden border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300">
                     <table className="w-full text-center border-collapse min-w-150 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
@@ -1321,7 +1303,6 @@ export default function Reports() {
                     </table>
                   </div>
 
-                  {/* 3. CUMULATIVE TABLE */}
                   <div className="overflow-hidden border border-slate-300 dark:border-slate-700 rounded-2xl print:border-slate-300">
                     <table className="w-full text-center border-collapse min-w-150 print:min-w-0 print:w-full print:table-fixed print-magic-table">
                       <thead>
@@ -1352,13 +1333,11 @@ export default function Reports() {
                       </tbody>
                     </table>
                   </div>
-
                 </div>
               )}
             </div>
           </div>
         )}
-
       </div>
     </div>
   );

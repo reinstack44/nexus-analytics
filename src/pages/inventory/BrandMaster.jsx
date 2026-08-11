@@ -3,6 +3,11 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { Plus, Tag, Edit2, Trash2, X, AlertTriangle, History, Search, Wine, Layers } from 'lucide-react';
 
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
 export default function BrandMaster() {
   const { user } = useAuth();
   const [brands, setBrands] = useState([]);
@@ -53,6 +58,7 @@ export default function BrandMaster() {
   const [editFormData, setEditFormData] = useState({});
   const [priceHistory, setPriceHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [deleteWarningMessage, setDeleteWarningMessage] = useState('');
 
   const fetchBrands = useCallback(async () => {
     if (!user) return;
@@ -92,10 +98,10 @@ export default function BrandMaster() {
           pricesMap[s.brand_id] = { price: null, mrp: null };
         }
         if (pricesMap[s.brand_id].price === null && s.unit_price !== null && parseFloat(s.unit_price) > 0) {
-          pricesMap[s.brand_id].price = parseFloat(s.unit_price);
+          pricesMap[s.brand_id].price = safeRound(parseFloat(s.unit_price));
         }
         if (pricesMap[s.brand_id].mrp === null && s.unit_mrp !== null && parseFloat(s.unit_mrp) > 0) {
-          pricesMap[s.brand_id].mrp = parseFloat(s.unit_mrp);
+          pricesMap[s.brand_id].mrp = safeRound(parseFloat(s.unit_mrp));
         }
       });
       
@@ -132,8 +138,8 @@ export default function BrandMaster() {
     e.preventDefault();
     setIsSubmitting(true);
     
-    const initialPrice = parseFloat(formData.sellingPrice) || 0;
-    const mrpPrice = parseFloat(formData.mrpPrice) || 0;
+    const initialPrice = safeRound(parseFloat(formData.sellingPrice) || 0);
+    const mrpPrice = safeRound(parseFloat(formData.mrpPrice) || 0);
     
     const { data: brandData, error: brandError } = await supabase
       .from('brands')
@@ -181,14 +187,17 @@ export default function BrandMaster() {
     e.preventDefault();
     setIsSubmitting(true);
     
+    const updatedPrice = safeRound(parseFloat(editFormData.sellingPrice) || 0);
+    const updatedMrp = safeRound(parseFloat(editFormData.mrpPrice) || 0);
+
     const { error: updateError } = await supabase
       .from('brands')
       .update({ 
         brand_name: editFormData.brandName, 
         category: editFormData.category, 
         bottle_size: editFormData.bottleSize,
-        mrp_price: parseFloat(editFormData.mrpPrice) || 0,
-        selling_price: parseFloat(editFormData.sellingPrice) || 0
+        mrp_price: updatedMrp,
+        selling_price: updatedPrice
       })
       .eq('id', selectedBrand.id);
 
@@ -201,13 +210,29 @@ export default function BrandMaster() {
     setIsSubmitting(false);
   };
 
-  const handleDeleteClick = (brand) => {
+  const handleDeleteClick = async (brand) => {
     setBrandToDelete(brand);
+    setDeleteWarningMessage('');
     setIsDeleteModalOpen(true);
+
+    // Preemptive Daily Stock Relation Check
+    const { count, error } = await supabase
+      .from('daily_stock')
+      .select('*', { count: 'exact', head: true })
+      .eq('brand_id', brand.id);
+
+    if (!error && count > 0) {
+      setDeleteWarningMessage(`Warning: This product has ${count} saved daily stock entries. Deletion is locked to prevent retrospective reports corruption.`);
+    }
   };
 
   const confirmDelete = async () => {
     if (!brandToDelete) return;
+    if (deleteWarningMessage) {
+      alert("Deletion Locked: This brand is linked to historical transaction records. Deleting it will corrupt your analytical summaries.");
+      setIsDeleteModalOpen(false);
+      return;
+    }
     setIsSubmitting(true);
     try { 
       const { error } = await supabase.from('brands').delete().eq('id', brandToDelete.id); 
@@ -216,7 +241,7 @@ export default function BrandMaster() {
       setBrandToDelete(null); 
       fetchBrands(); 
     } catch (err) { 
-      alert("Error deleting brand: " + (err.message || "It might be linked to existing stock records.")); 
+      alert("Error deleting brand: " + (err.message || "It is linked to existing stock records.")); 
     } finally { 
       setIsSubmitting(false); 
     }
@@ -447,7 +472,7 @@ export default function BrandMaster() {
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          <span className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 rounded-md text-[11px] font-bold uppercase tracking-wider border border-slate-200 dark:border-slate-700">
+                          <span className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 rounded-md text-[11px] font-bold uppercase tracking-wider border border-slate-200/40 dark:border-slate-700">
                             {brand.category}
                           </span>
                         </td>
@@ -501,10 +526,14 @@ export default function BrandMaster() {
                 <AlertTriangle size={32} />
               </div>
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
-                Delete Product?
+                {deleteWarningMessage ? 'Deletion Locked' : 'Delete Product?'}
               </h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
-                Are you sure you want to permanently delete <strong className="text-slate-800 dark:text-slate-200">{brandToDelete?.brand_name}</strong>? This action cannot be undone.
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
+                {deleteWarningMessage ? (
+                  deleteWarningMessage
+                ) : (
+                  <>Are you sure you want to permanently delete <strong className="text-slate-800 dark:text-slate-200">{brandToDelete?.brand_name}</strong>? This action cannot be undone.</>
+                )}
               </p>
               <div className="flex gap-3">
                 <button 
@@ -513,12 +542,14 @@ export default function BrandMaster() {
                 >
                   Cancel
                 </button>
-                <button 
-                  onClick={confirmDelete} 
-                  className="flex-1 bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 transition-colors shadow-md"
-                >
-                  Delete
-                </button>
+                {!deleteWarningMessage && (
+                  <button 
+                    onClick={confirmDelete} 
+                    className="flex-1 bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 transition-colors shadow-md"
+                  >
+                    Delete
+                  </button>
+                )}
               </div>
             </div>
           </div>

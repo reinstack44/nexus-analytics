@@ -16,6 +16,7 @@ const resources = {
         purchases: "Purchases & Traders",
         stock: "Daily Stock (Sale)",
         profitloss: "Profit & Loss",
+        magicChart: "Magic Chart",
         reports: "Reports",
         logout: "Logout System"
       },
@@ -251,6 +252,7 @@ const resources = {
         purchases: "खरीद और व्यापारी",
         stock: "दैनिक स्टॉक (बिक्री)",
         profitloss: "लाभ और हानि",
+        magicChart: "मैजिक चार्ट (Rakaana)",
         reports: "रिपोर्ट्स",
         logout: "लॉगआउट करें"
       },
@@ -350,7 +352,7 @@ const resources = {
         remainingBalanceHeader: "शेष राशि",
         actionsHeader: "कार्रवाई",
         loadingLedger: "खाता नोड्स संकलित किए जा रहे हैं...",
-        noTransactions: "इस अवधि के लिए कोई लेनदेन दर्ज नहीं किया गया है।",
+        noTransactions: "इस अवधि के लिए कोई लेनदेन दर्ज नहीं की गया है।",
         editLedgerTitle: "लेजर प्रविष्टि संपादित करें",
         directRemainingOverrideLabel: "सीधा शेष राशि ओवरराइड (₹)",
         directRemainingOverridePlaceholder: "स्वचालित गणना के लिए खाली छोड़ें",
@@ -358,7 +360,7 @@ const resources = {
         updateTransactionButton: "लेनदेन अपडेट करें",
         addTraderTitle: "नया व्यापारी जोड़ें",
         traderNameLabel: "व्यापारी का नाम / एजेंसी",
-        traderNamePlaceholder: "जैसे, साई ट्रेडर्स",
+        traderNamePlaceholder: "जैसे, साईं ट्रेडर्स",
         registerTraderButton: "व्यापारी पंजीकृत करें",
         registeredTradersTitle: "पंजीकृत व्यापारी",
         noTraders: "कोई व्यापारी पंजीकृत नहीं है।"
@@ -389,7 +391,7 @@ const resources = {
         expensesSection: "3. व्यावसायिक खर्च लेजर",
         expDateHeader: "तिथि",
         expDescHeader: "विवरण",
-        expAmtHeader: "Amount (₹)",
+        expAmtHeader: "राशि (₹)",
         compiling: "संकलित किया जा रहा है...",
         totalExpensesLabel: "कुल खर्च",
         collectionsSection: "4. ऑनलाइन संग्रह लेजर",
@@ -486,6 +488,7 @@ const resources = {
         purchases: "खरेदी आणि व्यापारी",
         stock: "दैनिक स्टॉक (विक्री)",
         profitloss: "नफा आणि तोटा",
+        magicChart: "मॅजिक चार्ट (Rakaana)",
         reports: "अहवाल",
         logout: "लॉगआउट करा"
       },
@@ -526,7 +529,7 @@ const resources = {
       },
       profitloss: {
         title: "वित्तीय विश्लेषण",
-        description: "नफा-तोटा (टॅक्स सुरक्षित) आणि हातातील रोख रक्कम ट्रॅक करा.",
+        description: "नफा-तोटा (तोटा सुरक्षित) आणि हातातील रोख रक्कम ट्रॅक करा.",
         grossRevenue: "एकूण महसूल",
         purchaseCost: "खरेदी किंमत",
         businessExpenses: "व्यावसायिक खर्च",
@@ -546,7 +549,7 @@ const resources = {
         basePrice: "मूळ विक्री किंमत (₹)",
         saveProduct: "उत्पादन मास्टरमध्ये जतन करा",
         saving: "जतन करत आहे...",
-        inventoryCatalog: "इन्व्हेंटरी कॅटलॉग",
+        inventoryCatalog: "इन्वेंटरी कॅटलॉग",
         searchPlaceholder: "ब्रँड शोधा...",
         detailsHeader: "ब्रँड तपशील",
         categoryHeader: "श्रेणी",
@@ -682,7 +685,7 @@ const resources = {
         differentPriceLabel: "होय, वेगळी किंमत",
         newSellingPriceLabel: "नवीन विक्री किंमत (₹)",
         fifoAppliedLabel: "फीफो लागू",
-        fifoNote: "* टीप: मागील स्टॉक जुन्या दरानेच विकला जाईल. हा नवीन दर फक्त नवीन जोडलेल्या बाटल्यांवर लागू होईल.",
+        fifoNote: "* टीप: मागील स्टॉक दरानेच विकला जाईल. हा नवीन दर फक्त नवीन जोडलेल्या बाटल्यांवर लागू होईल.",
         confirmAdditionButton: "जोडल्याची पुष्टी करा",
         bankLedgerOperationsTitle: "बँक आणि खतावणी कामकाज",
         businessExpenseTab: "व्यावसायिक खर्च",
@@ -713,7 +716,7 @@ i18n
   .use(initReactI18next)
   .init({
     resources,
-    lng: localStorage.getItem('app_lang') || 'en', // Default language
+    lng: localStorage.getItem('app_lang') || 'en', // Default language fallback
     fallbackLng: 'en',
     interpolation: {
       escapeValue: false 

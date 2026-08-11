@@ -20,6 +20,11 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 ));
 CustomDateInput.displayName = "CustomDateInput";
 
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
 export default function Dashboard() {
   const { theme } = useTheme(); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -27,7 +32,7 @@ export default function Dashboard() {
   const parseDBDate = (str) => {
     if (!str) return new Date();
     const [y, m, d] = str.split('-');
-    return new Date(y, m - 1, d);
+    return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
   };
 
   const formatDateForDB = (date) => {
@@ -38,7 +43,6 @@ export default function Dashboard() {
     return `${year}-${month}-${day}`;
   };
 
-  // एकीकृत साझा कीज़ (Unified Session Storage)
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('global_startDate');
     return saved ? new Date(saved) : new Date();
@@ -53,7 +57,7 @@ export default function Dashboard() {
     if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
   }, [startDate, endDate]);
 
-  // रीयल-टाइम डेटाबेस लिसनर
+  // Realtime DB Sync Listener
   useEffect(() => {
     const channel = supabase
       .channel('dashboard-realtime')
@@ -116,17 +120,17 @@ export default function Dashboard() {
       let tPurchases = 0;
       const tSummaryMap = {};
       purchasesData?.forEach(p => {
-        tPurchases += parseFloat(p.total_amount) || 0;
+        tPurchases = safeRound(tPurchases + (parseFloat(p.total_amount) || 0));
         const traderName = p.traders?.trader_name || 'Unknown';
         if (!tSummaryMap[traderName]) tSummaryMap[traderName] = { qty: 0, amount: 0 };
-        tSummaryMap[traderName].qty += p.quantity;
-        tSummaryMap[traderName].amount += parseFloat(p.total_amount);
+        tSummaryMap[traderName].qty += (parseInt(p.quantity, 10) || 0);
+        tSummaryMap[traderName].amount = safeRound(tSummaryMap[traderName].amount + (parseFloat(p.total_amount) || 0));
       });
 
       let tExpenses = 0;
-      expensesData?.forEach(e => tExpenses += parseFloat(e.amount) || 0);
+      expensesData?.forEach(e => tExpenses = safeRound(tExpenses + (parseFloat(e.amount) || 0)));
 
-      // मानक FIFO सेल्स सिमुलेशन इंजन
+      // UNIFIED FIFO CHRONOLOGICAL RECONSTRUCTION
       let tRevenue = 0;
       let tBottles = 0;
       const salesByDate = {};
@@ -136,7 +140,7 @@ export default function Dashboard() {
       const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
       beforeStock?.forEach(s => {
         if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
-          prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance), price: s.unit_price ? parseFloat(s.unit_price) : null };
+          prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance, 10), price: s.unit_price ? parseFloat(s.unit_price) : null };
         }
       });
 
@@ -166,10 +170,10 @@ export default function Dashboard() {
           const baseOpening = state.closing;
           const carriedPrice = state.price;
 
-          const opening = parseInt(row.opening_balance || 0);
+          const opening = parseInt(row.opening_balance, 10) || 0;
           const purchaseQty = Math.max(0, opening - baseOpening);
           const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
-          const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : '';
+          const closing = row.closing_balance !== null ? parseInt(row.closing_balance, 10) : '';
 
           if (closing !== '') {
             const sQty = Math.max(0, opening - closing);
@@ -177,18 +181,18 @@ export default function Dashboard() {
             let sAmt = 0;
 
             const qtyOld = Math.min(rem, baseOpening);
-            sAmt += qtyOld * carriedPrice;
+            sAmt = safeRound(sAmt + (qtyOld * carriedPrice));
             rem -= qtyOld;
 
             if (rem > 0 && purchaseQty > 0) {
-              sAmt += Math.min(rem, purchaseQty) * pPrice;
+              sAmt = safeRound(sAmt + (Math.min(rem, purchaseQty) * pPrice));
             }
 
-            tRevenue += sAmt;
+            tRevenue = safeRound(tRevenue + sAmt);
             tBottles += sQty;
 
             if (!salesByDate[date]) salesByDate[date] = 0;
-            salesByDate[date] += sAmt;
+            salesByDate[date] = safeRound(salesByDate[date] + sAmt);
 
             if (!brandSalesMap[brand.brand_name]) brandSalesMap[brand.brand_name] = 0;
             brandSalesMap[brand.brand_name] += sQty;
@@ -232,7 +236,6 @@ export default function Dashboard() {
     }
   }, [startDate, endDate]);
 
-  // एसिंक्रोनस प्रॉमिस रैपर जो ESLint की "setState-in-effect" त्रुटि को दूर करता है
   useEffect(() => {
     let isMounted = true;
     const executeFetch = async () => {

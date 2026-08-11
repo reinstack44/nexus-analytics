@@ -28,6 +28,11 @@ const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
 ));
 FormDateInput.displayName = "FormDateInput";
 
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
 export default function PurchaseManager() {
   const [activeTab, setActiveTab] = useState('ledger'); 
   const [loading, setLoading] = useState(true);
@@ -39,7 +44,7 @@ export default function PurchaseManager() {
   const [selectedTraderId, setSelectedTraderId] = useState('');
   const [ledgerRows, setStockLedgerRows] = useState([]);
 
-  // एकीकृत साझा कीज़ (Unified Session Storage)
+  // Integrated date filter states
   const [filterStartDate, setFilterStartDate] = useState(() => {
     const saved = sessionStorage.getItem('global_startDate');
     return saved ? new Date(saved) : new Date();
@@ -54,7 +59,7 @@ export default function PurchaseManager() {
     if (filterEndDate) sessionStorage.setItem('global_endDate', filterEndDate.toISOString());
   }, [filterStartDate, filterEndDate]);
 
-  // रीयल-टाइम डेटाबेस लिसनर
+  // Realtime Database Sync
   useEffect(() => {
     const channel = supabase
       .channel('purchasemanager-realtime')
@@ -92,9 +97,17 @@ export default function PurchaseManager() {
     manualRemaining: '', 
   });
 
-  // Strict Format Helpers
-  const parseDBDate = (str) => { if (!str) return new Date(); const [y, m, d] = str.split('-'); return new Date(y, m - 1, d); };
-  const formatForDB = (date) => { if (!date) return ''; return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'); };
+  // Strict Format Helpers (Timezone-Neutral)
+  const parseDBDate = (str) => { 
+    if (!str) return new Date(); 
+    const [y, m, d] = str.split('-'); 
+    return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10)); 
+  };
+  
+  const formatForDB = (date) => { 
+    if (!date) return ''; 
+    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'); 
+  };
   
   const formatAsDDMMYY = (dateString) => {
     if (!dateString) return '-';
@@ -151,7 +164,7 @@ export default function PurchaseManager() {
         if (tx.manual_remaining !== null && tx.manual_remaining !== undefined) {
           currentRemaining = parseFloat(tx.manual_remaining);
         } else {
-          currentRemaining = currentRemaining + pAmt - paidAmt;
+          currentRemaining = safeRound(currentRemaining + pAmt - paidAmt);
         }
 
         if (tx.date >= startStr) {
@@ -171,7 +184,6 @@ export default function PurchaseManager() {
     setLoading(false);
   }, [selectedTraderId, filterStartDate, filterEndDate]);
 
-  // Settle synchronous setState executions via Deferred Microtask Wrappers
   useEffect(() => {
     let isMounted = true;
     const executeFetch = async () => {
@@ -240,7 +252,7 @@ export default function PurchaseManager() {
     setIsSubmitting(false);
   };
 
-  // --- DELETE TRANSACTION LOGIC ---
+  // Delete Transaction
   const handleDeleteTx = async (txId) => {
     const confirmDelete = window.confirm("Are you sure you want to delete this transaction entry?");
     if (!confirmDelete) return;
@@ -259,7 +271,7 @@ export default function PurchaseManager() {
     setIsSubmitting(false);
   };
 
-  // --- OPEN EDIT TRANSACTION MODAL ---
+  // Open Edit Transaction Modal
   const handleEditTxClick = (tx) => {
     setSelectedTx(tx);
     setEditTxForm({
@@ -271,7 +283,7 @@ export default function PurchaseManager() {
     setIsEditTxModalOpen(true);
   };
 
-  // --- SUBMIT TRANSACTION UPDATES ---
+  // Submit Transaction Updates
   const handleEditTxSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -300,8 +312,8 @@ export default function PurchaseManager() {
     setIsSubmitting(false);
   };
 
-  const totalPurchase = ledgerRows.reduce((sum, row) => sum + row.purchase_amount, 0);
-  const totalPaid = ledgerRows.reduce((sum, row) => sum + row.paid_amount, 0);
+  const totalPurchase = ledgerRows.reduce((sum, row) => safeRound(sum + row.purchase_amount), 0);
+  const totalPaid = ledgerRows.reduce((sum, row) => safeRound(sum + row.paid_amount), 0);
   const finalRemainingBalance = ledgerRows.length > 0 ? ledgerRows[ledgerRows.length - 1].remaining_amount : 0;
 
   const inputClass = "w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all duration-300 text-sm";
@@ -309,7 +321,6 @@ export default function PurchaseManager() {
   return (
     <div className="space-y-6 transition-colors duration-300">
       
-      {/* Premium Unified DatePicker Styles */}
       <style>{`
         .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
         .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
@@ -384,10 +395,8 @@ export default function PurchaseManager() {
         </div>
       </div>
 
-      {/* ================= LEDGER TAB ================= */}
       {activeTab === 'ledger' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300">
-          
           {/* Form Side */}
           <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 flex items-center gap-2 border-b border-slate-50 dark:border-slate-800 pb-4">
@@ -421,17 +430,17 @@ export default function PurchaseManager() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Purchase Amount (₹) <span className="text-slate-400 font-normal text-[10px]">(Optional)</span></label>
-                <input type="number" min="0" value={ledgerForm.purchaseAmount} onChange={(e) => setLedgerForm({ ...ledgerForm, purchaseAmount: e.target.value })} className={inputClass} placeholder="0" />
+                <input type="number" min="0" step="any" value={ledgerForm.purchaseAmount} onChange={(e) => setLedgerForm({ ...ledgerForm, purchaseAmount: e.target.value })} className={inputClass} placeholder="0" />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Paid Amount (₹) <span className="text-slate-400 font-normal text-[10px]">(Optional)</span></label>
-                <input type="number" min="0" value={ledgerForm.paidAmount} onChange={(e) => setLedgerForm({ ...ledgerForm, paidAmount: e.target.value })} className={inputClass} placeholder="0" />
+                <input type="number" min="0" step="any" value={ledgerForm.paidAmount} onChange={(e) => setLedgerForm({ ...ledgerForm, paidAmount: e.target.value })} className={inputClass} placeholder="0" />
               </div>
 
               <div className="border-t border-dashed border-slate-200 dark:border-slate-800 pt-3">
                 <label className="block text-xs font-bold text-indigo-500 dark:text-indigo-400 uppercase tracking-wider mb-1.5">Direct Remaining Amount (₹) <span className="text-slate-400 font-normal text-[10px]">(Optional)</span></label>
-                <input type="number" min="0" value={ledgerForm.manualRemaining} onChange={(e) => setLedgerForm({ ...ledgerForm, manualRemaining: e.target.value })} className={`${inputClass} border-indigo-200 dark:indigo-900/60 focus:ring-indigo-500`} placeholder="Set custom balance" />
+                <input type="number" min="0" step="any" value={ledgerForm.manualRemaining} onChange={(e) => setLedgerForm({ ...ledgerForm, manualRemaining: e.target.value })} className={`${inputClass} border-indigo-200 dark:indigo-900/60 focus:ring-indigo-500`} placeholder="Set custom balance" />
               </div>
 
               <button type="submit" disabled={isSubmitting || !selectedTraderId} className="w-full mt-2 bg-blue-600 text-white font-medium py-2.5 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 disabled:opacity-50 flex justify-center items-center gap-2 shadow-sm">
@@ -442,15 +451,12 @@ export default function PurchaseManager() {
 
           {/* Table Ledger Display */}
           <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
-            
-            {/* Table Header with Date Slicer */}
             <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <FileText size={18} className="text-slate-400 dark:text-slate-500" />
                 Statement Account Ledger
               </h3>
               
-              {/* Filter Date Picker */}
               <div className="header-date-picker flex items-center gap-2">
                 <DatePicker
                   selected={filterStartDate}
@@ -533,7 +539,6 @@ export default function PurchaseManager() {
                   )}
                 </tbody>
                 
-                {/* --- TOTALS ROW --- */}
                 {ledgerRows.length > 0 && !loading && (
                   <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                     <tr>
@@ -555,14 +560,13 @@ export default function PurchaseManager() {
                     </tr>
                   </tfoot>
                 )}
-
               </table>
             </div>
           </div>
         </div>
       )}
 
-      {/* ================= EDIT TRANSACTION MODAL ================= */}
+      {/* EDIT TRANSACTION MODAL */}
       {isEditTxModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 9999 }}>
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
@@ -588,15 +592,15 @@ export default function PurchaseManager() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Purchase Amount (₹)</label>
-                <input type="number" min="0" value={editTxForm.purchaseAmount} onChange={(e) => setEditTxForm({ ...editTxForm, purchaseAmount: e.target.value })} className={inputClass} />
+                <input type="number" min="0" step="any" value={editTxForm.purchaseAmount} onChange={(e) => setEditTxForm({ ...editTxForm, purchaseAmount: e.target.value })} className={inputClass} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Paid Amount (₹)</label>
-                <input type="number" min="0" value={editTxForm.paidAmount} onChange={(e) => setEditTxForm({ ...editTxForm, paidAmount: e.target.value })} className={inputClass} />
+                <input type="number" min="0" step="any" value={editTxForm.paidAmount} onChange={(e) => setEditTxForm({ ...editTxForm, paidAmount: e.target.value })} className={inputClass} />
               </div>
               <div>
                 <label className="block text-xs font-bold text-indigo-500 dark:text-indigo-400 uppercase tracking-wider mb-1.5">Direct Remaining Amount Override (₹)</label>
-                <input type="number" min="0" value={editTxForm.manualRemaining} onChange={(e) => setEditTxForm({ ...editTxForm, manualRemaining: e.target.value })} className={inputClass} placeholder="Leave empty for auto math" />
+                <input type="number" min="0" step="any" value={editTxForm.manualRemaining} onChange={(e) => setEditTxForm({ ...editTxForm, manualRemaining: e.target.value })} className={inputClass} placeholder="Leave empty for auto math" />
               </div>
               
               <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">
@@ -607,7 +611,7 @@ export default function PurchaseManager() {
         </div>
       )}
 
-      {/* ================= TRADERS TAB ================= */}
+      {/* TRADERS TAB */}
       {activeTab === 'traders' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit">

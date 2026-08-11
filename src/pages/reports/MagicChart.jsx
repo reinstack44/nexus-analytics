@@ -26,7 +26,12 @@ const formatDateForDB = (dateObj) => {
   return `${year}-${month}-${day}`;
 };
 
-const formatRs = (num) => '₹' + (num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
+const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function MagicChart() {
   const { user } = useAuth();
@@ -39,7 +44,7 @@ export default function MagicChart() {
 
   const [syncTrigger, setSyncTrigger] = useState(0);
 
-  // Robust Event-driven Realtime DB Synchronization (No performance-killing 1s polling interval)
+  // Robust Event-driven Realtime DB Synchronization
   useEffect(() => {
     const channel = supabase
       .channel('magicchart-realtime')
@@ -132,7 +137,7 @@ export default function MagicChart() {
             const baseOpening = state.closing;
             const carriedPrice = state.price;
 
-            const opening = parseInt(row.opening_balance || 0);
+            const opening = parseInt(row.opening_balance, 10) || 0;
             const purchaseQty = Math.max(0, opening - baseOpening);
             const pPrice = row.unit_price ? parseFloat(row.unit_price) : carriedPrice;
             const pMrp = row.unit_mrp ? parseFloat(row.unit_mrp) : (parseFloat(brand.mrp_price) || 0);
@@ -141,18 +146,18 @@ export default function MagicChart() {
               brandBatches[brandId].push({ qty: purchaseQty, price: pPrice, mrp: pMrp });
             }
 
-            const closing = row.closing_balance !== null ? parseInt(row.closing_balance) : null;
+            const closing = row.closing_balance !== null ? parseInt(row.closing_balance, 10) : null;
             if (closing !== null) {
               const sQty = Math.max(0, opening - closing);
               let rem = sQty;
               let sAmt = 0;
 
               const qtyOld = Math.min(rem, baseOpening);
-              sAmt += qtyOld * carriedPrice;
+              sAmt = safeRound(sAmt + (qtyOld * carriedPrice));
               rem -= qtyOld;
 
               if (rem > 0 && purchaseQty > 0) {
-                sAmt += Math.min(rem, purchaseQty) * pPrice;
+                sAmt = safeRound(sAmt + (Math.min(rem, purchaseQty) * pPrice));
               }
 
               let sellRem = sQty;
@@ -166,7 +171,7 @@ export default function MagicChart() {
                 }
               }
 
-              monthlyProfits[yearMonthKey].sales += sAmt;
+              monthlyProfits[yearMonthKey].sales = safeRound(monthlyProfits[yearMonthKey].sales + sAmt);
               brandStates[brandId] = { closing: closing, price: pPrice };
             } else {
               brandStates[brandId] = { closing: opening, price: pPrice };
@@ -176,7 +181,6 @@ export default function MagicChart() {
           const nextDateStr = sortedDates[dIdx + 1];
           const isLastDayOfM = !nextDateStr || nextDateStr.substring(0, 7) !== yearMonthKey;
           if (isLastDayOfM) {
-            // Check if actual closing balances are inputted for this month-end date
             const dayRecordsForEnd = stockByDateStr[dateStr] || [];
             let totalMrpValuation = 0;
             let anyClosingEntered = false;
@@ -185,13 +189,12 @@ export default function MagicChart() {
               if (s.closing_balance !== null && s.closing_balance !== undefined) {
                 anyClosingEntered = true;
                 const brand = brandMap[s.brand_id];
-                const clQty = parseInt(s.closing_balance) || 0;
+                const clQty = parseInt(s.closing_balance, 10) || 0;
                 const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-                totalMrpValuation += clQty * mrp;
+                totalMrpValuation = safeRound(totalMrpValuation + (clQty * mrp));
               }
             });
 
-            // If no closing balance is entered on the end date, set the valuation strictly to 0
             monthlyProfits[yearMonthKey].closingMrp = anyClosingEntered ? totalMrpValuation : 0;
           }
         });
@@ -200,7 +203,7 @@ export default function MagicChart() {
           const eDateStr = e.date ? e.date.split('T')[0] : '';
           const yearMonthKey = eDateStr.substring(0, 7);
           if (monthlyProfits[yearMonthKey]) {
-            monthlyProfits[yearMonthKey].expenses += parseFloat(e.amount || 0);
+            monthlyProfits[yearMonthKey].expenses = safeRound(monthlyProfits[yearMonthKey].expenses + parseFloat(e.amount || 0));
           }
         });
 
@@ -208,7 +211,7 @@ export default function MagicChart() {
           const txDateStr = tx.date ? tx.date.split('T')[0] : '';
           const yearMonthKey = txDateStr.substring(0, 7);
           if (monthlyProfits[yearMonthKey]) {
-            monthlyProfits[yearMonthKey].purchases += parseFloat(tx.purchase_amount || 0);
+            monthlyProfits[yearMonthKey].purchases = safeRound(monthlyProfits[yearMonthKey].purchases + parseFloat(tx.purchase_amount || 0));
           }
         });
 
@@ -220,9 +223,9 @@ export default function MagicChart() {
             let totalOpMrp = 0;
             firstDayRecords.forEach(s => {
               const brand = brandMap[s.brand_id];
-              const opQty = parseInt(s.opening_balance) || 0;
+              const opQty = parseInt(s.opening_balance, 10) || 0;
               const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-              totalOpMrp += opQty * mrp;
+              totalOpMrp = safeRound(totalOpMrp + (opQty * mrp));
             });
             monthlyProfits[mKey].openingMrp = totalOpMrp;
           } else {
@@ -233,24 +236,21 @@ export default function MagicChart() {
 
         sortedMonths.forEach(mKey => {
           const mData = monthlyProfits[mKey];
-          const box3 = mData.sales + mData.closingMrp;
-          const box6 = mData.openingMrp + mData.purchases;
-          const box7 = box3 - box6;
-          mData.netProfit = box7 - mData.expenses;
+          const box3 = safeRound(mData.sales + mData.closingMrp);
+          const box6 = safeRound(mData.openingMrp + mData.purchases);
+          const box7 = safeRound(box3 - box6);
+          mData.netProfit = safeRound(box7 - mData.expenses);
         });
 
         const selectedMonthKey = `${currYear}-${String(currMonth + 1).padStart(2, '0')}`;
         const currMonthData = monthlyProfits[selectedMonthKey] || { sales: 0, closingMrp: 0, openingMrp: 0, purchases: 0, expenses: 0 };
 
-        // Fail-safe null guard to prevent rendering crashes if Supabase returns empty payload
         if (!brands || !allStock) return;
 
-        // 1. Assign Sales, Purchases, and Expenses directly from the processed active month structure
         setSalesAmount(currMonthData.sales || 0);
         setLedgerPurchases(currMonthData.purchases || 0);
         setExpensesAmount(currMonthData.expenses || 0);
 
-        // 2. Safe Dynamic Opening Stock with smart calendar carryover fallback
         const activeMonthDates = sortedDates.filter(d => d.startsWith(selectedMonthKey));
         const firstSavedDate = activeMonthDates[0];
         const startDayRecords = firstSavedDate ? (stockByDateStr[firstSavedDate] || []) : [];
@@ -259,13 +259,11 @@ export default function MagicChart() {
         if (firstSavedDate) {
           startDayRecords.forEach(s => {
             const brand = brandMap[s.brand_id];
-            const opQty = parseInt(s.opening_balance) || 0;
+            const opQty = parseInt(s.opening_balance, 10) || 0;
             const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-            computedOpeningMrp += opQty * mrp;
+            computedOpeningMrp = safeRound(computedOpeningMrp + (opQty * mrp));
           });
         } else {
-          // Smart Carryover: If no records exist for the selected month yet,
-          // automatically display the closing stock valuation of the most recent saved month in history.
           const previousMonths = sortedMonths.filter(m => m < selectedMonthKey);
           if (previousMonths.length > 0) {
             const lastActiveMonthKey = previousMonths[previousMonths.length - 1];
@@ -274,7 +272,6 @@ export default function MagicChart() {
         }
         setLedgerOpening(computedOpeningMrp);
 
-        // 3. Strict Calendar End-Date Closing Stock: Strictly bound to the final calendar date of the active month
         const endDayRecords = stockByDateStr[currEndStr] || [];
         let computedClosingMrp = 0;
         let anyClosingEnteredForEnd = false;
@@ -282,20 +279,18 @@ export default function MagicChart() {
           if (s.closing_balance !== null && s.closing_balance !== undefined) {
             anyClosingEnteredForEnd = true;
             const brand = brandMap[s.brand_id];
-            const clQty = parseInt(s.closing_balance) || 0;
+            const clQty = parseInt(s.closing_balance, 10) || 0;
             const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-            computedClosingMrp += clQty * mrp;
+            computedClosingMrp = safeRound(computedClosingMrp + (clQty * mrp));
           }
         });
-        // If the month-end date is not saved or closing values are empty, default strictly to 0
         const finalClosingMrp = anyClosingEnteredForEnd ? computedClosingMrp : 0;
         setLedgerClosing(finalClosingMrp);
 
-        // 4. Calculate clean previous months' net profit (excluding current active selected month)
         let computedPrevNetProfit = 0;
         sortedMonths.forEach(mKey => {
           if (mKey < selectedMonthKey) {
-            computedPrevNetProfit += monthlyProfits[mKey]?.netProfit || 0;
+            computedPrevNetProfit = safeRound(computedPrevNetProfit + (monthlyProfits[mKey]?.netProfit || 0));
           }
         });
         setPrevMonthNetProfit(computedPrevNetProfit);
@@ -311,19 +306,18 @@ export default function MagicChart() {
     return () => { isMounted = false; };
   }, [selectedMonth, user, syncTrigger]);
 
-  // Defensive Math Checks: Enforce absolute fallback to 0 to prevent UI anomalies or NaN displays
   const box1Val = salesAmount || 0;
   const box2Val = ledgerClosing || 0;
-  const box3Val = box1Val + box2Val;
+  const box3Val = safeRound(box1Val + box2Val);
 
   const box4Val = ledgerOpening || 0;
   const box5Val = ledgerPurchases || 0;
-  const box6Val = box4Val + box5Val;
+  const box6Val = safeRound(box4Val + box5Val);
 
-  const box7Val = box3Val - box6Val; 
-  const netProfitVal = box7Val - (expensesAmount || 0); 
+  const box7Val = safeRound(box3Val - box6Val); 
+  const netProfitVal = safeRound(box7Val - (expensesAmount || 0)); 
 
-  const cumulativeProfitVal = (prevMonthNetProfit || 0) + netProfitVal; 
+  const cumulativeProfitVal = safeRound((prevMonthNetProfit || 0) + netProfitVal); 
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300">
