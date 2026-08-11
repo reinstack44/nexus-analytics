@@ -501,7 +501,7 @@ export default function BrandMaster() {
                             <button 
                               onClick={() => handleDeleteClick(brand)} 
                               title="Delete Product" 
-                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg outline-none transition-colors"
+                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                             >
                               <Trash2 size={16} />
                             </button>

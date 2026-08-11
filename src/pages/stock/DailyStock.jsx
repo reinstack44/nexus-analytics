@@ -78,6 +78,7 @@ const recalculateRow = (row) => {
   let cAmt = 0; 
   let cMrpAmt = 0;
 
+  // Process both active and depleted (qty === 0) batches for clean user visual tracking
   let queue = Array.isArray(row.starting_batches) ? row.starting_batches.map(b => ({ ...b })) : [];
   
   if (parseInt(row.purchase_qty, 10) > 0) {
@@ -92,16 +93,20 @@ const recalculateRow = (row) => {
     sQty = Math.max(0, parseInt(row.opening_balance, 10) - parseInt(row.closing_balance, 10));
     let salesRemaining = sQty;
 
-    while (salesRemaining > 0 && queue.length > 0) {
-      if (queue[0].qty <= salesRemaining) {
-        sAmt = safeRound(sAmt + (queue[0].qty * queue[0].price));
-        sMrpAmt = safeRound(sMrpAmt + (queue[0].qty * queue[0].mrp));
-        salesRemaining -= queue[0].qty;
-        queue.shift(); 
+    // Deduct sales only from batches with available quantities (qty > 0)
+    while (salesRemaining > 0 && queue.some(b => b.qty > 0)) {
+      const activeBatch = queue.find(b => b.qty > 0);
+      if (!activeBatch) break;
+
+      if (activeBatch.qty <= salesRemaining) {
+        sAmt = safeRound(sAmt + (activeBatch.qty * activeBatch.price));
+        sMrpAmt = safeRound(sMrpAmt + (activeBatch.qty * activeBatch.mrp));
+        salesRemaining -= activeBatch.qty;
+        activeBatch.qty = 0; // Mark depleted instead of completely shifting to keep the visual trace
       } else {
-        sAmt = safeRound(sAmt + (salesRemaining * queue[0].price));
-        sMrpAmt = safeRound(sMrpAmt + (salesRemaining * queue[0].mrp));
-        queue[0].qty -= salesRemaining; 
+        sAmt = safeRound(sAmt + (salesRemaining * activeBatch.price));
+        sMrpAmt = safeRound(sMrpAmt + (salesRemaining * activeBatch.mrp));
+        activeBatch.qty -= salesRemaining; 
         salesRemaining = 0;
       }
     }
@@ -522,27 +527,36 @@ export default function DailyStock() {
                 const brand = brandsData.find(b => b.id === s.brand_id);
                 if (!brand) return;
 
-                if (s.unit_price !== undefined && s.unit_price !== null && parseFloat(s.unit_price) > 0) {
-                    if (parseFloat(s.unit_price) !== parseFloat(brand.selling_price)) {
-                        lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
-                    } else if (lastActivePrice[s.brand_id] === undefined) {
-                        lastActivePrice[s.brand_id] = parseFloat(s.unit_price);
-                    }
-                }
-                if (s.unit_mrp !== undefined && s.unit_mrp !== null && parseFloat(s.unit_mrp) > 0) {
-                    if (parseFloat(s.unit_mrp) !== parseFloat(brand.mrp_price)) {
-                        lastActiveMrp[s.brand_id] = parseFloat(s.unit_mrp);
-                    } else if (lastActiveMrp[s.brand_id] === undefined) {
-                        lastActiveMrp[s.brand_id] = parseFloat(s.unit_mrp);
-                    }
-                }
-
                 const opBal = parseInt(s.opening_balance, 10) || 0;
                 const pQty = Math.max(0, opBal - (prevClosing[s.brand_id] || 0));
+
+                const dbPrice = parseFloat(s.unit_price);
+                const dbMrp = parseFloat(s.unit_mrp);
+
+                // Determine if the saved prices are custom overrides (different from baseline master)
+                const isCustomPrice = dbPrice > 0 && dbPrice !== parseFloat(brand.selling_price);
+                const isCustomMrp = dbMrp > 0 && dbMrp !== parseFloat(brand.mrp_price);
+
+                // Update active carry-forward only on actual purchases OR if manual price changes happened
+                if (dbPrice > 0) {
+                  if (isCustomPrice || pQty > 0) {
+                    lastActivePrice[s.brand_id] = dbPrice;
+                  } else if (lastActivePrice[s.brand_id] === undefined) {
+                    lastActivePrice[s.brand_id] = dbPrice;
+                  }
+                }
+                if (dbMrp > 0) {
+                  if (isCustomMrp || pQty > 0) {
+                    lastActiveMrp[s.brand_id] = dbMrp;
+                  } else if (lastActiveMrp[s.brand_id] === undefined) {
+                    lastActiveMrp[s.brand_id] = dbMrp;
+                  }
+                }
                 
                 const pPrice = parseFloat(s.unit_price) || lastActivePrice[s.brand_id] || parseFloat(brand.selling_price) || 0;
                 const pMrp = parseFloat(s.unit_mrp) || lastActiveMrp[s.brand_id] || parseFloat(brand.mrp_price) || 0;
 
+                // Push new batch only if transaction has actual positive purchase quantity
                 if (pQty > 0) {
                     queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
                 }
@@ -550,14 +564,19 @@ export default function DailyStock() {
                 const clBal = s.closing_balance !== null ? parseInt(s.closing_balance, 10) : null;
                 if (clBal !== null) {
                     let sales = Math.max(0, opBal - clBal);
-                    while (sales > 0 && queue.length > 0) {
-                        if (queue[0].qty <= sales) {
-                            sales -= queue[0].qty;
-                            queue.shift();
-                        } else {
-                            queue[0].qty -= sales;
-                            sales = 0;
-                        }
+                    
+                    // Deduct sales only from batches with available quantities (qty > 0)
+                    while (sales > 0 && queue.some(b => b.qty > 0)) {
+                      const activeBatch = queue.find(b => b.qty > 0);
+                      if (!activeBatch) break;
+
+                      if (activeBatch.qty <= sales) {
+                        sales -= activeBatch.qty;
+                        activeBatch.qty = 0; // Mark depleted instead of completely shifting to keep the visual trace
+                      } else {
+                        activeBatch.qty -= sales;
+                        sales = 0;
+                      }
                     }
                     prevClosing[s.brand_id] = clBal;
                 } else {
@@ -575,6 +594,7 @@ export default function DailyStock() {
           if (lastActivePrice[brand.id] !== undefined && lastActivePrice[brand.id] > 0) {
             carriedPrice = lastActivePrice[brand.id];
           } else if (starting_batches.length > 0) {
+            // Read price from the first available batch (even if qty is 0 to preserve rates)
             carriedPrice = starting_batches[0].price;
           }
             
@@ -582,6 +602,7 @@ export default function DailyStock() {
           if (lastActiveMrp[brand.id] !== undefined && lastActiveMrp[brand.id] > 0) {
             carriedMrp = lastActiveMrp[brand.id];
           } else if (starting_batches.length > 0) {
+            // Read MRP from the first available batch (even if qty is 0 to preserve rates)
             carriedMrp = starting_batches[0].mrp;
           }
 
@@ -1266,6 +1287,7 @@ export default function DailyStock() {
             )}
             
             <button 
+              type="button"
               onClick={() => {
                 setCustomRangeMode(!customRangeMode);
                 setStartDate(new Date());
