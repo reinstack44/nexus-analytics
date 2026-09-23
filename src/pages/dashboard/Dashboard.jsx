@@ -25,6 +25,28 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
+// Safe paginated fetcher for large datasets
+async function fetchAllRows(queryBuilder) {
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await queryBuilder.range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allData = allData.concat(data);
+    if (data.length < pageSize) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+  return allData;
+}
+
 export default function Dashboard() {
   const { theme } = useTheme(); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -63,7 +85,7 @@ export default function Dashboard() {
       .channel('dashboard-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => setRefreshTrigger(prev => prev + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => setRefreshTrigger(prev => prev + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trader_transactions' }, () => setRefreshTrigger(prev => prev + 1))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => setRefreshTrigger(prev => prev + 1))
       .subscribe();
 
@@ -104,14 +126,16 @@ export default function Dashboard() {
     try {
       const [
         { data: brandsData },
-        { data: purchasesData },
-        { data: expensesData },
-        { data: stockData }
+        purchasesData,
+        expensesData,
+        stockData,
+        beforeStock
       ] = await Promise.all([
         supabase.from('brands').select('id, brand_name, selling_price, mrp_price'),
-        supabase.from('purchases').select('date, brand_id, quantity, total_amount, traders(trader_name)').gte('date', startStr).lte('date', endStr),
-        supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr),
-        supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr + 'T23:59:59').order('date', { ascending: true })
+        fetchAllRows(supabase.from('trader_transactions').select('date, trader_id, purchase_amount, traders(trader_name)').gte('date', startStr).lte('date', endStr)),
+        fetchAllRows(supabase.from('expenses').select('amount, date').gte('date', startStr).lte('date', endStr)),
+        fetchAllRows(supabase.from('daily_stock').select('*').gte('date', startStr).lte('date', endStr).order('date', { ascending: true })),
+        fetchAllRows(supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false }))
       ]);
 
       const brandMap = {};
@@ -120,11 +144,12 @@ export default function Dashboard() {
       let tPurchases = 0;
       const tSummaryMap = {};
       purchasesData?.forEach(p => {
-        tPurchases = safeRound(tPurchases + (parseFloat(p.total_amount) || 0));
-        const traderName = p.traders?.trader_name || 'Unknown';
-        if (!tSummaryMap[traderName]) tSummaryMap[traderName] = { qty: 0, amount: 0 };
-        tSummaryMap[traderName].qty += (parseInt(p.quantity, 10) || 0);
-        tSummaryMap[traderName].amount = safeRound(tSummaryMap[traderName].amount + (parseFloat(p.total_amount) || 0));
+        const pAmt = parseFloat(p.purchase_amount) || 0;
+        tPurchases = safeRound(tPurchases + pAmt);
+        const traderName = p.traders?.trader_name || 'Trader Account';
+        if (!tSummaryMap[traderName]) tSummaryMap[traderName] = { amount: 0, count: 0 };
+        tSummaryMap[traderName].amount = safeRound(tSummaryMap[traderName].amount + pAmt);
+        tSummaryMap[traderName].count += 1;
       });
 
       let tExpenses = 0;
@@ -137,7 +162,6 @@ export default function Dashboard() {
       const brandSalesMap = {};
 
       const prevClosings = {};
-      const { data: beforeStock } = await supabase.from('daily_stock').select('*').lt('date', startStr).order('date', { ascending: false });
       beforeStock?.forEach(s => {
         if (prevClosings[s.brand_id] === undefined && s.closing_balance !== null) {
           prevClosings[s.brand_id] = { closing_balance: parseInt(s.closing_balance, 10), price: s.unit_price ? parseFloat(s.unit_price) : null };
@@ -146,11 +170,10 @@ export default function Dashboard() {
 
       const stockByDate = {};
       stockData?.forEach(s => {
-        const sDate = parseDBDate(s.date);
-        if (sDate) {
-          const dateKey = formatDateForDB(sDate);
-          if (!stockByDate[dateKey]) stockByDate[dateKey] = [];
-          stockByDate[dateKey].push(s);
+        const sDateStr = s.date ? s.date.split('T')[0] : '';
+        if (sDateStr) {
+          if (!stockByDate[sDateStr]) stockByDate[sDateStr] = [];
+          stockByDate[sDateStr].push(s);
         }
       });
 
@@ -345,7 +368,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Revenue (Sales)</p>
-              <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">₹{stats.revenue.toLocaleString()}</h3>
+              <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">₹{stats.revenue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
             </div>
             <div className="p-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl text-emerald-500 dark:text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors duration-300">
               <IndianRupee size={24} strokeWidth={2.5} />
@@ -370,7 +393,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Total Purchases</p>
-              <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-amber-500 transition-colors">₹{stats.totalPurchases.toLocaleString()}</h3>
+              <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-amber-500 transition-colors">₹{stats.totalPurchases.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
             </div>
             <div className="p-3 bg-amber-50 dark:bg-amber-900/30 rounded-xl text-amber-500 dark:text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-300">
               <ShoppingCart size={24} strokeWidth={2.5} />
@@ -382,7 +405,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Total Expenses</p>
-              <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-red-500 transition-colors">₹{stats.totalExpenses.toLocaleString()}</h3>
+              <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-red-500 transition-colors">₹{stats.totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
             </div>
             <div className="p-3 bg-red-50 dark:bg-red-900/30 rounded-xl text-red-500 dark:text-red-400 group-hover:bg-red-500 group-hover:text-white transition-colors duration-300">
               <Receipt size={24} strokeWidth={2.5} />
@@ -411,7 +434,7 @@ export default function Dashboard() {
                   <defs>
                     <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#3b82f6" stopOpacity={theme === 'dark' ? 0.4 : 0.3}/>
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                      <stop offset="95%" stopColor="#3b82f6" fontOpacity={0}/>
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={theme === 'dark' ? '#334155' : '#e2e8f0'} />
@@ -419,7 +442,7 @@ export default function Dashboard() {
                   <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} tickFormatter={(value) => `₹${value}`} dx={-10} />
                   <Tooltip 
                     contentStyle={{ borderRadius: '12px', border: '1px solid ' + (theme === 'dark' ? '#1e293b' : '#f1f5f9'), backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff', color: theme === 'dark' ? '#f8fafc' : '#0f172a', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                    formatter={(value) => [`₹${value.toLocaleString()}`, 'Revenue']}
+                    formatter={(value) => [`₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 'Revenue']}
                   />
                   <Area type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorRevenue)" />
                 </AreaChart>
@@ -473,7 +496,7 @@ export default function Dashboard() {
             <thead className="bg-slate-50/50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-xs tracking-wider">
               <tr>
                 <th className="px-6 py-4">Trader Name</th>
-                <th className="px-6 py-4 text-center">Total Quantity Bought</th>
+                <th className="px-6 py-4 text-center">Transactions</th>
                 <th className="px-6 py-4 text-right">Total Amount Billed (₹)</th>
               </tr>
             </thead>
@@ -490,9 +513,9 @@ export default function Dashboard() {
                 traderSummary.map((trader, index) => (
                   <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-6 py-4 font-semibold text-slate-800 dark:text-slate-100">{trader.name}</td>
-                    <td className="px-6 py-4 text-center font-bold text-slate-700 dark:text-slate-300">{trader.qty} Units</td>
+                    <td className="px-6 py-4 text-center font-bold text-slate-700 dark:text-slate-300">{trader.count} Recorded</td>
                     <td className="px-6 py-4 text-right font-black text-orange-600 dark:text-orange-400">
-                      ₹{trader.amount.toLocaleString()}
+                      ₹{trader.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                   </tr>
                 ))

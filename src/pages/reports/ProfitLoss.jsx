@@ -24,6 +24,28 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
+// Safe paginated fetcher for Supabase > 1000 records
+async function fetchAllRows(queryBuilder) {
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await queryBuilder.range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allData = allData.concat(data);
+    if (data.length < pageSize) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+  return allData;
+}
+
 export default function ProfitLoss() {
   const { user } = useAuth();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -93,31 +115,18 @@ export default function ProfitLoss() {
       const isMultiDayRange = startStr !== endStr;
 
       try {
-        let expQuery = supabase.from('expenses').select('amount').gte('date', startStr).lte('date', endStr);
-        let withQuery = supabase.from('owner_withdrawals').select('amount').gte('date', startStr).lte('date', endStr);
-        let traderTxQuery = supabase.from('trader_transactions').select('purchase_amount').gte('date', startStr).lte('date', endStr);
-        let brandsQuery = supabase.from('brands').select('id, brand_name, selling_price, mrp_price');
-        
-        let stockQuery = supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').lte('date', endStr).order('date', { ascending: true });
-
-        if (user?.id) {
-          expQuery = expQuery.eq('user_id', user.id);
-          withQuery = withQuery.eq('user_id', user.id);
-          stockQuery = stockQuery.eq('user_id', user.id);
-        }
-
         const [
-          { data: expData },
-          { data: withData },
-          { data: traderTxData },
+          expData,
+          withData,
+          traderTxData,
           { data: brandsData },
-          { data: stockData }
+          stockData
         ] = await Promise.all([
-          expQuery,
-          withQuery,
-          traderTxQuery,
-          brandsQuery,
-          stockQuery
+          fetchAllRows(supabase.from('expenses').select('amount, date').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)),
+          fetchAllRows(supabase.from('owner_withdrawals').select('amount, date').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)),
+          fetchAllRows(supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)),
+          supabase.from('brands').select('id, brand_name, selling_price, mrp_price'),
+          fetchAllRows(supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }))
         ]);
 
         let tExpenses = 0;

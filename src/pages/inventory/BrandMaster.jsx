@@ -8,6 +8,28 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
+// Safe paginated fetcher for large dataset queries
+async function fetchAllRows(queryBuilder) {
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await queryBuilder.range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allData = allData.concat(data);
+    if (data.length < pageSize) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+  return allData;
+}
+
 export default function BrandMaster() {
   const { user } = useAuth();
   const [brands, setBrands] = useState([]);
@@ -67,6 +89,7 @@ export default function BrandMaster() {
     const { data: brandsData, error: brandsError } = await supabase
       .from('brands')
       .select('*')
+      .eq('user_id', user.id)
       .order('display_order', { ascending: true })
       .order('brand_name', { ascending: true });
       
@@ -79,18 +102,13 @@ export default function BrandMaster() {
       });
       setBrands(sortedBrands);
 
-      // Rebuild the latest operational prices from recent daily_stock entries with a sensible limit
-      let stockQuery = supabase
-        .from('daily_stock')
-        .select('brand_id, unit_price, unit_mrp, date')
-        .order('date', { ascending: false })
-        .limit(5000);
-
-      if (user?.id) {
-        stockQuery = stockQuery.eq('user_id', user.id);
-      }
-
-      const { data: stockLogs } = await stockQuery;
+      const stockLogs = await fetchAllRows(
+        supabase
+          .from('daily_stock')
+          .select('brand_id, unit_price, unit_mrp, date')
+          .eq('user_id', user.id)
+          .order('date', { ascending: false })
+      );
       
       const pricesMap = {};
       stockLogs?.forEach(s => {
@@ -215,7 +233,6 @@ export default function BrandMaster() {
     setDeleteWarningMessage('');
     setIsDeleteModalOpen(true);
 
-    // Preemptive Daily Stock Relation Check
     const { count, error } = await supabase
       .from('daily_stock')
       .select('*', { count: 'exact', head: true })
@@ -372,7 +389,7 @@ export default function BrandMaster() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Baseline MRP (₹)
+                  MRP (₹)
                 </label>
                 <input 
                   type="number" 
@@ -387,7 +404,7 @@ export default function BrandMaster() {
               
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Baseline Sale Price (₹)
+                  Sale Price (₹)
                 </label>
                 <input 
                   type="number" 
@@ -631,7 +648,7 @@ export default function BrandMaster() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Baseline MRP (₹)
+                    MRP (₹)
                   </label>
                   <input 
                     type="number" 
@@ -644,7 +661,7 @@ export default function BrandMaster() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Baseline Sale Price (₹)
+                    Sale Price (₹)
                   </label>
                   <input 
                     type="number" 

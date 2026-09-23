@@ -16,7 +16,6 @@ const CustomMonthInput = forwardRef(({ value, onClick }, ref) => (
 ));
 CustomMonthInput.displayName = "CustomMonthInput";
 
-// DST-safe date formatting matching standard daily_stock keys
 const formatDateForDB = (dateObj) => {
   if (!dateObj) return '';
   const d = new Date(dateObj);
@@ -26,10 +25,31 @@ const formatDateForDB = (dateObj) => {
   return `${year}-${month}-${day}`;
 };
 
-// Safe financial rounding helper
 const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
+
+// Safe paginated fetcher for large dataset queries
+async function fetchAllRows(queryBuilder) {
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await queryBuilder.range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allData = allData.concat(data);
+    if (data.length < pageSize) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+  return allData;
+}
 
 const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -44,7 +64,7 @@ export default function MagicChart() {
 
   const [syncTrigger, setSyncTrigger] = useState(0);
 
-  // Robust Event-driven Realtime DB Synchronization
+  // Event-driven Realtime DB Synchronization
   useEffect(() => {
     const channel = supabase
       .channel('magicchart-realtime')
@@ -90,11 +110,16 @@ export default function MagicChart() {
       const currEndStr = formatDateForDB(currEndObj);
 
       try {
-        const [ { data: brands }, { data: allStock }, { data: allExpenses }, { data: traderTxData } ] = await Promise.all([
+        const [
+          { data: brands },
+          allStock,
+          allExpenses,
+          traderTxData
+        ] = await Promise.all([
           supabase.from('brands').select('*'),
-          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', currEndStr).order('date', { ascending: true }),
-          supabase.from('expenses').select('amount, date').eq('user_id', user.id).lte('date', currEndStr),
-          supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', currEndStr)
+          fetchAllRows(supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', currEndStr).order('date', { ascending: true })),
+          fetchAllRows(supabase.from('expenses').select('amount, date').eq('user_id', user.id).lte('date', currEndStr)),
+          fetchAllRows(supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', currEndStr))
         ]);
 
         if (!isMounted) return;

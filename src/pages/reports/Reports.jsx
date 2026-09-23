@@ -75,6 +75,28 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
+// Safe paginated fetcher across large historical data
+async function fetchAllRows(queryBuilder) {
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await queryBuilder.range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allData = allData.concat(data);
+    if (data.length < pageSize) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+  return allData;
+}
+
 const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const getOpeningStockMrp = (brands, allStock, currentMonthStartStr) => {
@@ -283,17 +305,17 @@ export default function Reports() {
         const brandMap = {}; brandsData?.forEach(b => brandMap[b.id] = b);
 
         const [ 
-          { data: expData }, 
-          { data: withData }, 
-          { data: stockData }, 
-          { data: allTraderTxData }, 
-          { data: traderRangeTxData } 
+          expData, 
+          withData, 
+          stockData, 
+          allTraderTxData, 
+          traderRangeTxData 
         ] = await Promise.all([
-          supabase.from('expenses').select('*').eq('user_id', user.id).lte('date', endStr).order('date'),
-          supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr).order('date'),
-          supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }),
-          supabase.from('trader_transactions').select('*, traders(trader_name)').eq('user_id', user.id).lte('date', endStr).order('date').order('created_at'),
-          supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', endStr)
+          fetchAllRows(supabase.from('expenses').select('*').eq('user_id', user.id).lte('date', endStr).order('date')),
+          fetchAllRows(supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr).order('date')),
+          fetchAllRows(supabase.from('daily_stock').select('*').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true })),
+          fetchAllRows(supabase.from('trader_transactions').select('*, traders(trader_name)').eq('user_id', user.id).lte('date', endStr).order('date').order('created_at')),
+          fetchAllRows(supabase.from('trader_transactions').select('purchase_amount, date').eq('user_id', user.id).lte('date', endStr))
         ]);
 
         if (!isMounted) return; 
@@ -431,13 +453,15 @@ export default function Reports() {
         });
 
         const netProfit = safeRound(tSales - rangePurchasesSale - tExpenses);
+        const retainedCash = safeRound(tSales - tExpenses - tWithdrawals);
+
         setSummary({ 
           grossProfit: tSales, 
           totalPurchases: rangePurchasesSale, 
           totalExpenses: tExpenses, 
           netProfit: netProfit, 
           totalWithdrawn: tWithdrawals, 
-          retainedCash: safeRound(netProfit - tWithdrawals),
+          retainedCash: retainedCash,
           openingSale: openingSaleVal,
           openingMrp: openingMrpVal,
           closingSale: closingSaleVal,
@@ -622,7 +646,7 @@ export default function Reports() {
             }
 
             const endDayRecords = stockByDateStrAll[endStr] || [];
-            let computedClosingMrp = 0;
+            let totalEndMrpValuation = 0;
             let anyClosingEnteredForEnd = false;
             endDayRecords.forEach(s => {
               if (s.closing_balance !== null && s.closing_balance !== undefined) {
@@ -630,10 +654,10 @@ export default function Reports() {
                 const brand = brandMap[s.brand_id];
                 const clQty = parseInt(s.closing_balance, 10) || 0;
                 const mrp = parseFloat(s.unit_mrp || brand?.mrp_price || 0);
-                computedClosingMrp = safeRound(computedClosingMrp + (clQty * mrp));
+                totalEndMrpValuation = safeRound(totalEndMrpValuation + (clQty * mrp));
               }
             });
-            const finalClosingMrp = anyClosingEnteredForEnd ? computedClosingMrp : 0;
+            const finalClosingMrp = anyClosingEnteredForEnd ? totalEndMrpValuation : 0;
 
             setMagicChartData({
               box1: currMonthData.sales || 0,
@@ -664,7 +688,59 @@ export default function Reports() {
   }, [startDate, endDate, showMagicChart, user, refreshTrigger]);
 
   const exportToCSV = () => {
-    window.alert("Exporting CSV is optimized for specific fields. PDF is recommended for full multi-page reporting.");
+    let csvContent = '\uFEFF'; // UTF-8 BOM for Excel encoding
+
+    // Section 1: Summary
+    csvContent += '1. FINANCIAL SUMMARY OVERVIEW\r\n';
+    csvContent += `Reporting Period,"${startDate.toLocaleDateString('en-IN')} TO ${endDate.toLocaleDateString('en-IN')}"\r\n`;
+    csvContent += `Gross Profit (Sales),${summary.grossProfit}\r\n`;
+    csvContent += `Total Purchases,${summary.totalPurchases}\r\n`;
+    csvContent += `Business Expenses,${summary.totalExpenses}\r\n`;
+    csvContent += `Net Profit / Loss,${summary.netProfit}\r\n`;
+    csvContent += `Online Collections,${summary.totalWithdrawn}\r\n`;
+    csvContent += `Cash Left in Hand,${summary.retainedCash}\r\n\r\n`;
+
+    // Section 2: Bottles Sold
+    csvContent += '2. ITEMIZED BOTTLES SOLD BREAKDOWN\r\n';
+    csvContent += 'Brand Name,Bottle Size,Unit Price (Rs),Qty Sold,Total Revenue (Rs)\r\n';
+    salesList.forEach(item => {
+      csvContent += `"${item.brand_name}","${item.bottle_size}",${item.selling_price},${item.total_qty},${item.total_revenue}\r\n`;
+    });
+    csvContent += `TOTALS,,,${salesTotalQty},${salesTotalRev}\r\n\r\n`;
+
+    // Section 3: Expenses
+    csvContent += '3. BUSINESS EXPENSES LEDGER\r\n';
+    csvContent += 'Date,Description,Amount (Rs)\r\n';
+    expenseList.forEach(e => {
+      csvContent += `"${new Date(e.date).toLocaleDateString('en-IN')}","${e.description}",${e.amount}\r\n`;
+    });
+    csvContent += `TOTAL EXPENSES,,${summary.totalExpenses}\r\n\r\n`;
+
+    // Section 4: Online Collections
+    csvContent += '4. ONLINE COLLECTIONS LEDGER\r\n';
+    csvContent += 'Date,Description,Mode,Amount (Rs)\r\n';
+    collectionList.forEach(c => {
+      csvContent += `"${new Date(c.date).toLocaleDateString('en-IN')}","${c.description}","${c.withdrawal_mode}",${c.amount}\r\n`;
+    });
+    csvContent += `TOTAL COLLECTIONS,,,${summary.totalWithdrawn}\r\n\r\n`;
+
+    // Section 5: Trader Ledger
+    csvContent += '5. TRADER TRANSACTIONS LEDGER\r\n';
+    csvContent += 'Date,Trader Name,Purchase Amount (Rs),Paid Amount (Rs),Remaining Balance (Rs)\r\n';
+    traderTransactions.forEach(tx => {
+      csvContent += `"${new Date(tx.date).toLocaleDateString('en-IN')}","${tx.traders?.trader_name || 'N/A'}",${tx.purchase_amount},${tx.paid_amount},${tx.remaining_amount}\r\n`;
+    });
+    csvContent += `TRADER TOTALS,,${traderTotalPurchases},${traderTotalPaid},${traderTotalRemaining}\r\n`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Nexus_Diary_Report_${formatDateForDB(startDate)}_to_${formatDateForDB(endDate)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setIsExportMenuOpen(false);
   };
 
   const printReport = () => { window.print(); setIsExportMenuOpen(false); };

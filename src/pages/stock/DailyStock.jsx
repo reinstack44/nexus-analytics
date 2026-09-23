@@ -18,6 +18,33 @@ const formatDisplayDate = (dateObj) => {
   return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
 };
 
+// Safe financial rounding helper
+const safeRound = (value) => {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
+// Scalable fetcher across large historical data
+async function fetchAllRows(queryBuilder) {
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await queryBuilder.range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allData = allData.concat(data);
+    if (data.length < pageSize) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+  return allData;
+}
+
 // Fixed scale helper to prevent decimal bottle units
 const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedMrp) => {
   const currentSum = batches.reduce((acc, b) => acc + b.qty, 0);
@@ -38,11 +65,6 @@ const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedM
     }
   }
   return result.filter(b => b.qty > 0);
-};
-
-// Safe financial rounding helper
-const safeRound = (value) => {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
 const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
@@ -78,7 +100,6 @@ const recalculateRow = (row) => {
   let cAmt = 0; 
   let cMrpAmt = 0;
 
-  // Process both active and depleted (qty === 0) batches for clean user visual tracking
   let queue = Array.isArray(row.starting_batches) ? row.starting_batches.map(b => ({ ...b })) : [];
   
   if (parseInt(row.purchase_qty, 10) > 0) {
@@ -93,7 +114,6 @@ const recalculateRow = (row) => {
     sQty = Math.max(0, parseInt(row.opening_balance, 10) - parseInt(row.closing_balance, 10));
     let salesRemaining = sQty;
 
-    // Deduct sales only from batches with available quantities (qty > 0)
     while (salesRemaining > 0 && queue.some(b => b.qty > 0)) {
       const activeBatch = queue.find(b => b.qty > 0);
       if (!activeBatch) break;
@@ -102,7 +122,7 @@ const recalculateRow = (row) => {
         sAmt = safeRound(sAmt + (activeBatch.qty * activeBatch.price));
         sMrpAmt = safeRound(sMrpAmt + (activeBatch.qty * activeBatch.mrp));
         salesRemaining -= activeBatch.qty;
-        activeBatch.qty = 0; // Mark depleted instead of completely shifting to keep the visual trace
+        activeBatch.qty = 0;
       } else {
         sAmt = safeRound(sAmt + (salesRemaining * activeBatch.price));
         sMrpAmt = safeRound(sMrpAmt + (salesRemaining * activeBatch.mrp));
@@ -192,6 +212,29 @@ export default function DailyStock() {
   const closeConfirm = () => setConfirmModal(prev => ({ ...prev, isOpen: false }));
   const closeAlert = () => setAlertModal(prev => ({ ...prev, isOpen: false }));
 
+  // Realtime database listener across key tables
+  useEffect(() => {
+    const channel = supabase
+      .channel('dailystock-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_stock' }, () => {
+        if (!isDirtyRef.current) setRefreshTrigger(prev => prev + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => {
+        if (!isDirtyRef.current) setRefreshTrigger(prev => prev + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => {
+        if (!isDirtyRef.current) setRefreshTrigger(prev => prev + 1);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_withdrawals' }, () => {
+        if (!isDirtyRef.current) setRefreshTrigger(prev => prev + 1);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const handleCancelHolidayFromModal = async (dateStr) => {
     setIsSaving(true);
     await supabase.from('holidays').delete().eq('user_id', user.id).eq('date', dateStr);
@@ -229,7 +272,6 @@ export default function DailyStock() {
   
   const isAnyDateFilled = stockRows.some(row => row.closing_balance !== '' && row.closing_balance !== null);
 
-  // UTC redirection helper
   const getRedirectedDate = useCallback((date) => {
     if (!date) return null;
     const dateStr = formatDateForDB(date);
@@ -246,7 +288,6 @@ export default function DailyStock() {
     return lockedRanges.some(r => r.end_date === endStr);
   }, [lockedRanges, startDate, endDate, formatDateForDB]);
 
-  // DATE HANDLERS
   const handleStartDateChange = (date) => {
     const redirected = getRedirectedDate(date);
     const dateStr = formatDateForDB(redirected || date);
@@ -325,15 +366,6 @@ export default function DailyStock() {
     });
   };
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!isDirtyRef.current && !isSaving && !isSubmitting) {
-        setRefreshTrigger(prev => prev + 1);
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [isSaving, isSubmitting]);
-
   // SECURED CALENDAR & RETROSPECTIVE CHRONOLOGICAL PIPELINE HANDLER
   useEffect(() => {
     let isMounted = true;
@@ -343,12 +375,12 @@ export default function DailyStock() {
       try {
         const [
           { data: holidayData },
-          { data: stockEntries },
+          stockEntries,
           { data: activeBrands },
           { data: rangeData }
         ] = await Promise.all([
           supabase.from('holidays').select('date').eq('user_id', user.id),
-          supabase.from('daily_stock').select('date, closing_balance').eq('user_id', user.id),
+          fetchAllRows(supabase.from('daily_stock').select('date, closing_balance').eq('user_id', user.id)),
           supabase.from('brands').select('id'),
           supabase.from('locked_ranges').select('start_date, end_date').eq('user_id', user.id)
         ]);
@@ -360,19 +392,16 @@ export default function DailyStock() {
           if (rangeData) setLockedRanges(rangeData);
 
           const dateCounts = {};
-          
           stockEntries?.forEach(entry => {
             if (entry.closing_balance !== null && entry.closing_balance !== undefined) {
               dateCounts[entry.date] = (dateCounts[entry.date] || 0) + 1;
             }
           });
 
-          // A date is colored green ONLY if all active brands have a non-null saved closing balance
           const fullyFilledDates = Object.keys(dateCounts).filter(dateStr => dateCounts[dateStr] >= activeBrandsCount);
           setFilledDates(fullyFilledDates);
         }
 
-        // Execute the chronological verification asynchronously within this flow to avoid eslint warning
         if (!customRangeMode) {
           const { data: firstRec } = await supabase
             .from('daily_stock')
@@ -498,12 +527,12 @@ export default function DailyStock() {
 
       const [
         { data: brandsData },
-        { data: allHistoricalStock },
+        allHistoricalStock,
         { data: expData },
         { data: collData }
       ] = await Promise.all([
         supabase.from('brands').select('id, brand_name, bottle_size, selling_price, mrp_price').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
-        supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true }).limit(50000),
+        fetchAllRows(supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true })),
         supabase.from('expenses').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
         supabase.from('owner_withdrawals').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
       ]);
@@ -533,11 +562,9 @@ export default function DailyStock() {
                 const dbPrice = parseFloat(s.unit_price);
                 const dbMrp = parseFloat(s.unit_mrp);
 
-                // Determine if the saved prices are custom overrides (different from baseline master)
                 const isCustomPrice = dbPrice > 0 && dbPrice !== parseFloat(brand.selling_price);
                 const isCustomMrp = dbMrp > 0 && dbMrp !== parseFloat(brand.mrp_price);
 
-                // Update active carry-forward only on actual purchases OR if manual price changes happened
                 if (dbPrice > 0) {
                   if (isCustomPrice || pQty > 0) {
                     lastActivePrice[s.brand_id] = dbPrice;
@@ -556,7 +583,6 @@ export default function DailyStock() {
                 const pPrice = parseFloat(s.unit_price) || lastActivePrice[s.brand_id] || parseFloat(brand.selling_price) || 0;
                 const pMrp = parseFloat(s.unit_mrp) || lastActiveMrp[s.brand_id] || parseFloat(brand.mrp_price) || 0;
 
-                // Push new batch only if transaction has actual positive purchase quantity
                 if (pQty > 0) {
                     queue.push({ qty: pQty, price: pPrice, mrp: pMrp });
                 }
@@ -565,14 +591,13 @@ export default function DailyStock() {
                 if (clBal !== null) {
                     let sales = Math.max(0, opBal - clBal);
                     
-                    // Deduct sales only from batches with available quantities (qty > 0)
                     while (sales > 0 && queue.some(b => b.qty > 0)) {
                       const activeBatch = queue.find(b => b.qty > 0);
                       if (!activeBatch) break;
 
                       if (activeBatch.qty <= sales) {
                         sales -= activeBatch.qty;
-                        activeBatch.qty = 0; // Mark depleted instead of completely shifting to keep the visual trace
+                        activeBatch.qty = 0;
                       } else {
                         activeBatch.qty -= sales;
                         sales = 0;
@@ -594,7 +619,6 @@ export default function DailyStock() {
           if (lastActivePrice[brand.id] !== undefined && lastActivePrice[brand.id] > 0) {
             carriedPrice = lastActivePrice[brand.id];
           } else if (starting_batches.length > 0) {
-            // Read price from the first available batch (even if qty is 0 to preserve rates)
             carriedPrice = starting_batches[0].price;
           }
             
@@ -602,7 +626,6 @@ export default function DailyStock() {
           if (lastActiveMrp[brand.id] !== undefined && lastActiveMrp[brand.id] > 0) {
             carriedMrp = lastActiveMrp[brand.id];
           } else if (starting_batches.length > 0) {
-            // Read MRP from the first available batch (even if qty is 0 to preserve rates)
             carriedMrp = starting_batches[0].mrp;
           }
 
@@ -1132,7 +1155,6 @@ export default function DailyStock() {
         .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; }
         .react-datepicker__triangle { display: none !important; }
         
-        /* State Indicators */
         .react-datepicker__day--highlighted-holiday { background-color: #f97316 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
         .react-datepicker__day--highlighted-filled { background-color: #10b981 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
         .react-datepicker__day--highlighted-combined { background-color: #6366f1 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
@@ -1417,7 +1439,6 @@ export default function DailyStock() {
                             <span className="font-semibold uppercase tracking-wider text-[10px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded w-fit">{row.bottle_size}</span>
                             <div className="flex flex-col gap-1 bg-slate-50/50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-800/80 mt-1">
                               {(() => {
-                                // Assemble temporary batch queue for dynamic left-qty calculation
                                 const activeBatches = [];
                                 
                                 if (row.starting_batches && row.starting_batches.length > 0) {
@@ -1450,16 +1471,14 @@ export default function DailyStock() {
                                   });
                                 }
 
-                                // Distribute Closing Balance from newest to oldest batch
                                 if (row.closing_balance !== '' && row.closing_balance !== null) {
-                                  let remainingStock = parseInt(row.closing_balance) || 0;
+                                  let remainingStock = parseInt(row.closing_balance, 10) || 0;
                                   for (let i = activeBatches.length - 1; i >= 0; i--) {
                                     const allocated = Math.min(activeBatches[i].qty, remainingStock);
                                     activeBatches[i].left = allocated;
                                     remainingStock -= allocated;
                                   }
                                 } else {
-                                  // If closing balance isn't inputted yet, default 'left' to the starting quantity
                                   activeBatches.forEach(b => { b.left = b.qty; });
                                 }
 
@@ -1474,7 +1493,6 @@ export default function DailyStock() {
                                 return activeBatches.map((batch, idx) => {
                                   const isStockZero = batch.left === 0;
                                   
-                                  // Theme-fluid responsive status capsules
                                   const statusBadgeClass = isStockZero
                                     ? "bg-rose-50/80 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border-rose-200/40 dark:border-rose-900/20"
                                     : "bg-amber-50/80 dark:bg-amber-950/10 text-amber-600 dark:text-amber-400 border-amber-200/40 dark:border-amber-900/20";
@@ -1484,7 +1502,6 @@ export default function DailyStock() {
                                       key={`batch-row-${idx}`} 
                                       className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5 ${idx > 0 ? 'border-t border-slate-100 dark:border-slate-800/40' : ''} ${batch.isNew ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-600 dark:text-slate-300'}`}
                                     >
-                                      {/* Left side: Fully detailed responsive layout (Ellipsis removed) */}
                                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
                                         <span className="font-extrabold text-slate-800 dark:text-slate-100 shrink-0">{batch.label}:</span>
                                         <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">{batch.qty} Qty</span>
@@ -1498,7 +1515,6 @@ export default function DailyStock() {
                                         </span>
                                       </div>
                                       
-                                      {/* Right side: Sleek compact status badge with no-wrap constraint */}
                                       <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase border shrink-0 whitespace-nowrap transition-all ${statusBadgeClass}`}>
                                         {batch.left} left
                                       </span>
@@ -1905,7 +1921,7 @@ export default function DailyStock() {
                                 </td>
                               )}
                               <td className={`px-6 py-4 text-right font-bold ${popupTab === 'expense' ? 'text-red-600 dark:text-red-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
-                                  ₹{parseFloat(row.amount || 0).toLocaleString()}
+                                  ₹{parseFloat(row.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </td>
                                 <td className="px-4 py-4 text-center">
                                   <div className="flex justify-center gap-2">

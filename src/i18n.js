@@ -18,6 +18,7 @@ const resources = {
         profitloss: "Profit & Loss",
         magicChart: "Magic Chart",
         reports: "Reports",
+        settings: "Settings",
         logout: "Logout System"
       },
       header: {
@@ -27,6 +28,23 @@ const resources = {
         goodMorning: "Good Morning ☀️",
         goodAfternoon: "Good Afternoon 🌤️",
         goodEvening: "Good Evening 🔮"
+      },
+      settings: {
+        title: "Account & System Settings",
+        description: "Manage your system preferences and data lifecycle.",
+        dangerZone: "Danger Zone",
+        dangerZoneDesc: "Irreversible actions regarding your account and operational data.",
+        resetTitle: "Factory Reset & Wipe All Data",
+        resetDesc: "Permanently delete all brands, daily stock, expenses, trader accounts, price histories, and ledger records for your account.",
+        resetButton: "Reset & Wipe Data",
+        modalTitle: "Confirm Complete Data Wipe",
+        modalWarning: "This action is permanent and cannot be undone. All your inventory, sales, expenses, and ledgers will be permanently deleted from the cloud database.",
+        passwordLabel: "Enter your account password to confirm",
+        passwordPlaceholder: "••••••••",
+        wipeButton: "Permanently Wipe Everything",
+        wiping: "Wiping Database...",
+        successMsg: "All account data has been successfully deleted.",
+        wrongPassword: "Authentication failed: Password does not match."
       },
       login: {
         logInTitle: "Log In",
@@ -254,7 +272,25 @@ const resources = {
         profitloss: "लाभ और हानि",
         magicChart: "मैजिक चार्ट (Rakaana)",
         reports: "रिपोर्ट्स",
+        settings: "सेटिंग्स",
         logout: "लॉगआउट करें"
+      },
+      settings: {
+        title: "खाता और सिस्टम सेटिंग्स",
+        description: "अपनी सिस्टम प्राथमिकताओं और डेटा का प्रबंधन करें।",
+        dangerZone: "डेंजर ज़ोन (Danger Zone)",
+        dangerZoneDesc: "अपरिवर्तनीय क्रियाएं जो आपके पूरे डेटा को प्रभावित करती हैं।",
+        resetTitle: "फ़ैक्टरी रीसेट और सारा डेटा हटाएं",
+        resetDesc: "अपने खाते के सभी ब्रांड, दैनिक स्टॉक, खर्च, व्यापारी खाते, मूल्य इतिहास और लेजर रिकॉर्ड हमेशा के लिए हटाएं।",
+        resetButton: "रीसेट और डेटा हटाएं",
+        modalTitle: "पूरा डेटा हटाने की पुष्टि करें",
+        modalWarning: "यह क्रिया स्थायी है। आपका पूरा इन्वेंटरी, बिक्री, खर्च और लेजर डेटा डेटाबेस से हमेशा के लिए हटा दिया जाएगा।",
+        passwordLabel: "पुष्टि के लिए अपना खाता पासवर्ड दर्ज करें",
+        passwordPlaceholder: "••••••••",
+        wipeButton: "स्थायी रूप से सब कुछ हटाएं",
+        wiping: "डेटा हटाया जा रहा है...",
+        successMsg: "आपके खाते का सारा डेटा सफलतापूर्वक हटा दिया गया है।",
+        wrongPassword: "प्रमाणीकरण विफल: पासवर्ड सही नहीं है।"
       },
       header: {
         ownerPortal: "मालिक, आपका स्वागत है..",
@@ -490,7 +526,25 @@ const resources = {
         profitloss: "नफा आणि तोटा",
         magicChart: "मॅजिक चार्ट (Rakaana)",
         reports: "अहवाल",
+        settings: "सेटिंग्ज",
         logout: "लॉगआउट करा"
+      },
+      settings: {
+        title: "खाते आणि सिस्टीम सेटिंग्ज",
+        description: "तुमच्या सिस्टीम प्राधान्यांचे आणि डेटाचे व्यवस्थापन करा.",
+        dangerZone: "धोकादायक विभाग (Danger Zone)",
+        dangerZoneDesc: "तुमच्या संपूर्ण डेटावर परिणाम करणाऱ्या अपरिवर्तनीय कृती.",
+        resetTitle: "फॅक्टरी रीसेट आणि संपूर्ण डेटा हटवा",
+        resetDesc: "तुमच्या खात्यातील सर्व ब्रँड, दैनिक स्टॉक, खर्च, व्यापारी खाती, किंमत इतिहास आणि खतावणी नोंदी कायमच्या हटवा.",
+        resetButton: "रीसेट आणि डेटा हटवा",
+        modalTitle: "संपूर्ण डेटा हटवण्याची पुष्टी करा",
+        modalWarning: "ही कृती कायमस्वरूपी आहे. तुमचा संपूर्ण इन्व्हेंटरी, विक्री, खर्च आणि खतावणी डेटा डेटाबेसमधून कायमचा काढून टाकला जाईल.",
+        passwordLabel: "पुष्टी करण्यासाठी तुमच्या खात्याचा पासवर्ड टाका",
+        passwordPlaceholder: "••••••••",
+        wipeButton: "कायमस्वरूपी सर्व काही हटवा",
+        wiping: "डेटा हटवला जात आहे...",
+        successMsg: "तुमच्या खात्यातील सर्व डेटा यशस्वीरित्या हटवला गेला आहे.",
+        wrongPassword: "प्रमाणीकरण अयशस्वी: पासवर्ड जुळत नाही."
       },
       header: {
         ownerPortal: "मालक, आपले स्वागत आहे..",
@@ -606,7 +660,7 @@ const resources = {
         description: "रेकॉर्ड काढण्यासाठी बहु-पृष्ठ मुद्रण लेआउट.",
         documentExportButton: "दस्तऐवज निर्यात",
         printPdfButton: "पीडीएफ अहवाल मुद्रित करा",
-        exportExcelButton: "एक्सेल सीएसव्ही निर्यात करा",
+        exportExcelButton: "एक्सेल सीएसवी निर्यात करा",
         printTitle: "एलिक्सिर स्टोअर",
         printSubtitle: "एकत्रित आर्थिक आणि विक्री अहवाल",
         reportingPeriod: "अहवाल कालावधी:",
@@ -716,7 +770,7 @@ i18n
   .use(initReactI18next)
   .init({
     resources,
-    lng: localStorage.getItem('app_lang') || 'en', // Default language fallback
+    lng: localStorage.getItem('app_lang') || 'en',
     fallbackLng: 'en',
     interpolation: {
       escapeValue: false 

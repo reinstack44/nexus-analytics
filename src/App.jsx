@@ -9,6 +9,7 @@ import DailyStock from './pages/stock/DailyStock';
 import ProfitLoss from './pages/reports/ProfitLoss'; 
 import Reports from './pages/reports/Reports';
 import MagicChart from './pages/reports/MagicChart';
+import Settings from './pages/settings/Settings';
 
 function App() {
   const { user } = useAuth();
@@ -28,6 +29,7 @@ function App() {
           <Route path="profit-loss" element={<ProfitLoss />} />
           <Route path="reports" element={<Reports />} />
           <Route path="magic-chart" element={<MagicChart />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
 
         {/* Wildcard Fallback: Catches invalid paths and redirects back to dashboard */}

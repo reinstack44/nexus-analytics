@@ -4,7 +4,7 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext'; 
 import { useTranslation } from 'react-i18next'; 
-import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, Wand2 } from 'lucide-react';
+import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, Wand2, Settings } from 'lucide-react';
 
 // IMPORT THE LOGO HERE - Updated to .png
 import nxDiaryLogo from '../../assets/nx diary logo.png';
@@ -58,6 +58,7 @@ export default function AppLayout() {
     { name: t('sidebar.profitloss', 'Profit & Loss'), path: '/profit-loss', icon: TrendingUp },
     { name: t('sidebar.magicChart', 'Magic Chart'), path: '/magic-chart', icon: Wand2 },
     { name: t('sidebar.reports', 'Reports'), path: '/reports', icon: FileText }, 
+    { name: t('sidebar.settings', 'Settings'), path: '/settings', icon: Settings },
   ];
 
   return (
