@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useModal } from '../../context/ModalContext';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -10,6 +11,7 @@ import {
 
 export default function Settings() {
   const { user } = useAuth();
+  const { showAlert } = useModal();
   const { t } = useTranslation();
   const navigate = useNavigate();
 
@@ -56,6 +58,28 @@ export default function Settings() {
     };
   }, [fetchSubscription]);
 
+  // SMART UPGRADE / RENEW CLICK HANDLER
+  const handleUpgradeClick = () => {
+    const isSubActive = subscription && subscription.status === 'active' && new Date(subscription.current_period_end) > new Date();
+
+    if (isSubActive && subscription.plan_type === 'yearly') {
+      const expiryFormatted = new Date(subscription.current_period_end).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+      showAlert({
+        title: "Annual Plan Already Active",
+        message: `You are already subscribed to our highest tier Annual Enterprise Plan (Valid until ${expiryFormatted}). Further upgrades or renewals are locked to prevent accidental double payments.`,
+        type: "success"
+      });
+      return;
+    }
+
+    // Monthly active or expired users navigate to subscription screen
+    navigate('/subscription');
+  };
+
   const handleCancelSubscription = async () => {
     setCancellingSub(true);
     try {
@@ -76,7 +100,7 @@ export default function Settings() {
         navigate('/subscription');
       }, 1500);
     } catch (err) {
-      alert('Cancellation failed: ' + err.message);
+      showAlert({ title: "Cancellation Failed", message: err.message, type: "error" });
     } finally {
       setCancellingSub(false);
     }
@@ -106,7 +130,6 @@ export default function Settings() {
     setErrorMessage('');
 
     try {
-      // 1. Re-authenticate user with entered password
       const { error: authError } = await supabase.auth.signInWithPassword({
         email: user.email,
         password: password,
@@ -118,7 +141,6 @@ export default function Settings() {
         return;
       }
 
-      // 2. Cascade delete all user-scoped tables
       await Promise.all([
         supabase.from('daily_stock').delete().eq('user_id', user.id),
         supabase.from('expenses').delete().eq('user_id', user.id),
@@ -131,7 +153,6 @@ export default function Settings() {
         supabase.from('brands').delete().eq('user_id', user.id)
       ]);
 
-      // 3. Clear transient storage
       sessionStorage.removeItem('global_startDate');
       sessionStorage.removeItem('global_endDate');
       sessionStorage.removeItem('dailyStock_startDate');
@@ -173,7 +194,7 @@ export default function Settings() {
             <Lock size={20} />
           </div>
           <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active User</p>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{t('settings.activeUser', 'Active User')}</p>
             <h4 className="text-sm font-bold text-slate-800 dark:text-slate-100">{user?.email}</h4>
           </div>
         </div>
@@ -212,11 +233,11 @@ export default function Settings() {
 
           <button
             type="button"
-            onClick={() => navigate('/subscription')}
+            onClick={handleUpgradeClick}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 w-fit cursor-pointer"
           >
             <Sparkles size={14} />
-            {t('settings.renewButton', 'Upgrade / Renew Plan')}
+            {isSubActive && subscription.plan_type === 'monthly' ? 'Upgrade to Annual Plan' : t('settings.renewButton', 'Upgrade / Renew Plan')}
           </button>
         </div>
 

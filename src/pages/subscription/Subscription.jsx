@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useModal } from '../../context/ModalContext';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, Check, Sparkles, Zap, Lock, LogOut, ArrowRight, Loader2 } from 'lucide-react';
+import { ShieldCheck, Check, Sparkles, Zap, Lock, LogOut, ArrowRight, Loader2, ArrowUpCircle } from 'lucide-react';
 import logoImg from '../../assets/nx diary logo.png';
 
 export default function Subscription() {
@@ -27,6 +27,10 @@ export default function Subscription() {
 
       if (data && new Date(data.current_period_end) > new Date() && data.status === 'active') {
         setActiveSub(data);
+        // If monthly user visits, preselect yearly for upgrade
+        if (data.plan_type === 'monthly') {
+          setSelectedPlan('yearly');
+        }
       } else {
         setActiveSub(null);
       }
@@ -39,26 +43,36 @@ export default function Subscription() {
     navigate('/login');
   };
 
+  const isMonthlyActive = activeSub && activeSub.status === 'active' && activeSub.plan_type === 'monthly' && new Date(activeSub.current_period_end) > new Date();
+  const isYearlyActive = activeSub && activeSub.status === 'active' && activeSub.plan_type === 'yearly' && new Date(activeSub.current_period_end) > new Date();
+
   const handleSubscribe = async () => {
-    // 1. ACTIVE PLAN GUARD: Agar pehle se plan active hai toh popup dikhao aur gateway block karo
-    if (activeSub && new Date(activeSub.current_period_end) > new Date() && activeSub.status === 'active') {
-      const activePlanName = activeSub.plan_type === 'monthly' ? 'Monthly Pro Plan (₹1,499)' : 'Annual Enterprise Plan (₹14,999)';
+    // 1. YEARLY GUARD: Block if Annual plan is already active
+    if (isYearlyActive) {
       const expiryDate = new Date(activeSub.current_period_end).toLocaleDateString('en-IN', {
         day: '2-digit',
         month: 'short',
         year: 'numeric'
       });
-
       showAlert({
-        title: "Active Plan Detected",
-        message: `You already have an active ${activePlanName} which is valid until ${expiryDate}. No further payment is required.`,
+        title: "Annual Plan Active",
+        message: `You already have the highest tier Annual Enterprise Plan (Valid until ${expiryDate}). No further payment or upgrade is required.`,
         type: "success",
         onClose: () => navigate('/', { replace: true })
       });
       return;
     }
 
-    // 2. Otherwise open Razorpay standard gateway
+    // 2. MONTHLY DUPLICATE GUARD: Prevent buying monthly again if already monthly active
+    if (isMonthlyActive && selectedPlan === 'monthly') {
+      showAlert({
+        title: "Monthly Plan Already Active",
+        message: "You already have an active Monthly Pro Plan. To upgrade to the Annual plan, please select the Annual Enterprise Plan card.",
+        type: "warning"
+      });
+      return;
+    }
+
     if (!window.Razorpay) {
       showAlert({ title: "SDK Error", message: "Razorpay SDK failed to load. Please check your internet connection.", type: "error" });
       return;
@@ -78,7 +92,7 @@ export default function Subscription() {
       amount: amountInPaise,
       currency: 'INR',
       name: 'Nexus Diary',
-      description: `Subscription: ${planName}`,
+      description: isMonthlyActive ? `Upgrade to: ${planName}` : `Subscription: ${planName}`,
       image: logoImg,
       prefill: {
         email: user?.email || '',
@@ -87,6 +101,7 @@ export default function Subscription() {
       notes: {
         plan_type: selectedPlan,
         user_id: user?.id,
+        is_upgrade: isMonthlyActive ? 'true' : 'false'
       },
       theme: {
         color: '#2563eb',
@@ -101,11 +116,19 @@ export default function Subscription() {
       handler: async function (response) {
         try {
           const startDate = new Date();
-          const endDate = new Date();
-          if (isMonthly) {
-            endDate.setMonth(endDate.getMonth() + 1);
-          } else {
+          let endDate = new Date();
+
+          // If monthly user upgraded to yearly, extend from current monthly expiry
+          if (isMonthlyActive && activeSub?.current_period_end) {
+            const currentExpiry = new Date(activeSub.current_period_end);
+            endDate = currentExpiry > startDate ? currentExpiry : startDate;
             endDate.setFullYear(endDate.getFullYear() + 1);
+          } else {
+            if (isMonthly) {
+              endDate.setMonth(endDate.getMonth() + 1);
+            } else {
+              endDate.setFullYear(endDate.getFullYear() + 1);
+            }
           }
 
           const subscriptionPayload = {
@@ -126,13 +149,13 @@ export default function Subscription() {
           if (error) throw error;
 
           showAlert({
-            title: "Payment Successful",
-            message: `${planName} is now active on your account.`,
+            title: isMonthlyActive ? "Upgrade Successful!" : "Payment Successful!",
+            message: `Your ${planName} is now active and extended until ${endDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}.`,
             type: "success",
             onClose: () => navigate('/', { replace: true })
           });
         } catch (err) {
-          showAlert({ title: "Activation Failed", message: "Payment succeeded but activating account failed: " + err.message, type: "error" });
+          showAlert({ title: "Activation Failed", message: "Payment succeeded but activating plan failed: " + err.message, type: "error" });
         } finally {
           setLoading(false);
         }
@@ -146,8 +169,6 @@ export default function Subscription() {
     });
     rzp.open();
   };
-
-  const isCurrentPlanActive = activeSub && new Date(activeSub.current_period_end) > new Date() && activeSub.status === 'active';
 
   return (
     <div className="min-h-screen bg-[#030510] text-slate-100 flex flex-col justify-between p-4 sm:p-8 relative overflow-hidden font-sans">
@@ -178,29 +199,47 @@ export default function Subscription() {
       </div>
 
       {/* Pricing Header */}
-      <div className="max-w-4xl mx-auto text-center my-8 z-10">
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-extrabold uppercase tracking-widest mb-4">
-          <Sparkles size={14} /> {t('subscription.premiumMembership', 'Premium Membership')}
+      <div className="max-w-4xl mx-auto text-center my-6 z-10">
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-extrabold uppercase tracking-widest mb-3">
+          <Sparkles size={14} /> {isMonthlyActive ? 'Plan Upgrade Center' : t('subscription.premiumMembership', 'Premium Membership')}
         </div>
+        
         <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-tight">
-          {t('subscription.title', 'Select a Plan to Access')} <br />
-          <span className="bg-linear-to-r from-blue-400 via-indigo-300 to-purple-400 bg-clip-text text-transparent">
-            {t('subscription.subtitle', 'Your Business Intelligence')}
-          </span>
+          {isMonthlyActive ? (
+            <>
+              Upgrade to Annual Plan & <br />
+              <span className="bg-linear-to-r from-emerald-400 via-teal-300 to-blue-400 bg-clip-text text-transparent">
+                Save ₹2,989 per Year
+              </span>
+            </>
+          ) : (
+            <>
+              {t('subscription.title', 'Select a Plan to Access')} <br />
+              <span className="bg-linear-to-r from-blue-400 via-indigo-300 to-purple-400 bg-clip-text text-transparent">
+                {t('subscription.subtitle', 'Your Business Intelligence')}
+              </span>
+            </>
+          )}
         </h1>
-        <p className="text-slate-400 text-sm sm:text-base mt-3 max-w-xl mx-auto">
-          {t('subscription.description', 'Get unrestricted access to Daily Stock reconciliations, FIFO price tracking, Official Reports, and Magic Charts.')}
+
+        <p className="text-slate-400 text-sm sm:text-base mt-2 max-w-xl mx-auto">
+          {isMonthlyActive 
+            ? 'Upgrade your current active monthly plan to the Annual Enterprise tier. Unused monthly balance seamlessly extends your 1-year timeline.'
+            : t('subscription.description', 'Get unrestricted access to Daily Stock reconciliations, FIFO price tracking, Official Reports, and Magic Charts.')
+          }
         </p>
 
-        {isCurrentPlanActive && (
-          <div className="mt-6 p-4 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 text-xs font-bold inline-flex items-center gap-2">
-            <ShieldCheck size={18} /> {t('subscription.activeUntil', 'Active subscription valid until')} {new Date(activeSub.current_period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-            <button
-              onClick={() => navigate('/')}
-              className="ml-3 underline hover:text-emerald-100 cursor-pointer"
-            >
-              {t('subscription.goToDashboard', 'Go to Dashboard →')}
-            </button>
+        {isMonthlyActive && (
+          <div className="mt-4 p-3.5 rounded-2xl bg-blue-950/40 border border-blue-800/60 text-blue-300 text-xs font-bold inline-flex items-center gap-2">
+            <ShieldCheck size={18} className="text-blue-400 shrink-0" /> 
+            <span>Current Active: <strong>Monthly Pro Plan</strong> (Valid until {new Date(activeSub.current_period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })})</span>
+          </div>
+        )}
+
+        {isYearlyActive && (
+          <div className="mt-4 p-3.5 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 text-xs font-bold inline-flex items-center gap-2">
+            <ShieldCheck size={18} className="text-emerald-400 shrink-0" /> 
+            <span>Highest Tier Active: <strong>Annual Enterprise Plan</strong> (Valid until {new Date(activeSub.current_period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })})</span>
           </div>
         )}
       </div>
@@ -208,22 +247,36 @@ export default function Subscription() {
       {/* Pricing Cards Grid */}
       <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 w-full z-10">
         
-        {/* Monthly Plan */}
+        {/* Monthly Plan (Disabled if already active) */}
         <div 
-          onClick={() => setSelectedPlan('monthly')}
-          className={`relative bg-slate-950/70 border rounded-3xl p-8 cursor-pointer transition-all duration-300 backdrop-blur-md flex flex-col justify-between ${
-            selectedPlan === 'monthly'
-              ? 'border-blue-500 ring-2 ring-blue-500/30 shadow-[0_0_40px_rgba(37,99,235,0.2)]'
-              : 'border-slate-800/80 hover:border-slate-700'
+          onClick={() => {
+            if (!isMonthlyActive && !isYearlyActive) {
+              setSelectedPlan('monthly');
+            }
+          }}
+          className={`relative bg-slate-950/70 border rounded-3xl p-8 transition-all duration-300 backdrop-blur-md flex flex-col justify-between ${
+            isMonthlyActive 
+              ? 'border-slate-800 opacity-60 cursor-not-allowed bg-slate-950/40'
+              : selectedPlan === 'monthly'
+                ? 'border-blue-500 ring-2 ring-blue-500/30 shadow-[0_0_40px_rgba(37,99,235,0.2)] cursor-pointer'
+                : 'border-slate-800/80 hover:border-slate-700 cursor-pointer'
           }`}
         >
+          {isMonthlyActive && (
+            <div className="absolute -top-3.5 left-6 px-3 py-1 rounded-full bg-blue-600 text-[10px] font-black uppercase tracking-wider text-white shadow-md">
+              Current Active Plan
+            </div>
+          )}
+
           <div>
             <div className="flex justify-between items-center mb-4">
               <span className="text-xs font-black uppercase tracking-widest text-slate-400">{t('subscription.monthlyBilling', 'Monthly Billing')}</span>
               <div className={`h-6 w-6 rounded-full border flex items-center justify-center transition-colors ${
-                selectedPlan === 'monthly' ? 'bg-blue-600 border-blue-500 text-white' : 'border-slate-700'
+                isMonthlyActive 
+                  ? 'bg-blue-600/40 border-blue-500/40 text-blue-200' 
+                  : selectedPlan === 'monthly' ? 'bg-blue-600 border-blue-500 text-white' : 'border-slate-700'
               }`}>
-                {selectedPlan === 'monthly' && <Check size={14} strokeWidth={3} />}
+                {(selectedPlan === 'monthly' || isMonthlyActive) && <Check size={14} strokeWidth={3} />}
               </div>
             </div>
 
@@ -232,7 +285,10 @@ export default function Subscription() {
               <span className="text-slate-400 font-semibold text-sm">{t('subscription.perMonth', '/ month')}</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed mb-6">
-              {t('subscription.monthlyDesc', 'Full monthly access with continuous cloud sync and daily reconciliations.')}
+              {isMonthlyActive 
+                ? `Active until ${new Date(activeSub.current_period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}. Cannot purchase again while active.`
+                : t('subscription.monthlyDesc', 'Full monthly access with continuous cloud sync and daily reconciliations.')
+              }
             </p>
 
             <ul className="space-y-3 text-xs font-semibold text-slate-300 border-t border-slate-800/60 pt-6">
@@ -255,17 +311,23 @@ export default function Subscription() {
           </div>
         </div>
 
-        {/* Yearly Plan */}
+        {/* Yearly Plan (Upgrade Option) */}
         <div 
-          onClick={() => setSelectedPlan('yearly')}
-          className={`relative bg-slate-950/70 border rounded-3xl p-8 cursor-pointer transition-all duration-300 backdrop-blur-md flex flex-col justify-between ${
-            selectedPlan === 'yearly'
-              ? 'border-indigo-500 ring-2 ring-indigo-500/30 shadow-[0_0_40px_rgba(99,102,241,0.25)]'
-              : 'border-slate-800/80 hover:border-slate-700'
+          onClick={() => {
+            if (!isYearlyActive) {
+              setSelectedPlan('yearly');
+            }
+          }}
+          className={`relative bg-slate-950/70 border rounded-3xl p-8 transition-all duration-300 backdrop-blur-md flex flex-col justify-between ${
+            isYearlyActive 
+              ? 'border-slate-800 opacity-60 cursor-not-allowed bg-slate-950/40'
+              : selectedPlan === 'yearly'
+                ? 'border-indigo-500 ring-2 ring-indigo-500/30 shadow-[0_0_40px_rgba(99,102,241,0.25)] cursor-pointer'
+                : 'border-slate-800/80 hover:border-slate-700 cursor-pointer'
           }`}
         >
           <div className="absolute -top-3.5 right-6 px-3 py-1 rounded-full bg-linear-to-r from-emerald-500 to-teal-600 text-[10px] font-black uppercase tracking-wider text-white shadow-md">
-            {t('subscription.saveTag', 'Save ₹2,989 (2 Months Free)')}
+            {isMonthlyActive ? 'RECOMMENDED UPGRADE (2 MONTHS FREE)' : t('subscription.saveTag', 'Save ₹2,989 (2 Months Free)')}
           </div>
 
           <div>
@@ -283,7 +345,10 @@ export default function Subscription() {
               <span className="text-slate-400 font-semibold text-sm">{t('subscription.perYear', '/ year')}</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed mb-6">
-              {t('subscription.annualDesc', 'Best value for long-term stores. Priority database sync and all features included.')}
+              {isMonthlyActive 
+                ? 'Upgrade now: 12 months will be added to your current monthly subscription expiry.'
+                : t('subscription.annualDesc', 'Best value for long-term stores. Priority database sync and all features included.')
+              }
             </p>
 
             <ul className="space-y-3 text-xs font-semibold text-slate-300 border-t border-slate-800/60 pt-6">
@@ -312,17 +377,25 @@ export default function Subscription() {
       <div className="max-w-md mx-auto w-full mt-8 mb-6 z-10">
         <button
           type="button"
-          disabled={loading}
+          disabled={loading || isYearlyActive}
           onClick={handleSubscribe}
-          className="w-full py-4 px-6 bg-linear-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-600 text-white font-extrabold rounded-2xl transition-all shadow-[0_10px_30px_rgba(37,99,235,0.3)] hover:shadow-[0_15px_40px_rgba(37,99,235,0.45)] hover:-translate-y-0.5 flex items-center justify-center gap-3 text-base cursor-pointer disabled:opacity-50"
+          className={`w-full py-4 px-6 font-extrabold rounded-2xl transition-all shadow-[0_10px_30px_rgba(37,99,235,0.3)] hover:shadow-[0_15px_40px_rgba(37,99,235,0.45)] hover:-translate-y-0.5 flex items-center justify-center gap-3 text-base cursor-pointer disabled:opacity-50 ${
+            isMonthlyActive 
+              ? 'bg-linear-to-r from-emerald-600 via-teal-600 to-indigo-600 text-white' 
+              : 'bg-linear-to-r from-blue-600 via-indigo-600 to-blue-700 text-white'
+          }`}
         >
           {loading ? (
             <>
               <Loader2 size={20} className="animate-spin" /> {t('subscription.openingGateway', 'Opening Razorpay Gateway...')}
             </>
-          ) : isCurrentPlanActive ? (
+          ) : isYearlyActive ? (
             <>
               {t('subscription.goToDashboard', 'Go to Dashboard')} <ArrowRight size={18} />
+            </>
+          ) : isMonthlyActive ? (
+            <>
+              <ArrowUpCircle size={20} /> Upgrade to Annual Plan (₹14,999) <ArrowRight size={18} />
             </>
           ) : (
             <>
