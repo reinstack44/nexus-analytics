@@ -578,7 +578,7 @@ export default function AdminDashboard() {
                   >
                     <div>
                       <div className="text-sm font-bold">Annual Enterprise Plan</div>
-                      <div className="text-xs text-slate-400">1 Year validity (₹14,999 value)</div>
+                      <div className="text-xs text-slate-400">1 Year validityy (₹14,999 value)</div>
                     </div>
                     <input 
                       type="radio" 
