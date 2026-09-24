@@ -16,18 +16,29 @@ import Settings from './pages/settings/Settings';
 import AdminDashboard from './pages/admin/AdminDashboard';
 
 function App() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public Login */}
-        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
+        {/* Public Login Route */}
+        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" replace />} />
 
-        {/* Subscription Selection */}
-        <Route path="/subscription" element={user ? <Subscription /> : <Navigate to="/login" />} />
+        {/* Subscription Selection (Admin redirects to home, User opens subscription) */}
+        <Route 
+          path="/subscription" 
+          element={
+            !user ? (
+              <Navigate to="/login" replace />
+            ) : isAdmin ? (
+              <Navigate to="/" replace />
+            ) : (
+              <Subscription />
+            )
+          } 
+        />
 
-        {/* Protected Customer Routes */}
+        {/* Protected SaaS Routes */}
         <Route element={<RequireSubscription />}>
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
@@ -39,7 +50,7 @@ function App() {
             <Route path="magic-chart" element={<MagicChart />} />
             <Route path="settings" element={<Settings />} />
 
-            {/* Super Admin Restricted Control Route */}
+            {/* Super Admin Route */}
             <Route element={<RequireAdmin />}>
               <Route path="admin" element={<AdminDashboard />} />
             </Route>

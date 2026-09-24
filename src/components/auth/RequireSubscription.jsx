@@ -15,12 +15,18 @@ export default function RequireSubscription() {
     let isMounted = true;
 
     async function verifySubscription() {
+      // Still loading auth context
+      if (authLoading) return;
+
       if (!user) {
         if (isMounted) setCheckingSub(false);
         return;
       }
 
-      // 1. ADMIN BYPASS: Admin users have immediate free access to everything
+      // =========================================================
+      // 1. ABSOLUTE LIFETIME ADMIN BYPASS
+      // If user is Admin, never query or require any subscription!
+      // =========================================================
       if (isAdmin || profile?.role === 'admin') {
         if (isMounted) {
           setHasSubscription(true);
@@ -29,7 +35,7 @@ export default function RequireSubscription() {
         return;
       }
 
-      // 2. Check if user account was paused by Admin
+      // 2. Check if profile is suspended
       if (profile && profile.is_active === false) {
         if (isMounted) {
           setHasSubscription(false);
@@ -38,7 +44,7 @@ export default function RequireSubscription() {
         return;
       }
 
-      // 3. Regular Store User Subscription check
+      // 3. Regular Customer Store Subscription Verification
       try {
         const { data, error } = await supabase
           .from('user_subscriptions')
@@ -53,16 +59,14 @@ export default function RequireSubscription() {
           if (isMounted) setHasSubscription(isValid);
         }
       } catch (err) {
-        console.error('Subscription verification failed:', err);
+        console.error('Subscription verification error:', err);
         if (isMounted) setHasSubscription(false);
       } finally {
         if (isMounted) setCheckingSub(false);
       }
     }
 
-    if (!authLoading) {
-      verifySubscription();
-    }
+    verifySubscription();
 
     return () => {
       isMounted = false;
@@ -74,25 +78,27 @@ export default function RequireSubscription() {
     navigate('/login');
   };
 
+  // 1. Wait until AuthContext & role profile are 100% loaded
   if (authLoading || checkingSub) {
     return (
       <div className="min-h-screen bg-[#030510] flex flex-col items-center justify-center text-slate-400 font-sans">
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-semibold text-sm animate-pulse">Verifying Account Privileges...</p>
+        <p className="font-semibold text-sm animate-pulse">Verifying Account Security...</p>
       </div>
     );
   }
 
+  // 2. If user not logged in
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
-  // Admin always passes directly to app
+  // 3. IMMEDIATE ADMIN PASS-THROUGH (No subscription needed for Admin)
   if (isAdmin || profile?.role === 'admin') {
     return <Outlet />;
   }
 
-  // PAUSED SERVICES UI SCREEN
+  // 4. PAUSED SERVICES SCREEN FOR REGULAR USERS
   if (profile?.is_active === false) {
     return (
       <div className="min-h-screen bg-[#030510] flex items-center justify-center p-4 relative overflow-hidden font-sans">
@@ -127,7 +133,7 @@ export default function RequireSubscription() {
     );
   }
 
-  // Redirect unpaid non-admin users to subscription page
+  // 5. Redirect unpaid regular users to Subscription checkout
   if (!hasSubscription) {
     return <Navigate to="/subscription" replace />;
   }
