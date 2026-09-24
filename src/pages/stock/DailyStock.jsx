@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, forwardRef, useCallback, useMemo } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useTranslation } from 'react-i18next';
 import { 
   Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, 
   GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, 
@@ -72,7 +73,7 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
     type="button" 
     onClick={onClick} 
     ref={ref} 
-    className="flex items-center justify-between px-3 py-2 h-10.5 w-40 sm:w-44 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap"
+    className="flex items-center justify-between px-3 py-2 h-10.5 w-40 sm:w-44 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap cursor-pointer"
   >
     <div className="flex items-center overflow-hidden">
       <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
@@ -84,7 +85,7 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 CustomDateInput.displayName = "CustomDateInput";
 
 const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
-  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left h-10.5`}>
+  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left h-10.5 cursor-pointer`}>
     <span>{value}</span>
     <Calendar size={16} className="text-slate-400" />
   </button>
@@ -157,6 +158,7 @@ const recalculateRow = (row) => {
 
 export default function DailyStock() {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -212,7 +214,7 @@ export default function DailyStock() {
   const closeConfirm = () => setConfirmModal(prev => ({ ...prev, isOpen: false }));
   const closeAlert = () => setAlertModal(prev => ({ ...prev, isOpen: false }));
 
-  // Realtime database listener across key tables
+  // Realtime database listener
   useEffect(() => {
     const channel = supabase
       .channel('dailystock-realtime')
@@ -311,13 +313,13 @@ export default function DailyStock() {
         return;
       }
       if ((redirected || date) < startDate) {
-        setAlertModal({ isOpen: true, title: "Invalid Selection", message: "End date must fall on or after the start date." });
+        setAlertModal({ isOpen: true, title: t('common.close', 'Invalid Selection'), message: "End date must fall on or after the start date." });
         return;
       }
       if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
         const range = getDatesInRange(startDate, redirected || date);
         if (range.some(d => markedHolidays.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Overlaps Holiday", message: "Selected block contains declared holidays. Range selection blocked." });
+          setAlertModal({ isOpen: true, title: t('dailyStock.holidayDeclaredTitle', 'Overlaps Holiday'), message: "Selected block contains declared holidays. Range selection blocked." });
           return;
         }
         const rangeToCheck = range.slice(0, -1);
@@ -341,8 +343,8 @@ export default function DailyStock() {
 
     setConfirmModal({
       isOpen: true,
-      title: 'Unlock & Split Combined Range?',
-      message: `Are you sure you want to split this combined block? This will permanently DELETE all recorded ledger values from ${formatDisplayDate(trueStartObj)} to ${formatDisplayDate(endDate || startDate)} (including closing balances) from the database, unlocking these dates so you can fill them individually day-by-day.`,
+      title: t('dailyStock.splitModalTitle', 'Unlock & Split Combined Range?'),
+      message: t('dailyStock.splitModalMsg', `Are you sure you want to split this combined block? This will permanently DELETE all recorded ledger values from ${formatDisplayDate(trueStartObj)} to ${formatDisplayDate(endDate || startDate)} (including closing balances) from the database, unlocking these dates so you can fill them individually day-by-day.`),
       isDanger: true,
       onConfirm: async () => {
         setIsSaving(true);
@@ -354,7 +356,7 @@ export default function DailyStock() {
           setFilledDates(prev => prev.filter(d => !(d >= rangeStartStr && d <= rangeEndStr)));
           setStartDate(trueStartObj);
           setEndDate(trueStartObj);
-          setSaveMessage({ type: 'success', text: 'Combined range successfully split. All intermediate days unlocked.' });
+          setSaveMessage({ type: 'success', text: t('dailyStock.saveSuccessMessage', 'Combined range successfully split. All intermediate days unlocked.') });
           setRefreshTrigger(prev => prev + 1);
           setIsDirty(false);
         } catch (err) {
@@ -751,8 +753,8 @@ export default function DailyStock() {
   const openHolidayConfirm = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Declare as Holiday?',
-      message: 'Marking this period as a holiday will automatically carry forward opening stock and lock transactions.',
+      title: t('dailyStock.holidayDeclaredTitle', 'Declare as Holiday?'),
+      message: t('dailyStock.holidayDeclaredMsg', 'Marking this period as a holiday will automatically carry forward opening stock and lock transactions.'),
       isDanger: false,
       onConfirm: async () => {
         setIsSaving(true);
@@ -817,6 +819,7 @@ export default function DailyStock() {
   };
 
   const handleInputChange = (brandId, field, value) => {
+    if (customRangeMode) return;
     setIsDirty(true);
     const numericValue = value === '' ? '' : parseInt(value, 10) || 0;
 
@@ -854,6 +857,7 @@ export default function DailyStock() {
   };
 
   const openPurchaseModal = (row) => {
+    if (customRangeMode) return;
     const isPriceChanged = row.purchase_qty > 0 && row.purchase_price !== row.carried_price;
     const isMrpChanged = row.purchase_qty > 0 && row.purchase_mrp !== row.carried_mrp;
     setPurchaseModal({ 
@@ -1016,7 +1020,7 @@ export default function DailyStock() {
       });
       await Promise.all(brandUpdates);
 
-      setSaveMessage({ type: 'success', text: `Inventory metrics saved successfully!` });
+      setSaveMessage({ type: 'success', text: t('dailyStock.saveSuccessMessage', 'Inventory metrics saved successfully!') });
       setTimeout(() => setSaveMessage(null), 3000);
       setRefreshTrigger(prev => prev + 1);
       setIsDirty(false);
@@ -1048,7 +1052,7 @@ export default function DailyStock() {
   
   const openDeleteExpense = (id) => {
     setConfirmModal({
-      isOpen: true, title: 'Delete Expense?', message: 'This transaction record will be permanently deleted.', isDanger: true,
+      isOpen: true, title: t('common.delete', 'Delete Expense?'), message: 'This transaction record will be permanently deleted.', isDanger: true,
       onConfirm: async () => {
         setIsSubmitting(true); 
         const { error } = await supabase.from('expenses').delete().eq('id', id); 
@@ -1079,7 +1083,7 @@ export default function DailyStock() {
   
   const openDeleteCollection = (id) => {
     setConfirmModal({
-      isOpen: true, title: 'Delete Entry?', message: 'This collection entry will be permanently removed.', isDanger: true,
+      isOpen: true, title: t('common.delete', 'Delete Entry?'), message: 'This collection entry will be permanently removed.', isDanger: true,
       onConfirm: async () => {
         setIsSubmitting(true); 
         const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id); 
@@ -1155,6 +1159,7 @@ export default function DailyStock() {
         .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; }
         .react-datepicker__triangle { display: none !important; }
         
+        /* State Indicators */
         .react-datepicker__day--highlighted-holiday { background-color: #f97316 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
         .react-datepicker__day--highlighted-filled { background-color: #10b981 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
         .react-datepicker__day--highlighted-combined { background-color: #6366f1 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
@@ -1204,9 +1209,9 @@ export default function DailyStock() {
             <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">{confirmModal.title}</h3>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">{confirmModal.message}</p>
             <div className="flex gap-3">
-              <button onClick={closeConfirm} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors">Cancel</button>
-              <button onClick={confirmModal.onConfirm} className={`flex-1 px-4 py-2.5 text-white rounded-xl font-bold transition-colors shadow-sm ${confirmModal.isDanger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                Confirm
+              <button onClick={closeConfirm} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors cursor-pointer">{t('common.cancel', 'Cancel')}</button>
+              <button onClick={confirmModal.onConfirm} className={`flex-1 px-4 py-2.5 text-white rounded-xl font-bold transition-colors shadow-sm cursor-pointer ${confirmModal.isDanger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                {t('common.confirm', 'Confirm')}
               </button>
             </div>
           </div>
@@ -1222,8 +1227,8 @@ export default function DailyStock() {
               <h3 className="text-xl font-bold text-slate-800 dark:text-white">{alertModal.title}</h3>
             </div>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">{alertModal.message}</p>
-            <button onClick={closeAlert} className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white rounded-xl font-bold transition-colors">
-              Understood
+            <button onClick={closeAlert} className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white rounded-xl font-bold transition-colors cursor-pointer">
+              {t('common.understood', 'Understood')}
             </button>
           </div>
         </div>
@@ -1236,7 +1241,7 @@ export default function DailyStock() {
             <div className="w-20 h-20 bg-orange-100 dark:bg-orange-900/30 text-orange-500 rounded-full flex items-center justify-center mb-5 shadow-inner border border-orange-200 dark:border-orange-800 mx-auto">
               <CalendarOff size={40} />
             </div>
-            <h3 className="text-2xl font-black text-slate-800 dark:text-white mb-2">Holiday Declared!</h3>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-white mb-2">{t('dailyStock.holidayDeclaredTitle', 'Holiday Declared!')}</h3>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
               The selected date <strong className="text-slate-800 dark:text-white">{formatDisplayDate(holidayModal.date)}</strong> is marked as a holiday.
             </p>
@@ -1244,15 +1249,15 @@ export default function DailyStock() {
               <button 
                 onClick={() => handleCancelHolidayFromModal(holidayModal.dateStr)} 
                 disabled={isSaving}
-                className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2"
+                className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
               >
-                <Trash2 size={18} /> {isSaving ? 'Unlocking...' : 'Cancel Holiday & Unlock'}
+                <Trash2 size={18} /> {isSaving ? t('common.saving', 'Unlocking...') : t('dailyStock.cancelHolidayButton', 'Cancel Holiday & Unlock')}
               </button>
               <button 
                 onClick={() => setHolidayModal({ isOpen: false, date: null, dateStr: '' })} 
-                className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors"
+                className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors cursor-pointer"
               >
-                Close
+                {t('common.close', 'Close')}
               </button>
             </div>
           </div>
@@ -1264,7 +1269,7 @@ export default function DailyStock() {
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Lock className="text-red-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-red-800 dark:text-red-300 leading-relaxed font-medium">
-            <strong>Reconciliation Locked:</strong> The closing stock for <span className="font-bold border-b border-red-300">{formatDisplayDate(pipelineWarning)}</span> is incomplete. You must save its closing balance or declare it as a holiday before managing subsequent dates.
+            {t('dailyStock.pipelineLockedWarning', 'Reconciliation Locked: The closing stock for previous working day is incomplete. You must save its closing balance or declare it as a holiday before managing subsequent dates.')}
           </p>
         </div>
       )}
@@ -1272,9 +1277,9 @@ export default function DailyStock() {
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-50 relative">
         <div className="shrink-0">
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
-            <Package className="text-blue-500" /> Daily Stock Ledger
+            <Package className="text-blue-500" /> {t('dailyStock.title', 'Daily Stock Ledger')}
           </h2>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Reconcile opening stock, purchases, and closing balances.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('dailyStock.description', 'Reconcile opening stock, purchases, and closing balances.')}</p>
         </div>
         
         <div className="flex-1 min-w-0 flex xl:justify-end mt-2 xl:mt-0">
@@ -1283,17 +1288,17 @@ export default function DailyStock() {
             <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
               <DatePicker 
                 selected={startDate} onChange={handleStartDateChange} maxDate={new Date()} dateFormat="dd MMM yyyy" 
-                customInput={<CustomDateInput placeholder="Start Date" />} 
+                customInput={<CustomDateInput placeholder={t('dailyStock.startDatePlaceholder', 'Start Date')} />} 
                 showMonthDropdown showYearDropdown dropdownMode="select"
                 dayClassName={getDayClassName}
                 selectsStart
                 startDate={startDate}
                 endDate={endDate}
               />
-              <span className="text-slate-400 font-bold px-1 hidden sm:block">to</span>
+              <span className="text-slate-400 font-bold px-1 hidden sm:block">{t('common.to', 'to')}</span>
               <DatePicker 
                 selected={endDate} onChange={handleEndDateChange} minDate={startDate} maxDate={new Date()} dateFormat="dd MMM yyyy" 
-                customInput={<CustomDateInput placeholder="End Date" />} 
+                customInput={<CustomDateInput placeholder={t('dailyStock.endDatePlaceholder', 'End Date')} />} 
                 showMonthDropdown showYearDropdown dropdownMode="select"
                 dayClassName={getDayClassName}
                 selectsEnd
@@ -1303,8 +1308,8 @@ export default function DailyStock() {
             </div>
             
             {!customRangeMode && (
-              <button onClick={openHolidayConfirm} disabled={isHolidaySelected || isAnyDateFilled || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-orange-500 text-white px-3 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                <Coffee size={18} /> Mark Holiday
+              <button onClick={openHolidayConfirm} disabled={isHolidaySelected || isAnyDateFilled || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-orange-500 text-white px-3 rounded-xl text-sm font-bold hover:bg-orange-600 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+                <Coffee size={18} /> {t('dailyStock.markHolidayButton', 'Mark Holiday')}
               </button>
             )}
             
@@ -1315,14 +1320,14 @@ export default function DailyStock() {
                 setStartDate(new Date());
                 setEndDate(new Date());
               }} 
-              className={`shrink-0 flex items-center gap-1.5 h-10.5 px-3 rounded-xl text-sm font-bold border transition-all shadow-sm ${customRangeMode ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+              className={`shrink-0 flex items-center gap-1.5 h-10.5 px-3 rounded-xl text-sm font-bold border transition-all shadow-sm cursor-pointer ${customRangeMode ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
             >
-              <ArrowRightLeft size={16} /> {customRangeMode ? 'Reconcile Mode' : 'Custom View'}
+              <ArrowRightLeft size={16} /> {customRangeMode ? t('dailyStock.reconcileModeButton', 'Reconcile Mode') : t('dailyStock.customViewButton', 'Custom View')}
             </button>
 
             {!customRangeMode && (
-              <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm">
-                <Landmark size={18} /> Expenses & Cash
+              <button onClick={handleOpenBankDeposit} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-emerald-600 text-white px-3 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm cursor-pointer">
+                <Landmark size={18} /> {t('dailyStock.expensesCashButton', 'Expenses & Cash')}
               </button>
             )}
 
@@ -1330,15 +1335,15 @@ export default function DailyStock() {
               <button 
                 onClick={handleResetRangeData} 
                 disabled={isSaving}
-                className="shrink-0 flex items-center gap-1.5 h-10.5 bg-red-600 hover:bg-red-700 text-white px-4 rounded-xl text-sm font-bold transition-all shadow-sm disabled:opacity-50"
+                className="shrink-0 flex items-center gap-1.5 h-10.5 bg-red-600 hover:bg-red-700 text-white px-4 rounded-xl text-sm font-bold transition-all shadow-sm disabled:opacity-50 cursor-pointer"
               >
-                <Trash2 size={18} /> Split Range
+                <Trash2 size={18} /> {t('dailyStock.splitRangeButton', 'Split Range')}
               </button>
             )}
 
             {!customRangeMode && (
-              <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                <Save size={18} /> {isSaving ? 'Saving...' : 'Save'}
+              <button onClick={handleSaveStock} disabled={isSaving || isHolidaySelected || !!pipelineWarning} className="shrink-0 flex items-center gap-1.5 h-10.5 bg-blue-600 text-white px-4 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+                <Save size={18} /> {isSaving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
               </button>
             )}
             
@@ -1357,14 +1362,14 @@ export default function DailyStock() {
         <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Info className="text-indigo-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-indigo-800 dark:text-indigo-300 leading-relaxed font-semibold">
-            Custom View Mode Active (Read-Only): Showing operational statistics from {formatDisplayDate(startDate)} to {formatDisplayDate(endDate)}. Edits are locked.
+            {t('dailyStock.customViewBanner', 'Custom View Mode Active (Read-Only): Showing operational statistics. Edits are locked.')}
           </p>
         </div>
       ) : isMultiDayRange && !isHolidaySelected && !pipelineWarning && (
         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Info className="text-blue-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
           <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed font-semibold">
-            Reconcile Range Selected: Visualizing chain from <strong>{formatDisplayDate(startDate)}</strong> to <strong>{formatDisplayDate(endDate)}</strong>. Use Save to commit closing stock.
+            {t('dailyStock.reconcileRangeBanner', 'Reconcile Range Selected: Visualizing chain. Use Save to commit closing stock.')}
           </p>
         </div>
       )}
@@ -1374,13 +1379,13 @@ export default function DailyStock() {
           <div className="w-24 h-24 bg-orange-100 dark:bg-orange-900/30 text-orange-500 rounded-full flex items-center justify-center mb-6 shadow-inner border border-orange-200 dark:border-orange-800">
             <CalendarOff size={48} />
           </div>
-          <h3 className="text-3xl font-black text-slate-800 dark:text-white mb-3">Holiday Declared!</h3>
+          <h3 className="text-3xl font-black text-slate-800 dark:text-white mb-3">{t('dailyStock.holidayDeclaredTitle', 'Holiday Declared!')}</h3>
           <p className="text-slate-500 dark:text-slate-400 mb-8 max-w-lg text-lg">
-            Sales records are locked for this period. Your stock metrics have been carried forward.
+            {t('dailyStock.holidayDeclaredMsg', 'Sales records are locked for this period. Your stock metrics have been carried forward.')}
           </p>
           {!customRangeMode && (
-            <button onClick={handleRemoveHoliday} disabled={isSaving} className="px-6 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50 mx-auto">
-              <Trash2 size={20} /> {isSaving ? 'Unlocking...' : 'Cancel Holiday & Unlock'}
+            <button onClick={handleRemoveHoliday} disabled={isSaving} className="px-6 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50 mx-auto cursor-pointer">
+              <Trash2 size={20} /> {isSaving ? t('common.saving', 'Unlocking...') : t('dailyStock.cancelHolidayButton', 'Cancel Holiday & Unlock')}
             </button>
           )}
         </div>
@@ -1389,19 +1394,19 @@ export default function DailyStock() {
           <div className={`grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10 animate-in fade-in transition-opacity ${pipelineWarning && !customRangeMode ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="bg-linear-to-br from-indigo-500 to-indigo-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
-              <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Total Sales Qty</p>
-              <h3 className="text-4xl font-black relative z-10">{dailySummary.totalSalesQty} <span className="text-lg font-medium opacity-80">Units</span></h3>
+              <p className="text-indigo-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">{t('dailyStock.totalSalesQtyLabel', 'Total Sales Qty')}</p>
+              <h3 className="text-4xl font-black relative z-10">{dailySummary.totalSalesQty} <span className="text-lg font-medium opacity-80">{t('common.units', 'Units')}</span></h3>
             </div>
 
             <div className="bg-linear-to-br from-emerald-500 to-emerald-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Calculator size={120} /></div>
-              <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Generated Revenue</p>
+              <p className="text-emerald-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">{t('dailyStock.generatedRevenueLabel', 'Generated Revenue')}</p>
               <h3 className="text-4xl font-black relative z-10">{formatRs(dailySummary.totalRevenue)}</h3>
             </div>
 
             <div className="bg-linear-to-br from-red-500 to-red-700 p-6 rounded-2xl shadow-sm text-white relative overflow-hidden group">
               <div className="absolute right-0 top-0 opacity-10 transform translate-x-1/4 -translate-y-1/4"><Receipt size={120} /></div>
-              <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">Expenses</p>
+              <p className="text-red-100 font-medium text-sm tracking-wider uppercase mb-2 relative z-10">{t('dailyStock.expensesLabel', 'Expenses')}</p>
               <h3 className="text-4xl font-black relative z-10">{formatRs(dailySummary.totalExpenses)}</h3>
             </div>
           </div>
@@ -1412,20 +1417,20 @@ export default function DailyStock() {
                 <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
                   <tr>
                     <th className="px-3 py-4 w-10"></th> 
-                    <th className="px-3 py-4">Brand Details</th>
-                    <th className="px-4 py-4 text-center">Opening Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Editable)</span></th>
-                    <th className="px-4 py-4 text-center">Purchases Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Click to Add)</span></th>
-                    <th className="px-4 py-4 text-center">Closing Bal.<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Input)</span></th>
-                    <th className="px-4 py-4 text-center text-indigo-600 dark:text-indigo-400">Sale Qty<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span></th>
-                    <th className="px-6 py-4 text-right text-purple-600 dark:text-purple-400 font-semibold">MRP Amount<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto FIFO)</span></th>
-                    <th className="px-6 py-4 text-right text-emerald-600 dark:text-emerald-400">Sale Amount<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto FIFO)</span></th>
+                    <th className="px-3 py-4">{t('dailyStock.detailsHeader', 'Brand Details')}</th>
+                    <th className="px-4 py-4 text-center">{t('dailyStock.openingBalHeader', 'Opening Bal.')}<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">{t('dailyStock.openingBalSub', '(Editable)')}</span></th>
+                    <th className="px-4 py-4 text-center">{t('dailyStock.purchasesQtyHeader', 'Purchases Qty')}<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">{t('dailyStock.purchasesQtySub', '(Click to Add)')}</span></th>
+                    <th className="px-4 py-4 text-center">{t('dailyStock.closingBalHeader', 'Closing Bal.')}<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">{t('dailyStock.closingBalSub', '(Input)')}</span></th>
+                    <th className="px-4 py-4 text-center text-indigo-600 dark:text-indigo-400">{t('dailyStock.saleQtyHeader', 'Sale Qty')}<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">{t('dailyStock.saleQtySub', '(Auto)')}</span></th>
+                    <th className="px-6 py-4 text-right text-purple-600 dark:text-purple-400 font-semibold">{t('dailyStock.mrpAmountHeader', 'MRP Amount')}<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">{t('dailyStock.mrpAmountSub', '(Auto FIFO)')}</span></th>
+                    <th className="px-6 py-4 text-right text-emerald-600 dark:text-emerald-400">{t('dailyStock.saleAmtHeader', 'Sale Amount')}<br/><span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">{t('dailyStock.saleAmtSub', '(Auto FIFO)')}</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? (
-                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">Syncing stock data...</td></tr>
+                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">{t('dailyStock.syncingStock', 'Syncing stock data...')}</td></tr>
                   ) : stockRows.length === 0 ? (
-                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">No brands found. Go to Brand Master to register items.</td></tr>
+                    <tr><td colSpan="8" className="px-6 py-12 text-center text-slate-400 dark:text-slate-500">{t('dailyStock.noBrands', 'No brands found. Go to Brand Master to register items.')}</td></tr>
                   ) : (
                     stockRows.map((row, index) => (
                       <tr key={row.brand_id} draggable={!customRangeMode} onDragStart={() => (dragItem.current = index)} onDragEnter={() => (dragOverItem.current = index)} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors group bg-white dark:bg-slate-900">
@@ -1504,7 +1509,7 @@ export default function DailyStock() {
                                     >
                                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
                                         <span className="font-extrabold text-slate-800 dark:text-slate-100 shrink-0">{batch.label}:</span>
-                                        <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">{batch.qty} Qty</span>
+                                        <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">{batch.qty} {t('common.units', 'Qty')}</span>
                                         <span className="text-slate-300 dark:text-slate-700 text-[9px] select-none shrink-0">•</span>
                                         <span className="font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap">
                                           MRP: {formatRs(batch.mrp)}
@@ -1516,7 +1521,7 @@ export default function DailyStock() {
                                       </div>
                                       
                                       <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase border shrink-0 whitespace-nowrap transition-all ${statusBadgeClass}`}>
-                                        {batch.left} left
+                                        {batch.left} {t('dailyStock.leftBadge', 'left')}
                                       </span>
                                     </div>
                                   );
@@ -1529,7 +1534,7 @@ export default function DailyStock() {
                         <td className="px-4 py-4 text-center">
                           <input 
                             type="number" 
-                            disabled={isHolidaySelected}
+                            disabled={isHolidaySelected || customRangeMode}
                             value={row.opening_balance ?? ''} 
                             onChange={(e) => handleInputChange(row.brand_id, 'opening_balance', e.target.value)} 
                             className={`${numInputClass} border-amber-300 dark:border-amber-800 focus:ring-amber-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
@@ -1538,9 +1543,9 @@ export default function DailyStock() {
                         
                         <td className="px-4 py-4 text-center">
                           <button 
-                            disabled={isHolidaySelected}
+                            disabled={isHolidaySelected || customRangeMode}
                             onClick={() => openPurchaseModal(row)}
-                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${isHolidaySelected ? 'opacity-75 cursor-not-allowed' : ''} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
+                            className={`w-20 px-2 py-2 rounded-lg text-sm text-center font-bold transition-all border outline-none mx-auto block ${isHolidaySelected || customRangeMode ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer'} ${row.purchase_qty > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400'}`}
                           >
                             {row.purchase_qty === 0 ? '+ Add' : row.purchase_qty}
                           </button>
@@ -1551,7 +1556,7 @@ export default function DailyStock() {
                             type="number" 
                             min="0" 
                             placeholder="Qty" 
-                            disabled={isHolidaySelected}
+                            disabled={isHolidaySelected || customRangeMode}
                             value={row.closing_balance ?? ''} 
                             onChange={(e) => handleInputChange(row.brand_id, 'closing_balance', e.target.value)} 
                             className={`${numInputClass} border-blue-300 dark:border-blue-700 bg-blue-50/30 dark:bg-blue-900/10 focus:ring-blue-500 disabled:opacity-75 disabled:cursor-not-allowed`} 
@@ -1574,7 +1579,7 @@ export default function DailyStock() {
                   <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                     <tr>
                       <td colSpan="2" className="px-3 py-4 text-right align-top pt-6">
-                        <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600" /> TOTALS</div>
+                        <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600" /> {t('common.totals', 'TOTALS')}</div>
                       </td>
                       
                       <td className="px-4 py-4 text-center">
@@ -1601,15 +1606,15 @@ export default function DailyStock() {
                       <td className="px-6 py-4 text-right align-top pt-6 font-black text-emerald-600 dark:text-emerald-400 text-xl">{formatRs(dailySummary.totalRevenue)}</td>
                     </tr>
                     <tr>
-                      <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Business Expenses :</td>
+                      <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">{t('dailyStock.businessExpensesRow', 'Business Expenses :')}</td>
                       <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- {formatRs(dailySummary.totalExpenses)}</td>
                     </tr>
                     <tr>
-                      <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">Online Collected :</td>
+                      <td colSpan="7" className="px-4 py-2 text-right font-bold text-red-500 dark:text-red-400">{t('dailyStock.onlineCollectedRow', 'Online Collected :')}</td>
                       <td className="px-6 py-2 text-right font-bold text-red-500 dark:text-red-400">- {formatRs(dailySummary.totalCollections)}</td>
                     </tr>
                     <tr className="bg-emerald-50/50 dark:bg-emerald-900/10 border-t border-slate-200 dark:border-slate-700">
-                      <td colSpan="7" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">Net In-Hand Cash :</td>
+                      <td colSpan="7" className="px-4 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-sm uppercase tracking-wider">{t('dailyStock.netInHandCashRow', 'Net In-Hand Cash :')}</td>
                       <td className="px-6 py-4 text-right font-black text-emerald-700 dark:text-emerald-400 text-xl">
                         {formatRs((parseFloat(dailySummary.totalRevenue) || 0) - (parseFloat(dailySummary.totalExpenses) || 0) - (parseFloat(dailySummary.totalCollections) || 0))}
                       </td>
@@ -1629,12 +1634,12 @@ export default function DailyStock() {
             
             <div className="flex justify-between items-center px-5 py-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 shrink-0">
               <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Package size={20} className="text-blue-500" /> Record Batch Purchase
+                <Package size={20} className="text-blue-500" /> {t('dailyStock.recordPurchaseTitle', 'Record Batch Purchase')}
               </h3>
               <button 
                 type="button"
                 onClick={() => setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false })} 
-                className="p-1.5 sm:p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"
+                className="p-1.5 sm:p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -1648,7 +1653,7 @@ export default function DailyStock() {
               </div>
 
               <div>
-                <label className="block text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Quantity Added</label>
+                <label className="block text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">{t('dailyStock.quantityAddedLabel', 'Quantity Added')}</label>
                 <input 
                   type="number" 
                   required min="0" 
@@ -1662,7 +1667,7 @@ export default function DailyStock() {
 
               {/* MRP OVERRIDE OPTION */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there an MRP change for this batch?</label>
+                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">{t('dailyStock.mrpChangeQuestion', 'Is there an MRP change for this batch?')}</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1672,7 +1677,7 @@ export default function DailyStock() {
                       onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: false, mrp: purchaseModal.brand.carried_mrp || purchaseModal.brand.mrp_price})} 
                       className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
                     />
-                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">No (₹{purchaseModal.brand?.carried_mrp || purchaseModal.brand?.mrp_price})</span>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">{t('dailyStock.mrpNoChange', 'No')} (₹{purchaseModal.brand?.carried_mrp || purchaseModal.brand?.mrp_price})</span>
                   </label>
                   <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1682,7 +1687,7 @@ export default function DailyStock() {
                       onChange={() => setPurchaseModal({...purchaseModal, isMrpChanged: true})} 
                       className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
                     />
-                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, custom batch MRP</span>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">{t('dailyStock.mrpYesChange', 'Yes, custom batch MRP')}</span>
                   </label>
                 </div>
               </div>
@@ -1690,7 +1695,7 @@ export default function DailyStock() {
               {purchaseModal.isMrpChanged && (
                 <div className="animate-in fade-in slide-in-from-top-2 pt-1">
                   <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    <span>Batch MRP Price (₹)</span>
+                    <span>{t('dailyStock.batchMrpPriceLabel', 'Batch MRP Price (₹)')}</span>
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
@@ -1707,7 +1712,7 @@ export default function DailyStock() {
 
               {/* SELLING PRICE OVERRIDE OPTION */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">Is there a selling price change for this batch?</label>
+                <label className="block text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2.5">{t('dailyStock.priceChangeQuestion', 'Is there a selling price change for this batch?')}</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1717,7 +1722,7 @@ export default function DailyStock() {
                       onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: false, price: purchaseModal.brand.carried_price})} 
                       className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
                     />
-                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">No (₹{purchaseModal.brand?.carried_price})</span>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors truncate">{t('dailyStock.priceNoChange', 'No')} (₹{purchaseModal.brand?.carried_price})</span>
                   </label>
                   <label className="flex items-center gap-2.5 cursor-pointer group bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition-colors">
                     <input 
@@ -1727,7 +1732,7 @@ export default function DailyStock() {
                       onChange={() => setPurchaseModal({...purchaseModal, isPriceChanged: true})} 
                       className="w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 shrink-0" 
                     />
-                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">Yes, custom batch price</span>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 group-hover:text-blue-600 transition-colors">{t('dailyStock.priceYesChange', 'Yes, custom batch price')}</span>
                   </label>
                 </div>
               </div>
@@ -1735,7 +1740,7 @@ export default function DailyStock() {
               {purchaseModal.isPriceChanged && (
                 <div className="animate-in fade-in slide-in-from-top-2 pt-1">
                   <label className="flex justify-between text-[11px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    <span>Batch Selling Price (₹)</span>
+                    <span>{t('dailyStock.batchSellingPriceLabel', 'Batch Selling Price (₹)')}</span>
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><IndianRupee size={14}/></span>
@@ -1751,14 +1756,14 @@ export default function DailyStock() {
               )}
 
               <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed font-semibold">
-                * Note: Older stock continues to sell at previous operational rates. New rates apply only to these new {purchaseModal.qty || '0'} batch bottles.
+                {t('dailyStock.fifoNote', '* Note: Older stock continues to sell at previous operational rates. New rates apply only to these new batch bottles.')}
               </p>
 
               <button 
                 type="submit" 
-                className="w-full mt-2 sm:mt-4 bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2 shrink-0 text-sm"
+                className="w-full mt-2 sm:mt-4 bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-4 rounded-xl hover:bg-blue-700 transition-all duration-300 shadow-md hover:shadow-lg flex justify-center items-center gap-2 shrink-0 text-sm cursor-pointer"
               >
-                <CheckCircle2 size={18} /> Reconcile Batch
+                <CheckCircle2 size={18} /> {t('dailyStock.reconcileBatchButton', 'Reconcile Batch')}
               </button>
             </form>
           </div>
@@ -1773,10 +1778,10 @@ export default function DailyStock() {
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <div className="flex items-center gap-4">
                 <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                  <Landmark size={24} className="text-blue-500" /> Operational Cash Ledger
+                  <Landmark size={24} className="text-blue-500" /> {t('dailyStock.cashLedgerTitle', 'Operational Cash Ledger')}
                 </h3>
               </div>
-              <button type="button" onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"><X size={20} /></button>
+              <button type="button" onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none cursor-pointer"><X size={20} /></button>
             </div>
             
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
@@ -1791,9 +1796,9 @@ export default function DailyStock() {
                         setEditingCollectionId(null);
                         setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
                       }} 
-                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'expense' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors cursor-pointer ${popupTab === 'expense' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
                     >
-                      Business Expense
+                      {t('dailyStock.businessExpenseTab', 'Business Expense')}
                     </button>
                     <button 
                       type="button"
@@ -1802,9 +1807,9 @@ export default function DailyStock() {
                         setEditingExpenseId(null);
                         setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
                       }} 
-                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors ${popupTab === 'collection' ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors cursor-pointer ${popupTab === 'collection' ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
                     >
-                      Online Collection
+                      {t('dailyStock.onlineCollectionTab', 'Online Collection')}
                     </button>
                   </div>
 
@@ -1812,7 +1817,7 @@ export default function DailyStock() {
                     {popupTab === 'expense' ? (
                       <form onSubmit={handleAddExpense} className="space-y-4 animate-in fade-in zoom-in duration-200">
                         <div className="form-date-picker">
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Date</label>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.date', 'Date')}</label>
                           <DatePicker 
                             selected={expenseForm.date} 
                             onChange={(date) => { setExpenseForm({ ...expenseForm, date }); }} 
@@ -1825,27 +1830,27 @@ export default function DailyStock() {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
                           <input type="text" required value={expenseForm.description ?? ''} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Electricity Bill" />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Amount (₹)</label>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
                           <input type="number" required min="1" step="any" value={expenseForm.amount ?? ''} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                         </div>
                         
                         {editingExpenseId ? (
                           <div className="flex gap-3 mt-2">
-                            <button type="button" onClick={() => { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
-                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">Update Expense</button>
+                            <button type="button" onClick={() => { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors cursor-pointer">{t('common.cancel', 'Cancel')}</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors cursor-pointer">{t('dailyStock.updateExpenseButton', 'Update Expense')}</button>
                           </div>
                         ) : (
-                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-red-600 text-white font-medium py-2.5 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2"><Plus size={18}/> Add Expense</button>
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-red-600 text-white font-medium py-2.5 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"><Plus size={18}/> {t('dailyStock.addExpenseButton', 'Add Expense')}</button>
                         )}
                       </form>
                     ) : (
                       <form onSubmit={handleAddCollection} className="space-y-4 animate-in fade-in zoom-in duration-200">
                         <div className="form-date-picker">
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Date</label>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.date', 'Date')}</label>
                           <DatePicker 
                             selected={collectionForm.date} 
                             onChange={(date) => { setCollectionForm({ ...collectionForm, date }); }} 
@@ -1858,16 +1863,16 @@ export default function DailyStock() {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
                           <input type="text" required value={collectionForm.description ?? ''} onChange={(e) => setCollectionForm({ ...collectionForm, description: e.target.value })} className={inputClass} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Amount (₹)</label>
+                            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
                             <input type="number" required min="1" value={collectionForm.amount ?? ''} onChange={(e) => setCollectionForm({ ...collectionForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                           </div>
                           <div>
-                            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Mode</label>
+                            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.mode', 'Mode')}</label>
                             <select value={collectionForm.mode ?? 'UPI/Bank'} onChange={(e) => setCollectionForm({ ...collectionForm, mode: e.target.value })} className={inputClass}>
                               <option value="UPI/Bank">UPI/Bank</option>
                               <option value="Cash">Cash</option>
@@ -1877,11 +1882,11 @@ export default function DailyStock() {
 
                         {editingCollectionId ? (
                           <div className="flex gap-3 mt-2">
-                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
-                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors">Update Collection</button>
+                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors cursor-pointer">{t('common.cancel', 'Cancel')}</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors cursor-pointer">{t('dailyStock.updateCollectionButton', 'Update Collection')}</button>
                           </div>
                         ) : (
-                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"><ArrowDownCircle size={18} /> Record Collection</button>
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"><ArrowDownCircle size={18} /> {t('dailyStock.recordCollectionButton', 'Record Collection')}</button>
                         )}
                       </form>
                     )}
@@ -1892,7 +1897,7 @@ export default function DailyStock() {
                   <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
                     <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
                       {popupTab === 'expense' ? <Receipt size={18} className="text-red-500"/> : <Landmark size={18} className="text-indigo-500"/>}
-                      {popupTab === 'expense' ? 'Daily Expenses Log' : 'Daily Online Collections'}
+                      {popupTab === 'expense' ? t('dailyStock.dailyExpensesTitle', 'Daily Expenses Log') : t('dailyStock.dailyCollectionsTitle', 'Daily Online Collections')}
                     </h3>
                   </div>
                   
@@ -1900,15 +1905,15 @@ export default function DailyStock() {
                     <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                       <thead className="bg-white dark:bg-slate-950 text-slate-400 font-semibold uppercase text-xs tracking-wider sticky top-0 border-b border-slate-100 dark:border-slate-800 z-10">
                         <tr>
-                          <th className="px-6 py-4">Description</th>
-                          {popupTab === 'collection' && <th className="px-6 py-4 text-center">Mode</th>}
-                          <th className="px-6 py-4 text-right">Amount (₹)</th>
-                          <th className="px-4 py-4 text-center">Actions</th>
+                          <th className="px-6 py-4">{t('common.description', 'Description')}</th>
+                          {popupTab === 'collection' && <th className="px-6 py-4 text-center">{t('common.mode', 'Mode')}</th>}
+                          <th className="px-6 py-4 text-right">{t('common.amount', 'Amount')} (₹)</th>
+                          <th className="px-4 py-4 text-center">{t('common.actions', 'Actions')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {(popupTab === 'expense' ? expenses : collections).length === 0 ? (
-                          <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">No records found for the selected date.</td></tr>
+                          <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">{t('dailyStock.noRecordsFound', 'No records found for the selected date.')}</td></tr>
                         ) : (
                           (popupTab === 'expense' ? expenses : collections).map((row) => (
                             <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
@@ -1925,8 +1930,8 @@ export default function DailyStock() {
                                 </td>
                                 <td className="px-4 py-4 text-center">
                                   <div className="flex justify-center gap-2">
-                                    <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                                    <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                                    <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"><Edit2 size={16} /></button>
+                                    <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors cursor-pointer"><Trash2 size={16} /></button>
                                   </div>
                                 </td>
                               </tr>

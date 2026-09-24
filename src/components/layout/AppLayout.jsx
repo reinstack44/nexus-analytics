@@ -4,13 +4,16 @@ import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext'; 
 import { useTranslation } from 'react-i18next'; 
-import { LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, Menu, X, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, Wand2, Settings } from 'lucide-react';
+import { 
+  LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, 
+  Menu, X, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, 
+  Wand2, Settings, ShieldCheck 
+} from 'lucide-react';
 
-// IMPORT THE LOGO HERE - Updated to .png
 import nxDiaryLogo from '../../assets/nx diary logo.png';
 
 export default function AppLayout() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const { theme, toggleTheme } = useTheme(); 
   const { t, i18n } = useTranslation(); 
   const location = useLocation();
@@ -21,7 +24,6 @@ export default function AppLayout() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
 
-  // Compute greeting directly during render to prevent cascading renders
   const hour = new Date().getHours();
   const greeting = hour < 12 
     ? t('header.goodMorning', 'Good Morning ☀️') 
@@ -61,6 +63,14 @@ export default function AppLayout() {
     { name: t('sidebar.settings', 'Settings'), path: '/settings', icon: Settings },
   ];
 
+  if (isAdmin) {
+    navItems.push({
+      name: 'Admin Control',
+      path: '/admin',
+      icon: ShieldCheck
+    });
+  }
+
   return (
     <div className="flex h-screen bg-[#F8FAFC] dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-300">
       
@@ -74,12 +84,14 @@ export default function AppLayout() {
         />
       )}
 
+      {/* Sidebar Container: Set to z-60 so it sits above header */}
       <div 
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-[#0B1121] text-slate-300 transition-all duration-300 ease-in-out border-r border-slate-800/60 shadow-2xl lg:shadow-none
+        className={`fixed inset-y-0 left-0 z-60 flex flex-col bg-[#0B1121] text-slate-300 transition-all duration-300 ease-in-out border-r border-slate-800/60 shadow-2xl lg:shadow-none
         ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
         lg:translate-x-0 ${isCollapsed ? 'lg:w-20' : 'lg:w-64'} w-72`}
       >
         
+        {/* Collapse / Expand Toggle Button with highest local z-70 */}
         {!isMobile && (
           <button 
             type="button"
@@ -87,7 +99,8 @@ export default function AppLayout() {
               setIsCollapsed(!isCollapsed);
               setIsLangMenuOpen(false);
             }}
-            className="absolute -right-3.5 top-8 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-full p-1.5 shadow-md hover:bg-blue-50 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-blue-400 transition-colors z-60 focus:outline-none"
+            className="absolute -right-4 top-7 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-full p-1.5 shadow-2xl hover:bg-blue-50 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-blue-400 transition-all z-70 focus:outline-none cursor-pointer hover:scale-110"
+            title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
           >
             {isCollapsed ? <ChevronRight size={14} strokeWidth={3} /> : <ChevronLeft size={14} strokeWidth={3} />}
           </button>
@@ -108,7 +121,7 @@ export default function AppLayout() {
 
           <button 
             type="button"
-            className="lg:hidden text-slate-400 hover:text-white bg-slate-800/50 p-2 rounded-lg outline-none ml-2 shrink-0" 
+            className="lg:hidden text-slate-400 hover:text-white bg-slate-800/50 p-2 rounded-lg outline-none ml-2 shrink-0 cursor-pointer" 
             onClick={() => {
               setIsMobileOpen(false);
               setIsLangMenuOpen(false);
@@ -122,6 +135,7 @@ export default function AppLayout() {
           {navItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
+            const isSpecialAdmin = item.path === '/admin';
             
             return (
               <Link
@@ -133,16 +147,22 @@ export default function AppLayout() {
                 }}
                 className={`flex items-center px-3 py-3.5 rounded-xl transition-all duration-300 group relative
                   ${isActive 
-                    ? 'bg-blue-500/10 text-blue-400' 
-                    : 'hover:bg-slate-800/40 hover:text-slate-200'
+                    ? isSpecialAdmin ? 'bg-purple-500/15 text-purple-400' : 'bg-blue-500/10 text-blue-400' 
+                    : isSpecialAdmin ? 'text-purple-400 hover:bg-purple-500/10' : 'hover:bg-slate-800/40 hover:text-slate-200'
                   }`}
               >
                 {isActive && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r-full shadow-[0_0_12px_rgba(59,130,246,0.8)]"></div>
+                  <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 rounded-r-full shadow-lg ${
+                    isSpecialAdmin ? 'bg-purple-500 shadow-[0_0_12px_rgba(168,85,247,0.8)]' : 'bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.8)]'
+                  }`}></div>
                 )}
 
                 <div className="min-w-6 flex justify-center">
-                  <Icon size={22} className={`transition-colors duration-300 ${isActive ? 'text-blue-500' : 'text-slate-500 group-hover:text-slate-300'}`} />
+                  <Icon size={22} className={`transition-colors duration-300 ${
+                    isActive 
+                      ? isSpecialAdmin ? 'text-purple-400' : 'text-blue-500' 
+                      : isSpecialAdmin ? 'text-purple-400' : 'text-slate-500 group-hover:text-slate-300'
+                  }`} />
                 </div>
                 
                 <span className={`ml-4 font-semibold tracking-wide whitespace-nowrap transition-all duration-300 ${isCollapsed ? 'opacity-0 w-0 hidden lg:block' : 'opacity-100 w-auto'}`}>
@@ -163,7 +183,7 @@ export default function AppLayout() {
           <button 
             type="button"
             onClick={handleLogout} 
-            className="flex items-center px-3 py-3 w-full rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-all duration-300 group relative outline-none"
+            className="flex items-center px-3 py-3 w-full rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-all duration-300 group relative outline-none cursor-pointer"
           >
             <div className="min-w-6 flex justify-center">
               <LogOut size={22} className="group-hover:-translate-x-1 transition-transform" />
@@ -181,14 +201,15 @@ export default function AppLayout() {
         </div>
       </div>
 
+      {/* Main Content Area: Header with z-30 so sidebar button floats over it */}
       <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out ${isCollapsed ? 'lg:ml-20' : 'lg:ml-64'}`}>
         
-        <header className="h-20 bg-white/70 dark:bg-slate-900/70 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-30 sticky top-0 transition-colors duration-300">
+        <header className="h-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-30 sticky top-0 transition-colors duration-300">
           <div className="flex items-center gap-4">
             {isMobile && (
               <button 
                 type="button"
-                className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors focus:ring-2 focus:ring-blue-100 dark:focus:ring-slate-700 outline-none"
+                className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors focus:ring-2 focus:ring-blue-100 dark:focus:ring-slate-700 outline-none cursor-pointer"
                 onClick={() => setIsMobileOpen(true)}
               >
                 <Menu size={24} />
@@ -202,22 +223,51 @@ export default function AppLayout() {
           
           <div className="flex items-center gap-2 sm:gap-4">
 
+            {/* Language Dropdown Button */}
             <div className="relative">
               <button 
                 type="button"
-                onClick={() => setIsLangMenuOpen(!isLangMenuOpen)} 
-                className="flex items-center gap-2 p-2.5 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all duration-300 outline-none shadow-sm font-semibold text-sm uppercase"
-                title="Change Language"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsLangMenuOpen(!isLangMenuOpen);
+                }} 
+                className="flex items-center gap-2 p-2.5 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all duration-300 outline-none shadow-sm font-semibold text-sm uppercase cursor-pointer"
+                title={t('header.changeLanguage', 'Change Language')}
               >
                 <Globe size={18} className="text-blue-600 dark:text-blue-400" />
                 <span className="hidden sm:block">{i18n.language || 'EN'}</span>
               </button>
               
               {isLangMenuOpen && (
-                <div className="absolute right-0 mt-2 w-36 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-lg py-2" style={{ zIndex: 99999 }}>
-                  <button type="button" onClick={() => changeLanguage('en')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'en' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>English</button>
-                  <button type="button" onClick={() => changeLanguage('hi')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'hi' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>हिन्दी (Hindi)</button>
-                  <button type="button" onClick={() => changeLanguage('mr')} className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${i18n.language === 'mr' ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'}`}>मराठी (Marathi)</button>
+                <div 
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl py-2 z-99999 animate-in fade-in zoom-in-95 duration-150"
+                  style={{ zIndex: 999999 }}
+                >
+                  <button 
+                    type="button" 
+                    onClick={() => changeLanguage('en')} 
+                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between ${i18n.language === 'en' ? 'text-blue-600 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-700 dark:text-slate-300'}`}
+                  >
+                    <span>English</span>
+                    {i18n.language === 'en' && <span className="text-blue-600 dark:text-blue-400">✓</span>}
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => changeLanguage('hi')} 
+                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between ${i18n.language === 'hi' ? 'text-blue-600 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-700 dark:text-slate-300'}`}
+                  >
+                    <span>हिन्दी (Hindi)</span>
+                    {i18n.language === 'hi' && <span className="text-blue-600 dark:text-blue-400">✓</span>}
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => changeLanguage('mr')} 
+                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between ${i18n.language === 'mr' ? 'text-blue-600 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-700 dark:text-slate-300'}`}
+                  >
+                    <span>मराठी (Marathi)</span>
+                    {i18n.language === 'mr' && <span className="text-blue-600 dark:text-blue-400">✓</span>}
+                  </button>
                 </div>
               )}
             </div>
@@ -225,17 +275,24 @@ export default function AppLayout() {
             <button 
               type="button"
               onClick={toggleTheme} 
-              className="p-2.5 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all duration-300 outline-none shadow-sm"
-              title="Toggle Theme"
+              className="p-2.5 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all duration-300 outline-none shadow-sm cursor-pointer"
+              title={t('header.toggleTheme', 'Toggle Theme')}
             >
               {theme === 'dark' ? <Sun size={18} className="text-amber-400" /> : <Moon size={18} className="text-blue-600" />}
             </button>
 
             <div className="flex items-center gap-3 border-l border-slate-200 dark:border-slate-700 pl-3 sm:pl-5 transition-colors duration-300">
               <div className="hidden sm:flex flex-col items-end">
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-widest">
-                  {t('header.activeSession', 'Active Session')}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {isAdmin && (
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 uppercase tracking-wider">
+                      ADMIN
+                    </span>
+                  )}
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-widest">
+                    {t('header.activeSession', 'Active Session')}
+                  </span>
+                </div>
                 <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 transition-colors duration-300">{user?.email}</span>
               </div>
               <div className="h-10 w-10 rounded-full bg-linear-to-br from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 border border-blue-200 dark:border-blue-700 flex items-center justify-center text-blue-700 dark:text-blue-300 font-bold shadow-sm ring-4 ring-white dark:ring-slate-950 transition-colors duration-300 shrink-0 select-none">

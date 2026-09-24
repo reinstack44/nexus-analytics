@@ -2,30 +2,50 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../config/supabaseClient';
 
-// 1. Context creation
 const AuthContext = createContext({});
 
-// 2. Provider component that wraps our app routes
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null); // stores { role: 'admin' | 'user', is_active: boolean }
   const [loading, setLoading] = useState(true);
+
+  const fetchProfile = async (userId) => {
+    if (!userId) return null;
+    try {
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      return data;
+    } catch {
+      return null;
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
 
-    // A. App load: Asynchronously check current active session map
     const checkSession = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) throw error;
         
         if (isMounted) {
-          setUser(session?.user ?? null);
+          const currentUser = session?.user ?? null;
+          setUser(currentUser);
+          if (currentUser) {
+            const userProfile = await fetchProfile(currentUser.id);
+            setProfile(userProfile);
+          } else {
+            setProfile(null);
+          }
         }
       } catch (err) {
         console.error("Auth Session Handshake Error:", err.message);
         if (isMounted) {
           setUser(null);
+          setProfile(null);
         }
       } finally {
         if (isMounted) {
@@ -36,37 +56,35 @@ export const AuthProvider = ({ children }) => {
     
     checkSession();
 
-    // B. Realtime listener: Automatically update active user state on login/logout transitions
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (isMounted) {
-        // Only update state if user profile transitions to prevent redundant render cycles
-        setUser((prevUser) => {
-          const nextUserId = session?.user?.id ?? null;
-          const prevUserId = prevUser?.id ?? null;
-          if (prevUserId !== nextUserId) {
-            return session?.user ?? null;
-          }
-          return prevUser;
-        });
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
+        if (currentUser) {
+          const userProfile = await fetchProfile(currentUser.id);
+          setProfile(userProfile);
+        } else {
+          setProfile(null);
+        }
         setLoading(false);
       }
     });
 
-    // Cleanup subscription and toggle mount state on unmount
     return () => {
       isMounted = false;
       subscription.unsubscribe();
     };
   }, []);
 
+  const isAdmin = profile?.role === 'admin';
+
   return (
-    <AuthContext.Provider value={{ user, loading }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, loading, setProfile }}>
       {!loading && children}
     </AuthContext.Provider>
   );
 };
 
-// 3. Custom hook to safely consume auth context
 export const useAuth = () => {
   return useContext(AuthContext);
 };

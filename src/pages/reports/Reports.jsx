@@ -1,6 +1,7 @@
 import { useState, useEffect, forwardRef, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useTranslation } from 'react-i18next';
 import { 
   FileText, Download, FileSpreadsheet, Printer, Calendar, ChevronDown, 
   TrendingUp, Users, Receipt, Landmark, Sigma, Wand2 
@@ -13,7 +14,7 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
     type="button"
     onClick={onClick} 
     ref={ref} 
-    className="flex items-center px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap"
+    className="flex items-center px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap cursor-pointer"
   >
     <Calendar size={16} className="text-blue-500 mr-2" /> {value || placeholder}
     <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3" />
@@ -75,7 +76,7 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Safe paginated fetcher across large historical data
+// Scalable fetcher across large historical data
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -211,6 +212,7 @@ const getTrueOpeningStockMrp = (brands, allStock, currentMonthStartStr, prevMont
 
 export default function Reports() {
   const { user } = useAuth();
+  const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const prevDatesRef = useRef({ start: null, end: null });
@@ -688,49 +690,49 @@ export default function Reports() {
   }, [startDate, endDate, showMagicChart, user, refreshTrigger]);
 
   const exportToCSV = () => {
-    let csvContent = '\uFEFF'; // UTF-8 BOM for Excel encoding
+    let csvContent = '\uFEFF';
 
     // Section 1: Summary
-    csvContent += '1. FINANCIAL SUMMARY OVERVIEW\r\n';
-    csvContent += `Reporting Period,"${startDate.toLocaleDateString('en-IN')} TO ${endDate.toLocaleDateString('en-IN')}"\r\n`;
-    csvContent += `Gross Profit (Sales),${summary.grossProfit}\r\n`;
-    csvContent += `Total Purchases,${summary.totalPurchases}\r\n`;
-    csvContent += `Business Expenses,${summary.totalExpenses}\r\n`;
-    csvContent += `Net Profit / Loss,${summary.netProfit}\r\n`;
-    csvContent += `Online Collections,${summary.totalWithdrawn}\r\n`;
-    csvContent += `Cash Left in Hand,${summary.retainedCash}\r\n\r\n`;
+    csvContent += `${t('reports.summarySection', '1. FINANCIAL SUMMARY OVERVIEW')}\r\n`;
+    csvContent += `${t('reports.reportingPeriod', 'Reporting Period:')},"${startDate.toLocaleDateString('en-IN')} ${t('common.to', 'TO')} ${endDate.toLocaleDateString('en-IN')}"\r\n`;
+    csvContent += `${t('reports.grossProfitLabel', 'Gross Profit (Sales)')},${summary.grossProfit}\r\n`;
+    csvContent += `${t('reports.totalPurchasesLabel', 'Total Purchases')},${summary.totalPurchases}\r\n`;
+    csvContent += `${t('reports.businessExpensesLabel', 'Business Expenses')},${summary.totalExpenses}\r\n`;
+    csvContent += `${t('reports.netProfitLabel', 'Net Profit / Loss')},${summary.netProfit}\r\n`;
+    csvContent += `${t('reports.onlineCollectionsLabel', 'Online Collections')},${summary.totalWithdrawn}\r\n`;
+    csvContent += `${t('reports.cashLeftLabel', 'Cash Left in Hand')},${summary.retainedCash}\r\n\r\n`;
 
     // Section 2: Bottles Sold
-    csvContent += '2. ITEMIZED BOTTLES SOLD BREAKDOWN\r\n';
-    csvContent += 'Brand Name,Bottle Size,Unit Price (Rs),Qty Sold,Total Revenue (Rs)\r\n';
+    csvContent += `${t('reports.salesSection', '2. ITEMIZED BOTTLES SOLD BREAKDOWN')}\r\n`;
+    csvContent += `${t('reports.brandNameHeader', 'Brand Name')},${t('reports.bottleSizeHeader', 'Bottle Size')},${t('reports.unitPriceHeader', 'Unit Price')},${t('reports.qtySoldHeader', 'Qty Sold')},${t('reports.totalRevenueHeader', 'Total Revenue')}\r\n`;
     salesList.forEach(item => {
       csvContent += `"${item.brand_name}","${item.bottle_size}",${item.selling_price},${item.total_qty},${item.total_revenue}\r\n`;
     });
-    csvContent += `TOTALS,,,${salesTotalQty},${salesTotalRev}\r\n\r\n`;
+    csvContent += `${t('common.totals', 'TOTALS')},,,${salesTotalQty},${salesTotalRev}\r\n\r\n`;
 
     // Section 3: Expenses
-    csvContent += '3. BUSINESS EXPENSES LEDGER\r\n';
-    csvContent += 'Date,Description,Amount (Rs)\r\n';
+    csvContent += `${t('reports.expensesSection', '3. BUSINESS EXPENSES LEDGER')}\r\n`;
+    csvContent += `${t('reports.expDateHeader', 'Date')},${t('reports.expDescHeader', 'Description')},${t('reports.expAmtHeader', 'Amount')}\r\n`;
     expenseList.forEach(e => {
       csvContent += `"${new Date(e.date).toLocaleDateString('en-IN')}","${e.description}",${e.amount}\r\n`;
     });
-    csvContent += `TOTAL EXPENSES,,${summary.totalExpenses}\r\n\r\n`;
+    csvContent += `${t('reports.totalExpensesLabel', 'TOTAL EXPENSES')},,${summary.totalExpenses}\r\n\r\n`;
 
     // Section 4: Online Collections
-    csvContent += '4. ONLINE COLLECTIONS LEDGER\r\n';
-    csvContent += 'Date,Description,Mode,Amount (Rs)\r\n';
+    csvContent += `${t('reports.collectionsSection', '4. ONLINE COLLECTIONS LEDGER')}\r\n`;
+    csvContent += `${t('reports.collDateHeader', 'Date')},${t('reports.collDescHeader', 'Description')},${t('reports.collModeHeader', 'Mode')},${t('reports.collAmtHeader', 'Amount')}\r\n`;
     collectionList.forEach(c => {
       csvContent += `"${new Date(c.date).toLocaleDateString('en-IN')}","${c.description}","${c.withdrawal_mode}",${c.amount}\r\n`;
     });
-    csvContent += `TOTAL COLLECTIONS,,,${summary.totalWithdrawn}\r\n\r\n`;
+    csvContent += `${t('reports.totalCollectionsLabel', 'TOTAL COLLECTIONS')},,,${summary.totalWithdrawn}\r\n\r\n`;
 
     // Section 5: Trader Ledger
-    csvContent += '5. TRADER TRANSACTIONS LEDGER\r\n';
-    csvContent += 'Date,Trader Name,Purchase Amount (Rs),Paid Amount (Rs),Remaining Balance (Rs)\r\n';
+    csvContent += `${t('reports.traderSection', '5. TRADER TRANSACTIONS LEDGER')}\r\n`;
+    csvContent += `${t('reports.traderDateHeader', 'Date')},${t('reports.traderNameHeader', 'Trader Name')},${t('reports.traderPurchaseHeader', 'Purchase Amount')},${t('reports.traderPaidHeader', 'Paid Amount')},${t('reports.traderRemainingHeader', 'Remaining Balance')}\r\n`;
     traderTransactions.forEach(tx => {
       csvContent += `"${new Date(tx.date).toLocaleDateString('en-IN')}","${tx.traders?.trader_name || 'N/A'}",${tx.purchase_amount},${tx.paid_amount},${tx.remaining_amount}\r\n`;
     });
-    csvContent += `TRADER TOTALS,,${traderTotalPurchases},${traderTotalPaid},${traderTotalRemaining}\r\n`;
+    csvContent += `${t('reports.traderTotalsLabel', 'TRADER TOTALS')},,${traderTotalPurchases},${traderTotalPaid},${traderTotalRemaining}\r\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -782,6 +784,7 @@ export default function Reports() {
   const ledgerNetProfit = safeRound(ledgerBox7 - (magicChartData.currExp || 0)); 
 
   const cumulativeProfitVal = safeRound((prevMonthNetProfit || 0) + ledgerNetProfit); 
+  const locale = i18n.language === 'hi' ? 'hi-IN' : i18n.language === 'mr' ? 'mr-IN' : 'en-IN';
 
   return (
     <div className="space-y-6 transition-colors duration-300">
@@ -958,25 +961,25 @@ export default function Reports() {
       {/* HEADER */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 no-print relative z-50">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2"><FileText className="text-blue-600" /> Official Reports</h2>
-          <p className="text-slate-500 text-sm mt-1">Multi-page print layout with live sandbox comparisons.</p>
+          <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2"><FileText className="text-blue-600" /> {t('reports.title', 'Official Reports')}</h2>
+          <p className="text-slate-500 text-sm mt-1">{t('reports.description', 'Multi-page print layout with live sandbox comparisons.')}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="header-date-picker flex items-center gap-2 bg-slate-100/50 dark:bg-slate-900/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
             <DatePicker selected={startDate} onChange={handleStartDateChange} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
-            <span className="text-slate-400 font-medium px-1">to</span>
+            <span className="text-slate-400 font-medium px-1">{t('common.to', 'to')}</span>
             <DatePicker selected={endDate} onChange={handleEndDateChange} minDate={startDate} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
           </div>
 
           <div className="relative">
-            <button onClick={() => setIsExportMenuOpen(!isExportMenuOpen)} className="flex items-center gap-2 bg-slate-800 dark:bg-slate-700 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-sm outline-none">
-              <Download size={16} /> Document Export
+            <button onClick={() => setIsExportMenuOpen(!isExportMenuOpen)} className="flex items-center gap-2 bg-slate-800 dark:bg-slate-700 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-sm outline-none cursor-pointer">
+              <Download size={16} /> {t('reports.documentExportButton', 'Document Export')}
             </button>
             {isExportMenuOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl shadow-lg py-2 z-50">
-                <button onClick={printReport} className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center gap-2"><Printer size={16} className="text-blue-600 dark:text-blue-400" /> Print PDF Report</button>
-                <button onClick={exportToCSV} className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center gap-2"><FileSpreadsheet size={16} className="text-green-600 dark:text-green-400" /> Export Excel CSV</button>
+                <button onClick={printReport} className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center gap-2 cursor-pointer"><Printer size={16} className="text-blue-600 dark:text-blue-400" /> {t('reports.printPdfButton', 'Print PDF Report')}</button>
+                <button onClick={exportToCSV} className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center gap-2 cursor-pointer"><FileSpreadsheet size={16} className="text-green-600 dark:text-green-400" /> {t('reports.exportExcelButton', 'Export Excel CSV')}</button>
               </div>
             )}
           </div>
@@ -989,59 +992,59 @@ export default function Reports() {
         {/* PAGE 1 */}
         <div>
           <div className="text-center mb-8 border-b-2 border-slate-200 dark:border-slate-800 print:border-indigo-500 pb-4">
-            <h1 className="text-3xl font-black text-slate-900 dark:text-white print:text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
-            <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 print:text-slate-700 mt-1">Consolidated Financial & Sales Report</h2>
-            <p className="text-slate-500 font-semibold mt-2 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+            <h1 className="text-3xl font-black text-slate-900 dark:text-white print:text-indigo-950 uppercase tracking-widest">{t('reports.printTitle', 'Nexus Diary')}</h1>
+            <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 print:text-slate-700 mt-1">{t('reports.printSubtitle', 'Consolidated Financial & Sales Report')}</h2>
+            <p className="text-slate-500 font-semibold mt-2 uppercase text-xs tracking-wider">{t('reports.reportingPeriod', 'Reporting Period:')} {startDate.toLocaleDateString('en-IN')} {t('common.to', 'TO')} {endDate.toLocaleDateString('en-IN')}</p>
           </div>
 
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4">1. Financial Summary Overview</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4">{t('reports.summarySection', '1. Financial Summary Overview')}</h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 print-card-grid">
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Gross Profit (Sales)</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">{formatRs(summary.grossProfit)}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">{t('reports.grossProfitLabel', 'Gross Profit (Sales)')}</p><h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">{formatRs(summary.grossProfit)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Total Purchases (Sale)</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">{formatRs(summary.totalPurchases)}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">{t('reports.totalPurchasesLabel', 'Total Purchases (Sale)')}</p><h3 className="text-2xl font-black text-amber-600 dark:text-amber-400">{formatRs(summary.totalPurchases)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Business Expenses</p><h3 className="text-2xl font-black text-red-500 print-text-rose">{formatRs(summary.totalExpenses)}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">{t('reports.businessExpensesLabel', 'Business Expenses')}</p><h3 className="text-2xl font-black text-red-500 print-text-rose">{formatRs(summary.totalExpenses)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Net Profit / Loss</p><h3 className="text-2xl font-black text-blue-600 dark:text-blue-400 print-text-indigo">{formatRs(summary.netProfit)}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">{t('reports.netProfitLabel', 'Net Profit / Loss')}</p><h3 className="text-2xl font-black text-blue-600 dark:text-blue-400 print-text-indigo">{formatRs(summary.netProfit)}</h3>
               </div>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">Online Collections</p><h3 className="text-2xl font-black text-indigo-500">{formatRs(summary.totalWithdrawn)}</h3>
+                <p className="text-xs font-bold text-slate-500 mb-1 uppercase">{t('reports.onlineCollectionsLabel', 'Online Collections')}</p><h3 className="text-2xl font-black text-indigo-500">{formatRs(summary.totalWithdrawn)}</h3>
               </div>
               <div className="bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 rounded-xl p-5 print-metric shadow-sm">
-                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">Cash Left in Hand</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 print-text-emerald">{formatRs(summary.retainedCash)}</h3>
+                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-500 mb-1 uppercase">{t('reports.cashLeftLabel', 'Cash Left in Hand')}</p><h3 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 print-text-emerald">{formatRs(summary.retainedCash)}</h3>
               </div>
             </div>
 
             {/* MRP & SALE PRICE VALUATION DETAIL GRID */}
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-slate-100 dark:border-slate-800 pt-6">
               <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Opening Stock Valuation</p>
+                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">{t('reports.openingValuation', 'Opening Stock Valuation')}</p>
                 <div className="space-y-1">
                   <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 font-medium">MRP Total:</span>
+                    <span className="text-slate-500 font-medium">{t('reports.mrpTotal', 'MRP Total:')}</span>
                     <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.openingMrp)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 font-medium">Sale Total:</span>
+                    <span className="text-slate-500 font-medium">{t('reports.saleTotal', 'Sale Total:')}</span>
                     <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.openingSale)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 rounded-xl p-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">Closing Stock Valuation</p>
+                <p className="text-[11px] font-bold text-slate-400 uppercase mb-2">{t('reports.closingValuation', 'Closing Stock Valuation')}</p>
                 <div className="space-y-1">
                   <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 font-medium">MRP Total:</span>
+                    <span className="text-slate-500 font-medium">{t('reports.mrpTotal', 'MRP Total:')}</span>
                     <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.closingMrp)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 font-medium">Sale Total:</span>
+                    <span className="text-slate-500 font-medium">{t('reports.saleTotal', 'Sale Total:')}</span>
                     <span className="font-bold text-slate-800 dark:text-slate-200">{formatRs(summary.closingSale)}</span>
                   </div>
                 </div>
@@ -1050,21 +1053,21 @@ export default function Reports() {
           </div>
 
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><TrendingUp size={18} className="no-print" /> 2. Itemized Bottles Sold Breakdown</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><TrendingUp size={18} className="no-print" /> {t('reports.salesSection', '2. Itemized Bottles Sold Breakdown')}</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
                   <tr>
-                    <th className="px-4 py-3">Brand Name</th>
-                    <th className="px-4 py-3 text-center">Bottle Size</th>
-                    <th className="px-4 py-3 text-right">Unit Price (₹)</th>
-                    <th className="px-4 py-3 text-center">Qty Sold</th>
-                    <th className="px-4 py-3 text-right text-emerald-600 print:text-black">Total Revenue (₹)</th>
+                    <th className="px-4 py-3">{t('reports.brandNameHeader', 'Brand Name')}</th>
+                    <th className="px-4 py-3 text-center">{t('reports.bottleSizeHeader', 'Bottle Size')}</th>
+                    <th className="px-4 py-3 text-right">{t('reports.unitPriceHeader', 'Unit Price (₹)')}</th>
+                    <th className="px-4 py-3 text-center">{t('reports.qtySoldHeader', 'Qty Sold')}</th>
+                    <th className="px-4 py-3 text-right text-emerald-600 print:text-black">{t('reports.totalRevenueHeader', 'Total Revenue (₹)')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {loading ? (
-                    <tr><td colSpan="5" className="px-4 py-8 text-center">Compiling sales data...</td></tr>
+                    <tr><td colSpan="5" className="px-4 py-8 text-center">{t('reports.compilingSalesData', 'Compiling sales data...')}</td></tr>
                   ) : salesList.map((item, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 print:hover:bg-transparent">
                       <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{item.brand_name}</td>
@@ -1079,7 +1082,7 @@ export default function Reports() {
                   <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                     <tr>
                       <td colSpan="3" className="px-4 py-4 text-right">
-                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTALS</div>
+                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> {t('common.totals', 'TOTALS')}</div>
                       </td>
                       <td className="px-4 py-4 text-center font-black text-indigo-600 dark:text-indigo-400">{salesTotalQty}</td>
                       <td className="px-4 py-4 text-right font-black text-emerald-600 dark:text-emerald-400 print-text-emerald">{formatRs(salesTotalRev)}</td>
@@ -1094,18 +1097,18 @@ export default function Reports() {
         {/* PAGE 2 */}
         <div className="page-break-before pt-6 sm:pt-0">
           <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
-             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
-             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">{t('reports.printTitle', 'Nexus Diary')}</h1>
+             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">{t('reports.reportingPeriod', 'Reporting Period:')} {startDate.toLocaleDateString('en-IN')} {t('common.to', 'TO')} {endDate.toLocaleDateString('en-IN')}</p>
           </div>
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Receipt size={18} className="no-print" /> 3. Business Expenses Ledger</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Receipt size={18} className="no-print" /> {t('reports.expensesSection', '3. Business Expenses Ledger')}</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
-                  <tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-right text-red-600 print:text-black">Amount (₹)</th></tr>
+                  <tr><th className="px-4 py-3">{t('reports.expDateHeader', 'Date')}</th><th className="px-4 py-3">{t('reports.expDescHeader', 'Description')}</th><th className="px-4 py-3 text-right text-red-600 print:text-black">{t('reports.expAmtHeader', 'Amount (₹)')}</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {loading ? <tr><td colSpan="3" className="px-4 py-8 text-center">Compiling...</td></tr> : expenseList.map((e, idx) => (
+                  {loading ? <tr><td colSpan="3" className="px-4 py-8 text-center">{t('reports.compiling', 'Compiling...')}</td></tr> : expenseList.map((e, idx) => (
                     <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{e.description}</td><td className="px-4 py-3 text-right font-bold text-red-600 dark:text-red-400 print-text-rose">{formatRs(e.amount)}</td></tr>
                   ))}
                 </tbody>
@@ -1113,7 +1116,7 @@ export default function Reports() {
                   <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                     <tr>
                       <td colSpan="2" className="px-4 py-4 text-right">
-                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTAL EXPENSES</div>
+                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> {t('reports.totalExpensesLabel', 'TOTAL EXPENSES')}</div>
                       </td>
                       <td className="px-4 py-4 text-right font-black text-red-600 dark:text-red-400 print-text-rose">{formatRs(summary.totalExpenses)}</td>
                     </tr>
@@ -1127,18 +1130,18 @@ export default function Reports() {
         {/* PAGE 3 */}
         <div className="page-break-before pt-6 sm:pt-0">
           <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
-             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
-             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">{t('reports.printTitle', 'Nexus Diary')}</h1>
+             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">{t('reports.reportingPeriod', 'Reporting Period:')} {startDate.toLocaleDateString('en-IN')} {t('common.to', 'TO')} {endDate.toLocaleDateString('en-IN')}</p>
           </div>
           <div className="mb-8">
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Landmark size={18} className="no-print" /> 4. Online Collections Ledger</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-4 flex items-center gap-2"><Landmark size={18} className="no-print" /> {t('reports.collectionsSection', '4. Online Collections Ledger')}</h3>
             <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
-                  <tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Description</th><th className="px-4 py-3 text-center">Mode</th><th className="px-4 py-3 text-right text-indigo-600 print:text-black">Amount (₹)</th></tr>
+                  <tr><th className="px-4 py-3">{t('reports.collDateHeader', 'Date')}</th><th className="px-4 py-3">{t('reports.collDescHeader', 'Description')}</th><th className="px-4 py-3 text-center">{t('reports.collModeHeader', 'Mode')}</th><th className="px-4 py-3 text-right text-indigo-600 print:text-black">{t('reports.collAmtHeader', 'Amount (₹)')}</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {loading ? <tr><td colSpan="4" className="px-4 py-8 text-center">Compiling...</td></tr> : collectionList.map((c, idx) => (
+                  {loading ? <tr><td colSpan="4" className="px-4 py-8 text-center">{t('reports.compiling', 'Compiling...')}</td></tr> : collectionList.map((c, idx) => (
                     <tr key={idx}><td className="px-4 py-3 font-medium">{new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td><td className="px-4 py-3">{c.description}</td><td className="px-4 py-3 text-center"><span className="px-2 py-1 text-[10px] font-bold uppercase rounded-md bg-blue-100 text-blue-700 print:bg-slate-100 print:text-blue-800">{c.withdrawal_mode}</span></td><td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(c.amount)}</td></tr>
                   ))}
                 </tbody>
@@ -1146,7 +1149,7 @@ export default function Reports() {
                   <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                     <tr>
                       <td colSpan="3" className="px-4 py-4 text-right">
-                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TOTAL COLLECTIONS</div>
+                         <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> {t('reports.totalCollectionsLabel', 'TOTAL COLLECTIONS')}</div>
                       </td>
                       <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(summary.totalWithdrawn)}</td>
                     </tr>
@@ -1160,22 +1163,22 @@ export default function Reports() {
         {/* PAGE 4 */}
         <div className="page-break-before pt-6 sm:pt-0">
           <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
-             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
-             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+             <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">{t('reports.printTitle', 'Nexus Diary')}</h1>
+             <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">{t('reports.reportingPeriod', 'Reporting Period:')} {startDate.toLocaleDateString('en-IN')} {t('common.to', 'TO')} {endDate.toLocaleDateString('en-IN')}</p>
           </div>
           
           <div className="mb-8">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-6 flex items-center gap-2">
-              <Users size={18} className="no-print" /> 5. Trader Purchases & Payment Ledger
+              <Users size={18} className="no-print" /> {t('reports.traderSection', '5. Trader Purchases & Payment Ledger')}
             </h3>
 
             {loading ? (
-              <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling trader data...</p>
+              <p className="text-center text-slate-400 dark:text-slate-500 py-12">{t('reports.compilingTraderData', 'Compiling trader data...')}</p>
             ) : (
               <div className="space-y-10">
                 <div>
                   <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-indigo-400 pl-2">
-                    A. Individual Trader Ledgers
+                    {t('reports.traderIndividual', 'A. Individual Trader Ledgers')}
                   </h4>
                   
                   {Object.keys(groupedTraderData).length === 0 ? (
@@ -1192,10 +1195,10 @@ export default function Reports() {
                           <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[10px] tracking-wider border-b border-slate-100 dark:border-slate-700">
                               <tr>
-                                <th className="px-4 py-2.5">Date</th>
-                                <th className="px-4 py-2.5 text-right text-amber-600 print:text-black">Purchase Amount (₹)</th>
-                                <th className="px-4 py-2.5 text-right text-indigo-600 print:text-black">Paid Amount (₹)</th>
-                                <th className="px-4 py-2.5 text-right text-slate-900 dark:text-white print:text-black">Remaining Balance (₹)</th>
+                                <th className="px-4 py-2.5">{t('reports.traderDateHeader', 'Date')}</th>
+                                <th className="px-4 py-2.5 text-right text-amber-600 print:text-black">{t('reports.traderPurchaseHeader', 'Purchase Amount (₹)')}</th>
+                                <th className="px-4 py-2.5 text-right text-indigo-600 print:text-black">{t('reports.traderPaidHeader', 'Paid Amount (₹)')}</th>
+                                <th className="px-4 py-2.5 text-right text-slate-900 dark:text-white print:text-black">{t('reports.traderRemainingHeader', 'Remaining Balance (₹)')}</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1225,17 +1228,17 @@ export default function Reports() {
 
                 <div className="pt-4 break-inside-avoid">
                   <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 border-l-4 border-slate-400 pl-2">
-                    B. Consolidated Ledger
+                    {t('reports.traderConsolidated', 'B. Consolidated Ledger')}
                   </h4>
                   <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden print:border-none print:shadow-none">
                     <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                       <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200 dark:border-slate-700">
                         <tr>
-                          <th className="px-4 py-3">Date</th>
-                          <th className="px-4 py-3">Trader Name</th>
-                          <th className="px-4 py-3 text-right text-amber-600 print:text-black">Purchase Amount (₹)</th>
-                          <th className="px-4 py-3 text-right text-indigo-600 print:text-black">Paid Amount (₹)</th>
-                          <th className="px-4 py-3 text-right text-slate-900 dark:text-white print:text-black">Remaining Balance (₹)</th>
+                          <th className="px-4 py-3">{t('reports.traderDateHeader', 'Date')}</th>
+                          <th className="px-4 py-3">{t('reports.traderNameHeader', 'Trader Name')}</th>
+                          <th className="px-4 py-3 text-right text-amber-600 print:text-black">{t('reports.traderPurchaseHeader', 'Purchase Amount (₹)')}</th>
+                          <th className="px-4 py-3 text-right text-indigo-600 print:text-black">{t('reports.traderPaidHeader', 'Paid Amount (₹)')}</th>
+                          <th className="px-4 py-3 text-right text-slate-900 dark:text-white print:text-black">{t('reports.traderRemainingHeader', 'Remaining Balance (₹)')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1253,7 +1256,7 @@ export default function Reports() {
                         <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700">
                           <tr>
                             <td colSpan="2" className="px-4 py-4 text-right">
-                               <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> TRADER TOTALS</div>
+                               <div className="font-black text-slate-800 dark:text-slate-100 flex justify-end items-center gap-2"><Sigma size={16} className="text-blue-600"/> {t('reports.traderTotalsLabel', 'TRADER TOTALS')}</div>
                             </td>
                             <td className="px-4 py-4 text-right font-black text-amber-600 dark:text-amber-400">{formatRs(traderTotalPurchases)}</td>
                             <td className="px-4 py-4 text-right font-black text-indigo-600 dark:text-indigo-400 print-text-indigo">{formatRs(traderTotalPaid)}</td>
@@ -1273,12 +1276,12 @@ export default function Reports() {
         {showMagicChart && (
           <div className="page-break-before pt-6 sm:pt-0">
             <div className="hidden print:block text-center mb-8 border-b-2 border-slate-200 print:border-indigo-500 pb-4">
-               <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">Nexus Diary</h1>
-               <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">Reporting Period: {startDate.toLocaleDateString('en-IN')} TO {endDate.toLocaleDateString('en-IN')}</p>
+               <h1 className="text-2xl font-black text-indigo-950 uppercase tracking-widest">{t('reports.printTitle', 'Nexus Diary')}</h1>
+               <p className="text-slate-600 font-semibold mt-1 uppercase text-xs tracking-wider">{t('reports.reportingPeriod', 'Reporting Period:')} {startDate.toLocaleDateString('en-IN')} {t('common.to', 'TO')} {endDate.toLocaleDateString('en-IN')}</p>
             </div>
 
             <div className="mb-8">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-6 flex items-center gap-2"><Wand2 size={18} className="no-print" /> 6. Magic Chart Ledger Analytics & Sandbox</h3>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 print-section-header uppercase border-b border-slate-200 dark:border-slate-800 pb-2 mb-6 flex items-center gap-2"><Wand2 size={18} className="no-print" /> {t('reports.magicChartSection', '6. Magic Chart Ledger Analytics & Sandbox')}</h3>
               
               {loading ? (
                 <p className="text-center text-slate-400 dark:text-slate-500 py-12">Compiling simulated charts...</p>
@@ -1286,7 +1289,7 @@ export default function Reports() {
                 <div className="space-y-8 no-print:bg-[#0c111d] dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl p-6 overflow-hidden print:border-none print:shadow-none print:p-0">
                   <div className="text-center">
                     <h3 className="text-lg font-black text-slate-700 dark:text-slate-300 print:text-indigo-950 tracking-widest uppercase">
-                      *** माहे {startDate.toLocaleDateString('mr-IN', { month: 'long' })} {startDate.getFullYear()} ***
+                      *** {startDate.toLocaleDateString(locale, { month: 'long' })} {startDate.getFullYear()} ***
                     </h3>
                   </div>
 
@@ -1295,25 +1298,25 @@ export default function Reports() {
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            चालू महिन्याची विक्री <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Total Sales)</span>
+                            {t('magicChart.col1', 'Total Sales')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.col1Sub', 'चालू महिन्याची विक्री')})</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            आखेर शिल्लक माल <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Closing Stock)</span>
+                            {t('magicChart.col2', 'Closing Stock')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.col2Sub', 'आखेर शिल्लक माल')})</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10 print:bg-slate-50">
-                            रकाना 1 + 2 ची बेरीज <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Sum 1 + 2)</span>
+                            {t('magicChart.col3', 'Sum 1 + 2')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.col3Sub', 'रकाना 1 + 2 ची बेरीज')})</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            सुरुवातीची शिल्लक <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Opening Stock)</span>
+                            {t('magicChart.col4', 'Opening Stock')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.col4Sub', 'सुरुवातीची शिल्लक')})</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                            चालू महिन्याची खरेदी <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Total Purchases)</span>
+                            {t('magicChart.col5', 'Total Purchases')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.col5Sub', 'चालू महिन्याची खरेदी')})</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10 print:bg-slate-50">
-                            रकाना 4 + 5 ची बेरीज <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Sum 4 + 5)</span>
+                            {t('magicChart.col6', 'Sum 4 + 5')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.col6Sub', 'रकाना 4 + 5 ची बेरीज')})</span>
                           </th>
                           <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[16%]">
-                            रकाना 3 - 6 <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">ढोबळ नफा - तोटा</span>
+                            {t('magicChart.col7', 'Gross Profit - Loss')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">{t('magicChart.col7Sub', 'ढोबळ नफा - तोटा')}</span>
                           </th>
                         </tr>
                       </thead>
@@ -1359,10 +1362,10 @@ export default function Reports() {
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
-                            एकूण ढोबळ नफा - चालू महिन्याचा खर्च <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Gross Profit - Expenses)</span>
+                            {t('magicChart.settleCol1', 'Gross Profit - Expenses')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.settleCol1Sub', 'एकूण ढोबळ नफा - चालू महिन्याचा खर्च')})</span>
                           </th>
                           <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
-                            एकूण चालू महिन्याचा नफा <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Current Month Net Profit)</span>
+                            {t('magicChart.settleCol2', 'Current Month Net Profit')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.settleCol2Sub', 'एकूण चालू महिन्याचा नफा')})</span>
                           </th>
                         </tr>
                       </thead>
@@ -1384,13 +1387,13 @@ export default function Reports() {
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                            मागील महिन्याचा नफा (+) <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Previous Month Net Profit)</span>
+                            {t('magicChart.cumCol1', 'Previous Month Net Profit (+)')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.cumCol1Sub', 'मागील महिन्याचा नफा (+)')})</span>
                           </th>
                           <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                            चालू महिन्याचा नफा <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">(Current Month Net Profit)</span>
+                            {t('magicChart.cumCol2', 'Current Month Net Profit')} <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 print:text-slate-500 mt-0.5">({t('magicChart.cumCol2Sub', 'चालू महिन्याचा नफा')})</span>
                           </th>
                           <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5 print:bg-indigo-50">
-                            एकूण नफा <span className="block text-[10px] font-medium text-slate-400 dark:text-slate-300 print:text-slate-500 mt-0.5">(Total Net Profit)</span>
+                            {t('magicChart.cumCol3', 'Total Net Profit')} <span className="block text-[10px] font-medium text-slate-400 dark:text-slate-300 print:text-slate-500 mt-0.5">({t('magicChart.cumCol3Sub', 'एकूण नफा')})</span>
                           </th>
                         </tr>
                       </thead>

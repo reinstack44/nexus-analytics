@@ -5,6 +5,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { useTheme } from '../../context/ThemeContext';
+import { useTranslation } from 'react-i18next';
 
 const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
   <button
@@ -20,12 +21,10 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 ));
 CustomDateInput.displayName = "CustomDateInput";
 
-// Safe financial rounding helper
 const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Safe paginated fetcher for large datasets
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -49,6 +48,7 @@ async function fetchAllRows(queryBuilder) {
 
 export default function Dashboard() {
   const { theme } = useTheme(); 
+  const { t } = useTranslation();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   
   const parseDBDate = (str) => {
@@ -79,7 +79,6 @@ export default function Dashboard() {
     if (endDate) sessionStorage.setItem('global_endDate', endDate.toISOString());
   }, [startDate, endDate]);
 
-  // Realtime DB Sync Listener
   useEffect(() => {
     const channel = supabase
       .channel('dashboard-realtime')
@@ -155,7 +154,6 @@ export default function Dashboard() {
       let tExpenses = 0;
       expensesData?.forEach(e => tExpenses = safeRound(tExpenses + (parseFloat(e.amount) || 0)));
 
-      // UNIFIED FIFO CHRONOLOGICAL RECONSTRUCTION
       let tRevenue = 0;
       let tBottles = 0;
       const salesByDate = {};
@@ -275,7 +273,7 @@ export default function Dashboard() {
     return (
       <div className="flex flex-col justify-center items-center h-[70vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-        <p className="text-slate-500 dark:text-slate-400 font-medium animate-pulse">Syncing Business Data...</p>
+        <p className="text-slate-500 dark:text-slate-400 font-medium animate-pulse">{t('dashboard.syncingData', 'Syncing Business Data...')}</p>
       </div>
     );
   }
@@ -330,8 +328,8 @@ export default function Dashboard() {
       {/* HEADER WITH SLICER */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 relative z-50">
         <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">Executive Dashboard</h2>
-          <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm sm:text-base">Real-time overview filtered by your selected timeline.</p>
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">{t('dashboard.title', 'Executive Dashboard')}</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm sm:text-base">{t('dashboard.description', 'Real-time overview filtered by your selected timeline.')}</p>
         </div>
         
         <div className="flex items-center gap-2 bg-white/60 dark:bg-slate-900/60 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm backdrop-blur-sm relative z-50">
@@ -345,7 +343,7 @@ export default function Dashboard() {
             showYearDropdown
             dropdownMode="select"
           />
-          <span className="text-slate-400 font-semibold px-1">to</span>
+          <span className="text-slate-400 font-semibold px-1">{t('common.to', 'to')}</span>
           <DatePicker
             selected={endDate}
             onChange={handleEndDateChange}
@@ -367,7 +365,7 @@ export default function Dashboard() {
           {loading && <div className="absolute inset-0 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm z-10 flex items-center justify-center"><div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>}
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Revenue (Sales)</p>
+              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('dashboard.revenueLabel', 'Revenue (Sales)')}</p>
               <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">₹{stats.revenue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
             </div>
             <div className="p-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl text-emerald-500 dark:text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors duration-300">
@@ -380,7 +378,7 @@ export default function Dashboard() {
           {loading && <div className="absolute inset-0 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm z-10 flex items-center justify-center"><div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>}
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Bottles Sold</p>
+              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('dashboard.bottlesSoldLabel', 'Bottles Sold')}</p>
               <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{stats.bottlesSold.toLocaleString()}</h3>
             </div>
             <div className="p-3 bg-blue-50 dark:bg-blue-900/30 rounded-xl text-blue-500 dark:text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-colors duration-300">
@@ -392,7 +390,7 @@ export default function Dashboard() {
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 group">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Total Purchases</p>
+              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('dashboard.totalPurchasesLabel', 'Total Purchases')}</p>
               <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-amber-500 transition-colors">₹{stats.totalPurchases.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
             </div>
             <div className="p-3 bg-amber-50 dark:bg-amber-900/30 rounded-xl text-amber-500 dark:text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-300">
@@ -404,7 +402,7 @@ export default function Dashboard() {
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 group">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Total Expenses</p>
+              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('dashboard.totalExpensesLabel', 'Total Expenses')}</p>
               <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 group-hover:text-red-500 transition-colors">₹{stats.totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
             </div>
             <div className="p-3 bg-red-50 dark:bg-red-900/30 rounded-xl text-red-500 dark:text-red-400 group-hover:bg-red-500 group-hover:text-white transition-colors duration-300">
@@ -422,12 +420,12 @@ export default function Dashboard() {
           {loading && <div className="absolute inset-0 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm z-10"></div>}
           <div className="flex items-center gap-2 mb-6">
             <BarChart3 size={20} className="text-blue-500" />
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Sales Trend (Revenue)</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">{t('dashboard.salesTrendTitle', 'Sales Trend (Revenue)')}</h3>
           </div>
           
           <div className="h-75 w-full">
             {chartData.length === 0 && !loading ? (
-               <div className="h-full flex items-center justify-center text-slate-400 font-medium">No sales recorded (Ensure closing stock is entered).</div>
+               <div className="h-full flex items-center justify-center text-slate-400 font-medium">{t('dashboard.noSalesRecord', 'No sales recorded (Ensure closing stock is entered).')}</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -442,7 +440,7 @@ export default function Dashboard() {
                   <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} tickFormatter={(value) => `₹${value}`} dx={-10} />
                   <Tooltip 
                     contentStyle={{ borderRadius: '12px', border: '1px solid ' + (theme === 'dark' ? '#1e293b' : '#f1f5f9'), backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff', color: theme === 'dark' ? '#f8fafc' : '#0f172a', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                    formatter={(value) => [`₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 'Revenue']}
+                    formatter={(value) => [`₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, t('dashboard.revenueLabel', 'Revenue')]}
                   />
                   <Area type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorRevenue)" />
                 </AreaChart>
@@ -455,12 +453,12 @@ export default function Dashboard() {
           {loading && <div className="absolute inset-0 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm z-10"></div>}
           <div className="flex items-center gap-2 mb-6">
             <Trophy size={20} className="text-amber-500" />
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Top Brands Sold</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">{t('dashboard.topBrandsTitle', 'Top Brands Sold')}</h3>
           </div>
           
           <div className="flex-1 overflow-y-auto">
             {topBrands.length === 0 && !loading ? (
-              <div className="h-full flex items-center justify-center text-slate-400 text-sm">No sales data for this period.</div>
+              <div className="h-full flex items-center justify-center text-slate-400 text-sm">{t('dashboard.noSalesData', 'No sales data for this period.')}</div>
             ) : (
               <div className="space-y-4">
                 {topBrands.map((brand, index) => (
@@ -471,7 +469,7 @@ export default function Dashboard() {
                       </div>
                       <span className="font-semibold text-slate-700 dark:text-slate-200">{brand.name}</span>
                     </div>
-                    <span className="font-bold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-lg text-sm">{brand.qty} Units</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-lg text-sm">{brand.qty} {t('common.units', 'Units')}</span>
                   </div>
                 ))}
               </div>
@@ -487,7 +485,7 @@ export default function Dashboard() {
             <div className="p-2 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg">
               <Users size={20} className="text-indigo-500 dark:text-indigo-400" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Trader Purchases Summary</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">{t('dashboard.traderSummaryTitle', 'Trader Purchases Summary')}</h3>
           </div>
         </div>
         
@@ -495,9 +493,9 @@ export default function Dashboard() {
           <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
             <thead className="bg-slate-50/50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-xs tracking-wider">
               <tr>
-                <th className="px-6 py-4">Trader Name</th>
-                <th className="px-6 py-4 text-center">Transactions</th>
-                <th className="px-6 py-4 text-right">Total Amount Billed (₹)</th>
+                <th className="px-6 py-4">{t('dashboard.traderName', 'Trader Name')}</th>
+                <th className="px-6 py-4 text-center">{t('dashboard.totalQtyBought', 'Transactions')}</th>
+                <th className="px-6 py-4 text-right">{t('dashboard.totalAmtBilled', 'Total Amount Billed (₹)')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -505,7 +503,7 @@ export default function Dashboard() {
                 <tr>
                   <td colSpan="3" className="px-6 py-10 text-center">
                     <div className="flex flex-col items-center justify-center">
-                      <p className="text-slate-600 dark:text-slate-400 font-medium text-base">No purchases recorded for selected dates.</p>
+                      <p className="text-slate-600 dark:text-slate-400 font-medium text-base">{t('dashboard.noPurchasesRecord', 'No purchases recorded for selected dates.')}</p>
                     </div>
                   </td>
                 </tr>
@@ -513,7 +511,7 @@ export default function Dashboard() {
                 traderSummary.map((trader, index) => (
                   <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-6 py-4 font-semibold text-slate-800 dark:text-slate-100">{trader.name}</td>
-                    <td className="px-6 py-4 text-center font-bold text-slate-700 dark:text-slate-300">{trader.count} Recorded</td>
+                    <td className="px-6 py-4 text-center font-bold text-slate-700 dark:text-slate-300">{trader.count} {t('dashboard.transactionsRecorded', 'Recorded')}</td>
                     <td className="px-6 py-4 text-right font-black text-orange-600 dark:text-orange-400">
                       ₹{trader.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>

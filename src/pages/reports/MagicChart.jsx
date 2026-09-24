@@ -1,19 +1,23 @@
 import { useState, useEffect, forwardRef, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useTranslation } from 'react-i18next';
 import { Wand2, Calendar, ChevronDown, RefreshCw } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
-const CustomMonthInput = forwardRef(({ value, onClick }, ref) => (
-  <button type="button" onClick={onClick} ref={ref} className="flex items-center justify-between px-4 py-2.5 h-12 w-56 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-    <div className="flex items-center">
-      <Calendar size={18} className="text-indigo-500 mr-2 shrink-0" />
-      <span>{value || "Select Month"}</span>
-    </div>
-    <ChevronDown size={16} className="text-slate-400 dark:text-slate-500 ml-2 shrink-0" />
-  </button>
-));
+const CustomMonthInput = forwardRef(({ value, onClick }, ref) => {
+  const { t } = useTranslation();
+  return (
+    <button type="button" onClick={onClick} ref={ref} className="flex items-center justify-between px-4 py-2.5 h-12 w-56 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer">
+      <div className="flex items-center">
+        <Calendar size={18} className="text-indigo-500 mr-2 shrink-0" />
+        <span>{value || t('magicChart.selectMonth', 'Select Month')}</span>
+      </div>
+      <ChevronDown size={16} className="text-slate-400 dark:text-slate-500 ml-2 shrink-0" />
+    </button>
+  );
+});
 CustomMonthInput.displayName = "CustomMonthInput";
 
 const formatDateForDB = (dateObj) => {
@@ -29,7 +33,6 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Safe paginated fetcher for large dataset queries
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -55,6 +58,7 @@ const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { 
 
 export default function MagicChart() {
   const { user } = useAuth();
+  const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(true);
   const prevMonthRef = useRef(null);
   const [selectedMonth, setSelectedMonth] = useState(() => {
@@ -64,7 +68,6 @@ export default function MagicChart() {
 
   const [syncTrigger, setSyncTrigger] = useState(0);
 
-  // Event-driven Realtime DB Synchronization
   useEffect(() => {
     const channel = supabase
       .channel('magicchart-realtime')
@@ -344,44 +347,11 @@ export default function MagicChart() {
 
   const cumulativeProfitVal = safeRound((prevMonthNetProfit || 0) + netProfitVal); 
 
+  const locale = i18n.language === 'hi' ? 'hi-IN' : i18n.language === 'mr' ? 'mr-IN' : 'en-IN';
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300">
-      <style dangerouslySetInnerHTML={{ __html: `
-        .react-datepicker-popper { z-index: 99999 !important; }
-        .react-datepicker { background-color: #ffffff !important; border-radius: 1.2rem !important; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1) !important; font-family: inherit !important; padding: 0.8rem !important; border: none !important; }
-        .dark .react-datepicker { background-color: #1e293b !important; border: 1px solid #334155 !important; }
-        .react-datepicker__triangle { display: none !important; }
-        .react-datepicker__header { background-color: transparent !important; border-bottom: 1px solid #f1f5f9 !important; border-radius: 1rem 1rem 0 0 !important; padding-bottom: 0.8rem !important; }
-        .dark .react-datepicker__header { border-bottom: 1px solid #334155 !important; }
-        .react-datepicker__month-text--keyboard-selected, .react-datepicker__month-text--selected { background-color: #4f46e5 !important; color: white !important; font-weight: bold; border-radius: 0.5rem !important; }
-        .react-datepicker__month-text:hover { background-color: #e0e7ff !important; border-radius: 0.5rem !important; color: #4f46e5 !important; font-weight: bold; }
-        .dark .react-datepicker__month-text:hover { background-color: #334155 !important; color: white !important; }
-        .react-datepicker__month-text { padding: 0.5rem !important; margin: 0.2rem !important; color: #475569 !important; font-weight: 600 !important; transition: all 0.2s; }
-        .dark .react-datepicker__month-text { color: #cbd5e1 !important; }
-        .react-datepicker__year-dropdown-container--select { margin: 0 !important; display: flex; justify-content: center; }
-        .react-datepicker__year-select {
-          background-color: #f8fafc !important;
-          border: 1px solid #e2e8f0 !important;
-          border-radius: 0.8rem !important;
-          padding: 0.4rem 2rem 0.4rem 1rem !important;
-          color: #1e293b !important;
-          font-weight: 800 !important;
-          font-size: 1rem !important;
-          cursor: pointer !important;
-          outline: none !important;
-          appearance: none !important;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E") !important;
-          background-repeat: no-repeat !important;
-          background-position: right 0.5rem center !important;
-          background-size: 1.2em !important;
-          text-align: center !important;
-        }
-        .dark .react-datepicker__year-select option {
-          background-color: #0f172a !important;
-          color: #f8fafc !important;
-        }
-      `}} />
-
+      
       {/* HEADER SECTION */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 relative z-50">
         <div className="shrink-0 flex items-center gap-3">
@@ -389,8 +359,8 @@ export default function MagicChart() {
             <Wand2 size={28} />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-slate-800 dark:text-white tracking-tight">Magic Chart Ledger</h2>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">Physical ledger layout redesigned for structured accounting.</p>
+            <h2 className="text-2xl font-black text-slate-800 dark:text-white tracking-tight">{t('magicChart.title', 'Magic Chart Ledger')}</h2>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">{t('magicChart.description', 'Physical ledger layout redesigned for structured accounting.')}</p>
           </div>
         </div>
         
@@ -399,8 +369,8 @@ export default function MagicChart() {
             type="button"
             disabled={loading}
             onClick={() => setSyncTrigger(prev => prev + 1)}
-            className="flex items-center justify-center p-2.5 h-12 w-12 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
-            title="Sync Data"
+            className="flex items-center justify-center p-2.5 h-12 w-12 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 cursor-pointer"
+            title={t('magicChart.syncData', 'Sync Data')}
           >
             <RefreshCw size={18} className={`text-indigo-500 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -439,7 +409,7 @@ export default function MagicChart() {
       {loading ? (
         <div className="flex flex-col items-center justify-center min-h-[50vh] bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800">
           <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-          <p className="text-slate-500 font-medium">Reconciling ledger entries...</p>
+          <p className="text-slate-500 font-medium">{t('magicChart.reconcilingLedger', 'Reconciling ledger entries...')}</p>
         </div>
       ) : (
         <div className="space-y-8 animate-in fade-in duration-300">
@@ -449,7 +419,7 @@ export default function MagicChart() {
             
             <div className="text-center">
               <h3 className="text-xl font-black text-slate-700 dark:text-slate-300 tracking-widest uppercase">
-                *** माहे {selectedMonth.toLocaleDateString('mr-IN', { month: 'long' })} {selectedMonth.getFullYear()} ***
+                *** {selectedMonth.toLocaleDateString(locale, { month: 'long' })} {selectedMonth.getFullYear()} ***
               </h3>
             </div>
 
@@ -459,25 +429,25 @@ export default function MagicChart() {
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                      चालू महिन्याची विक्री <br /> (Total Sales)
+                      {t('magicChart.col1', 'Total Sales')} <br /> ({t('magicChart.col1Sub', 'चालू महिन्याची विक्री')})
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                      आखेर शिल्लक माल <br /> (Closing Stock)
+                      {t('magicChart.col2', 'Closing Stock')} <br /> ({t('magicChart.col2Sub', 'आखेर शिल्लक माल')})
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
-                      रकाना 1 + 2 ची बेरीज <br /> (Sum 1 + 2)
+                      {t('magicChart.col3', 'Sum 1 + 2')} <br /> ({t('magicChart.col3Sub', 'रकाना 1 + 2 ची बेरीज')})
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                      सुरुवातीची शिल्लक <br /> (Opening Stock)
+                      {t('magicChart.col4', 'Opening Stock')} <br /> ({t('magicChart.col4Sub', 'सुरुवातीची शिल्लक')})
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%]">
-                      चालू महिन्याची खरेदी <br /> (Total Purchases)
+                      {t('magicChart.col5', 'Total Purchases')} <br /> ({t('magicChart.col5Sub', 'चालू महिन्याची खरेदी')})
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[14%] bg-indigo-50/40 dark:bg-indigo-950/10">
-                      रकाना 4 + 5 ची बेरीज <br /> (Sum 4 + 5)
+                      {t('magicChart.col6', 'Sum 4 + 5')} <br /> ({t('magicChart.col6Sub', 'रकाना 4 + 5 ची बेरीज')})
                     </th>
                     <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[16%]">
-                      रकाना 3 - 6 <br /> ढोबळ नफा - तोटा
+                      {t('magicChart.col7', 'Gross Profit - Loss')} <br /> ({t('magicChart.col7Sub', 'ढोबळ नफा - तोटा')})
                     </th>
                   </tr>
                 </thead>
@@ -531,10 +501,10 @@ export default function MagicChart() {
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
-                      एकूण ढोबळ नफा - चालू महिन्याचा खर्च <br /> (Gross Profit - Expenses)
+                      {t('magicChart.settleCol1', 'Gross Profit - Expenses')} <br /> ({t('magicChart.settleCol1Sub', 'एकूण ढोबळ नफा - चालू महिन्याचा खर्च')})
                     </th>
                     <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[50%]">
-                      एकूण चालू महिन्याचा नफा <br /> (Current Month Net Profit)
+                      {t('magicChart.settleCol2', 'Current Month Net Profit')} <br /> ({t('magicChart.settleCol2Sub', 'एकूण चालू महिन्याचा नफा')})
                     </th>
                   </tr>
                 </thead>
@@ -557,13 +527,13 @@ export default function MagicChart() {
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-300 dark:border-slate-700">
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                      मागील महिन्याचा नफा (+) <br /> (Previous Month Net Profit)
+                      {t('magicChart.cumCol1', 'Previous Month Net Profit (+)')} <br /> ({t('magicChart.cumCol1Sub', 'मागील महिन्याचा नफा (+)')})
                     </th>
                     <th className="py-4 px-2 border-r border-slate-300 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-200 w-[33%]">
-                      चालू महिन्याचा नफा <span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">(Auto)</span>
+                      {t('magicChart.cumCol2', 'Current Month Net Profit')} <span className="text-slate-400 dark:text-slate-500 text-[10px] font-normal">({t('dailyStock.saleQtySub', 'Auto')})</span>
                     </th>
                     <th className="py-4 px-2 text-sm font-bold text-slate-700 dark:text-slate-200 w-[34%] bg-indigo-500/10 dark:bg-indigo-500/5">
-                      एकूण नफा <br /> (Total Net Profit)
+                      {t('magicChart.cumCol3', 'Total Net Profit')} <br /> ({t('magicChart.cumCol3Sub', 'एकूण नफा')})
                     </th>
                   </tr>
                 </thead>

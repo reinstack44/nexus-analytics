@@ -1,14 +1,14 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useModal } from '../../context/ModalContext';
+import { useTranslation } from 'react-i18next';
 import { Plus, Tag, Edit2, Trash2, X, AlertTriangle, History, Search, Wine, Layers } from 'lucide-react';
 
-// Safe financial rounding helper
 const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Safe paginated fetcher for large dataset queries
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -32,15 +32,16 @@ async function fetchAllRows(queryBuilder) {
 
 export default function BrandMaster() {
   const { user } = useAuth();
+  const { showAlert } = useModal();
+  const { t } = useTranslation();
   const [brands, setBrands] = useState([]);
-  const [latestPrices, setLatestPrices] = useState({}); // Stores computed active/latest prices
+  const [latestPrices, setLatestPrices] = useState({});
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const isMountedRef = useRef(true);
 
-  // Realtime Database Sync
   useEffect(() => {
     isMountedRef.current = true;
     const channel = supabase
@@ -62,7 +63,6 @@ export default function BrandMaster() {
     };
   }, []);
 
-  // Form State
   const [formData, setFormData] = useState({
     brandName: '',
     category: 'Whisky',
@@ -71,7 +71,6 @@ export default function BrandMaster() {
     mrpPrice: '',
   });
 
-  // Modal States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
@@ -185,6 +184,9 @@ export default function BrandMaster() {
       
       setFormData({ brandName: '', category: 'Whisky', bottleSize: '750ml', sellingPrice: '', mrpPrice: '' });
       fetchBrands();
+      showAlert({ title: "Success", message: "Product successfully added to Master catalog.", type: "success" });
+    } else if (brandError) {
+      showAlert({ title: "Error", message: brandError.message, type: "error" });
     }
     setIsSubmitting(false);
   };
@@ -221,9 +223,10 @@ export default function BrandMaster() {
 
     if (!updateError) {
       setIsEditModalOpen(false); 
-      fetchBrands(); 
+      fetchBrands();
+      showAlert({ title: "Updated", message: "Product details updated successfully.", type: "success" });
     } else {
-      alert("Error updating brand: " + updateError.message);
+      showAlert({ title: "Update Failed", message: updateError.message, type: "error" });
     }
     setIsSubmitting(false);
   };
@@ -239,14 +242,14 @@ export default function BrandMaster() {
       .eq('brand_id', brand.id);
 
     if (!error && count > 0) {
-      setDeleteWarningMessage(`Warning: This product has ${count} saved daily stock entries. Deletion is locked to prevent retrospective reports corruption.`);
+      setDeleteWarningMessage(t('brandMaster.deleteWarningStock', 'Warning: This product has saved daily stock entries. Deletion is locked to prevent retrospective reports corruption.'));
     }
   };
 
   const confirmDelete = async () => {
     if (!brandToDelete) return;
     if (deleteWarningMessage) {
-      alert("Deletion Locked: This brand is linked to historical transaction records. Deleting it will corrupt your analytical summaries.");
+      showAlert({ title: t('brandMaster.deleteLockedTitle', 'Deletion Locked'), message: deleteWarningMessage, type: "warning" });
       setIsDeleteModalOpen(false);
       return;
     }
@@ -256,9 +259,10 @@ export default function BrandMaster() {
       if (error) throw error;
       setIsDeleteModalOpen(false); 
       setBrandToDelete(null); 
-      fetchBrands(); 
+      fetchBrands();
+      showAlert({ title: "Deleted", message: "Brand removed from master catalog.", type: "success" });
     } catch (err) { 
-      alert("Error deleting brand: " + (err.message || "It is linked to existing stock records.")); 
+      showAlert({ title: "Error Deleting Brand", message: err.message || "Brand is linked to existing stock records.", type: "error" });
     } finally { 
       setIsSubmitting(false); 
     }
@@ -290,9 +294,9 @@ export default function BrandMaster() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
-            <Tag className="text-blue-500" /> Brand Master
+            <Tag className="text-blue-500" /> {t('brandMaster.title', 'Brand Master')}
           </h2>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Manage baseline parameters and details of inventory brands.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('brandMaster.description', 'Manage baseline parameters and details of inventory brands.')}</p>
         </div>
 
         <div className="flex gap-4">
@@ -301,7 +305,7 @@ export default function BrandMaster() {
               <Wine size={20}/>
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase">Total Brands</p>
+              <p className="text-xs font-bold text-slate-400 uppercase">{t('brandMaster.totalBrands', 'Total Brands')}</p>
               <h4 className="text-xl font-black text-slate-800 dark:text-slate-100 leading-none">{brands.length}</h4>
             </div>
           </div>
@@ -311,7 +315,7 @@ export default function BrandMaster() {
               <Layers size={20}/>
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase">Categories</p>
+              <p className="text-xs font-bold text-slate-400 uppercase">{t('brandMaster.categories', 'Categories')}</p>
               <h4 className="text-xl font-black text-slate-800 dark:text-slate-100 leading-none">{categoriesCount}</h4>
             </div>
           </div>
@@ -326,13 +330,13 @@ export default function BrandMaster() {
             <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-blue-600 dark:text-blue-400">
               <Plus size={18} />
             </div>
-            Register New Product
+            {t('brandMaster.registerProduct', 'Register New Product')}
           </h3>
           
           <form onSubmit={handleAddBrand} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                Brand Name
+                {t('brandMaster.brandName', 'Brand Name')}
               </label>
               <input 
                 type="text" 
@@ -340,14 +344,14 @@ export default function BrandMaster() {
                 value={formData.brandName} 
                 onChange={(e) => setFormData({ ...formData, brandName: e.target.value })} 
                 className={inputClass} 
-                placeholder="e.g., Royal Stag" 
+                placeholder={t('brandMaster.brandNamePlaceholder', 'e.g., Royal Stag')} 
               />
             </div>
             
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Category
+                  {t('brandMaster.category', 'Category')}
                 </label>
                 <select 
                   value={formData.category} 
@@ -367,7 +371,7 @@ export default function BrandMaster() {
               
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Bottle Size
+                  {t('brandMaster.bottleSize', 'Bottle Size')}
                 </label>
                 <select 
                   value={formData.bottleSize} 
@@ -389,7 +393,7 @@ export default function BrandMaster() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  MRP (₹)
+                  {t('brandMaster.baseMrp', 'Baseline MRP (₹)')}
                 </label>
                 <input 
                   type="number" 
@@ -404,7 +408,7 @@ export default function BrandMaster() {
               
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Sale Price (₹)
+                  {t('brandMaster.basePrice', 'Baseline Sale Price (₹)')}
                 </label>
                 <input 
                   type="number" 
@@ -421,9 +425,9 @@ export default function BrandMaster() {
             <button 
               type="submit" 
               disabled={isSubmitting} 
-              className="w-full mt-4 bg-blue-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-blue-700 transition-all flex justify-center items-center gap-2 shadow-md"
+              className="w-full mt-4 bg-blue-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-blue-700 transition-all flex justify-center items-center gap-2 shadow-md cursor-pointer"
             >
-              {isSubmitting ? 'Saving...' : 'Register to Master'}
+              {isSubmitting ? t('common.saving', 'Saving...') : t('brandMaster.registerButton', 'Register to Master')}
             </button>
           </form>
         </div>
@@ -432,7 +436,7 @@ export default function BrandMaster() {
         <div className="xl:col-span-2 bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
           <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row justify-between sm:items-center gap-4 bg-slate-50/50 dark:bg-slate-900/50">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-              <Layers size={18} className="text-slate-400" /> Registered Brands
+              <Layers size={18} className="text-slate-400" /> {t('brandMaster.registeredBrands', 'Registered Brands')}
             </h3>
             
             <div className="relative w-full sm:w-64">
@@ -441,7 +445,7 @@ export default function BrandMaster() {
               </span>
               <input 
                 type="text" 
-                placeholder="Search brands..." 
+                placeholder={t('brandMaster.searchPlaceholder', 'Search brands...')} 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/20 outline-none text-slate-700 dark:text-slate-200"
@@ -453,24 +457,24 @@ export default function BrandMaster() {
             <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
               <thead className="bg-white dark:bg-slate-900 text-slate-400 font-semibold uppercase text-[11px] tracking-wider sticky top-0 border-b border-slate-100 dark:border-slate-800 z-10 shadow-sm">
                 <tr>
-                  <th className="px-6 py-4">Brand Profile</th>
-                  <th className="px-6 py-4">Category</th>
-                  <th className="px-6 py-4 text-right">Latest MRP</th>
-                  <th className="px-6 py-4 text-right">Latest Sale Price</th>
-                  <th className="px-6 py-4 text-center">Actions</th>
+                  <th className="px-6 py-4">{t('brandMaster.brandProfile', 'Brand Profile')}</th>
+                  <th className="px-6 py-4">{t('brandMaster.category', 'Category')}</th>
+                  <th className="px-6 py-4 text-right">{t('brandMaster.latestMrp', 'Latest MRP')}</th>
+                  <th className="px-6 py-4 text-right">{t('brandMaster.latestPrice', 'Latest Sale Price')}</th>
+                  <th className="px-6 py-4 text-center">{t('common.actions', 'Actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
                 {loading ? (
                   <tr>
                     <td colSpan="5" className="px-6 py-12 text-center text-slate-400">
-                      Loading catalog...
+                      {t('brandMaster.loadingCatalog', 'Loading catalog...')}
                     </td>
                   </tr>
                 ) : filteredBrands.length === 0 ? (
                   <tr>
                     <td colSpan="5" className="px-6 py-12 text-center text-slate-400">
-                      No brands found.
+                      {t('brandMaster.noBrandsFound', 'No brands found.')}
                     </td>
                   </tr>
                 ) : (
@@ -503,22 +507,22 @@ export default function BrandMaster() {
                           <div className="flex justify-center items-center gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
                             <button 
                               onClick={() => fetchPriceHistory(brand)} 
-                              title="Price History" 
-                              className="p-2 text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg outline-none transition-colors"
+                              title={t('brandMaster.priceHistoryTitle', 'Price History')} 
+                              className="p-2 text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg outline-none transition-colors cursor-pointer"
                             >
                               <History size={16} />
                             </button>
                             <button 
                               onClick={() => openEditModal(brand)} 
-                              title="Edit Info" 
-                              className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg outline-none transition-colors"
+                              title={t('common.edit', 'Edit')} 
+                              className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg outline-none transition-colors cursor-pointer"
                             >
                               <Edit2 size={16} />
                             </button>
                             <button 
                               onClick={() => handleDeleteClick(brand)} 
-                              title="Delete Product" 
-                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                              title={t('common.delete', 'Delete')} 
+                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors cursor-pointer"
                             >
                               <Trash2 size={16} />
                             </button>
@@ -543,28 +547,28 @@ export default function BrandMaster() {
                 <AlertTriangle size={32} />
               </div>
               <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
-                {deleteWarningMessage ? 'Deletion Locked' : 'Delete Product?'}
+                {deleteWarningMessage ? t('brandMaster.deleteLockedTitle', 'Deletion Locked') : t('brandMaster.deleteTitle', 'Delete Product?')}
               </h3>
               <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
                 {deleteWarningMessage ? (
                   deleteWarningMessage
                 ) : (
-                  <>Are you sure you want to permanently delete <strong className="text-slate-800 dark:text-slate-200">{brandToDelete?.brand_name}</strong>? This action cannot be undone.</>
+                  <>{t('brandMaster.deleteConfirm', 'Are you sure you want to permanently delete')} <strong className="text-slate-800 dark:text-slate-200">{brandToDelete?.brand_name}</strong>?</>
                 )}
               </p>
               <div className="flex gap-3">
                 <button 
                   onClick={() => setIsDeleteModalOpen(false)} 
-                  className="flex-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold py-3 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                  className="flex-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold py-3 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel', 'Cancel')}
                 </button>
                 {!deleteWarningMessage && (
                   <button 
                     onClick={confirmDelete} 
-                    className="flex-1 bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 transition-colors shadow-md"
+                    className="flex-1 bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 transition-colors shadow-md cursor-pointer"
                   >
-                    Delete
+                    {t('common.delete', 'Delete')}
                   </button>
                 )}
               </div>
@@ -580,11 +584,11 @@ export default function BrandMaster() {
             
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Edit2 size={18} className="text-blue-500" /> Edit Product Master
+                <Edit2 size={18} className="text-blue-500" /> {t('brandMaster.editTitle', 'Edit Product Master')}
               </h3>
               <button 
                 onClick={() => setIsEditModalOpen(false)} 
-                className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"
+                className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -593,7 +597,7 @@ export default function BrandMaster() {
             <form onSubmit={handleEditSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Brand Name
+                  {t('brandMaster.brandName', 'Brand Name')}
                 </label>
                 <input 
                   type="text" 
@@ -607,7 +611,7 @@ export default function BrandMaster() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Category
+                    {t('brandMaster.category', 'Category')}
                   </label>
                   <select 
                     value={editFormData.category ?? 'Whisky'} 
@@ -626,7 +630,7 @@ export default function BrandMaster() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Bottle Size
+                    {t('brandMaster.bottleSize', 'Bottle Size')}
                   </label>
                   <select 
                     value={editFormData.bottleSize ?? '750ml'} 
@@ -648,7 +652,7 @@ export default function BrandMaster() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    MRP (₹)
+                    {t('brandMaster.baseMrp', 'Baseline MRP (₹)')}
                   </label>
                   <input 
                     type="number" 
@@ -661,7 +665,7 @@ export default function BrandMaster() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Sale Price (₹)
+                    {t('brandMaster.basePrice', 'Baseline Sale Price (₹)')}
                   </label>
                   <input 
                     type="number" 
@@ -675,15 +679,15 @@ export default function BrandMaster() {
               </div>
 
               <div className="p-3 bg-amber-50 dark:bg-amber-950/40 text-[11px] text-amber-700 dark:text-amber-400 rounded-xl border border-amber-200 dark:border-amber-900/50 leading-relaxed">
-                Note: Baseline prices edited here will set the starting default rate for new stock entries. This will never overwrite historical transaction prices already locked in Daily Stock.
+                {t('brandMaster.editNote', 'Note: Baseline prices edited here will set the starting default rate for new stock entries.')}
               </div>
               
               <button 
                 type="submit" 
                 disabled={isSubmitting} 
-                className="w-full mt-2 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-md"
+                className="w-full mt-2 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-md cursor-pointer"
               >
-                Update Product Settings
+                {t('brandMaster.updateButton', 'Update Product Settings')}
               </button>
             </form>
           </div>
@@ -698,7 +702,7 @@ export default function BrandMaster() {
             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <div>
                 <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                  <History size={18} className="text-indigo-500" /> Operational Price Logs
+                  <History size={18} className="text-indigo-500" /> {t('brandMaster.priceHistoryTitle', 'Operational Price Logs')}
                 </h3>
                 <p className="text-xs text-slate-500 mt-1 font-semibold uppercase tracking-wider">
                   {selectedBrand?.brand_name} • {selectedBrand?.bottle_size}
@@ -706,7 +710,7 @@ export default function BrandMaster() {
               </div>
               <button 
                 onClick={() => setIsHistoryModalOpen(false)} 
-                className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none"
+                className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -716,22 +720,22 @@ export default function BrandMaster() {
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-white dark:bg-slate-950 text-slate-400 font-semibold uppercase text-[11px] tracking-wider sticky top-0">
                   <tr>
-                    <th className="px-6 py-4 border-b border-slate-100 dark:border-slate-800">Effective Date</th>
-                    <th className="px-6 py-4 text-right border-b border-slate-100 dark:border-slate-800">Old Price</th>
-                    <th className="px-6 py-4 text-right border-b border-slate-100 dark:border-slate-800">New Price</th>
+                    <th className="px-6 py-4 border-b border-slate-100 dark:border-slate-800">{t('brandMaster.effectiveDate', 'Effective Date')}</th>
+                    <th className="px-6 py-4 text-right border-b border-slate-100 dark:border-slate-800">{t('brandMaster.oldPrice', 'Old Price')}</th>
+                    <th className="px-6 py-4 text-right border-b border-slate-100 dark:border-slate-800">{t('brandMaster.newPrice', 'New Price')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
                   {historyLoading ? (
                     <tr>
                       <td colSpan="3" className="px-6 py-12 text-center text-slate-400">
-                        Loading price log...
+                        {t('brandMaster.loadingHistory', 'Loading price log...')}
                       </td>
                     </tr>
                   ) : priceHistory.length === 0 ? (
                     <tr>
                       <td colSpan="3" className="px-6 py-12 text-center text-slate-400">
-                        No batch price variations logged.
+                        {t('brandMaster.noPriceChanges', 'No batch price variations logged.')}
                       </td>
                     </tr>
                   ) : (

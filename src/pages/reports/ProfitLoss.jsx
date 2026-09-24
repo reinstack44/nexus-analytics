@@ -1,6 +1,7 @@
 import { useState, useEffect, forwardRef } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useTranslation } from 'react-i18next';
 import { Calendar, Wallet, Landmark, IndianRupee, TrendingUp, TrendingDown, ChevronDown } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -19,12 +20,10 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
 ));
 CustomDateInput.displayName = "CustomDateInput";
 
-// Safe financial rounding helper
 const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Safe paginated fetcher for Supabase > 1000 records
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -48,9 +47,9 @@ async function fetchAllRows(queryBuilder) {
 
 export default function ProfitLoss() {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Isolated local memory keys for Profit & Loss page
   const [startDate, setStartDate] = useState(() => {
     const saved = sessionStorage.getItem('profitLoss_startDate');
     return saved ? new Date(saved) : new Date();
@@ -89,7 +88,6 @@ export default function ProfitLoss() {
     return dStr.includes('T') ? dStr.split('T')[0] : dStr;
   };
 
-  // Realtime Database Sync
   useEffect(() => {
     const channel = supabase
       .channel('pl-realtime')
@@ -138,7 +136,6 @@ export default function ProfitLoss() {
         let tPurchases = 0;
         traderTxData?.forEach(t => tPurchases = safeRound(tPurchases + (parseFloat(t.purchase_amount) || 0)));
 
-        // --- UNIFIED CHRONOLOGICAL FIFO RECONSTRUCTION ---
         const brandBatches = {};
         const prevClosing = {};
         const lastActivePrice = {};
@@ -333,83 +330,34 @@ export default function ProfitLoss() {
   return (
     <div className="space-y-6 transition-colors duration-300">
       
-      <style>{`
-        .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
-        .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
-        .react-datepicker-popper { z-index: 99999 !important; }
-        .react-datepicker { 
-          background-color: #ffffff !important; 
-          border: 1px solid #e2e8f0 !important; 
-          border-radius: 1rem !important; 
-          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important; 
-          font-family: inherit !important; 
-          padding: 0.5rem !important;
-        }
-        .react-datepicker__month-container { background-color: #ffffff !important; }
-        .react-datepicker__header { 
-          background-color: #ffffff !important; 
-          border-bottom: 1px solid #f1f5f9 !important; 
-          padding-top: 0.5rem !important;
-        }
-        .react-datepicker__current-month, .react-datepicker-time__header, .react-datepicker-year-header { 
-          color: #0f172a !important; font-weight: 700 !important; font-size: 0.95rem !important; margin-bottom: 0.5rem !important;
-        }
-        .react-datepicker__header select {
-          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
-          padding: 0.2rem 0.5rem; font-weight: 600; color: #1e293b; cursor: pointer;
-          margin: 0 0.25rem 0.5rem 0.25rem; outline: none;
-        }
-        .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
-        .react-datepicker__day { 
-          color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important;
-          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important;
-        }
-        .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
-        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { 
-          background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; 
-        }
-        .react-datepicker__triangle { display: none !important; }
-
-        /* Dark Mode Overrides */
-        .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
-        .dark .react-datepicker__month-container { background-color: #1e293b !important; }
-        .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
-        .dark .react-datepicker__current-month, .dark .react-datepicker-time__header, .dark .react-datepicker-year-header { color: #f8fafc !important; }
-        .dark .react-datepicker__header select { background-color: #334155 !important; color: #f8fafc !important; border-color: #475569 !important; }
-        .dark .react-datepicker__day-name { color: #94a3b8 !important; }
-        .dark .react-datepicker__day { color: #e2e8f0 !important; }
-        .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
-      `}</style>
-
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 relative z-50 transition-colors duration-300">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
-            <Wallet className="text-blue-500" /> Financial Analytics
+            <Wallet className="text-blue-500" /> {t('profitloss.title', 'Financial Analytics')}
           </h2>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Track P&L (Tax Safe) and Cash in Hand.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('profitloss.description', 'Track P&L (Tax Safe) and Cash in Hand.')}</p>
         </div>
         
         <div className="header-date-picker flex flex-row items-center gap-2 bg-slate-100/50 dark:bg-slate-900/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
           <DatePicker selected={startDate} onChange={(date) => setStartDate(date)} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
-          <span className="text-slate-400 dark:text-slate-500 font-medium px-1">to</span>
+          <span className="text-slate-400 dark:text-slate-500 font-medium px-1">{t('common.to', 'to')}</span>
           <DatePicker selected={endDate} onChange={(date) => setEndDate(date)} minDate={startDate} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 relative z-10">
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
-          <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Gross Revenue</p>
+          <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('profitloss.grossRevenue', 'Gross Revenue')}</p>
           <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalSales.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
-          <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Purchase Cost</p>
+          <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('profitloss.purchaseCost', 'Purchase Cost')}</p>
           <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalPurchases.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800">
-          <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Business Expenses</p>
+          <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">{t('profitloss.businessExpenses', 'Business Expenses')}</p>
           <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
 
@@ -417,7 +365,7 @@ export default function ProfitLoss() {
            <div className="absolute right-0 top-0 opacity-20 transform translate-x-1/4 -translate-y-1/4">
             {summary.netProfit >= 0 ? <TrendingUp size={120} className="text-white"/> : <TrendingDown size={120} className="text-white"/>}
           </div>
-          <p className="text-white/80 font-bold text-sm tracking-wider uppercase mb-2 relative z-10">Net Profit / Loss</p>
+          <p className="text-white/80 font-bold text-sm tracking-wider uppercase mb-2 relative z-10">{t('profitloss.netProfitLoss', 'Net Profit / Loss')}</p>
           <h3 className="text-4xl font-black text-white relative z-10">₹{summary.netProfit.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
         </div>
       </div>
@@ -428,7 +376,7 @@ export default function ProfitLoss() {
             <Landmark size={24} />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Online Collections</h3>
+            <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{t('profitloss.onlineCollections', 'Online Collections')}</h3>
             <p className="text-2xl font-black text-slate-800 dark:text-slate-100">₹{summary.totalWithdrawn.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </div>
         </div>
@@ -438,7 +386,7 @@ export default function ProfitLoss() {
             <IndianRupee size={24} />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cash Left In Hand</h3>
+            <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{t('profitloss.cashLeftInHand', 'Cash Left In Hand')}</h3>
             <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">₹{summary.retainedCash.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </div>
         </div>
