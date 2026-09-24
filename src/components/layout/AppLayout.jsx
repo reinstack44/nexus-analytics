@@ -178,7 +178,6 @@ export default function AppLayout() {
 
   useEffect(() => {
     async function checkFirstTimeAdminGrant() {
-      // Admin is completely excluded from welcome popup
       if (!user || isAdmin) return;
 
       try {
@@ -395,10 +394,10 @@ export default function AppLayout() {
         </div>
       </div>
 
-      {/* Main Content Area */}
+      {/* Main Content Area: Header with high z-50 */}
       <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out ${isCollapsed ? 'lg:ml-20' : 'lg:ml-64'}`}>
         
-        <header className="h-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-30 sticky top-0 transition-colors duration-300">
+        <header className="h-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-50 sticky top-0 transition-colors duration-300">
           <div className="flex items-center gap-4">
             {isMobile && (
               <button 
@@ -415,9 +414,9 @@ export default function AppLayout() {
             </h1>
           </div>
           
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 relative z-50">
 
-            {/* Language Dropdown */}
+            {/* Language Dropdown Container with Fixed Top Stacking Layer */}
             <div className="relative">
               <button 
                 type="button"
@@ -435,8 +434,8 @@ export default function AppLayout() {
               {isLangMenuOpen && (
                 <div 
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl py-2 z-99999 animate-in fade-in zoom-in-95 duration-150"
-                  style={{ zIndex: 999999 }}
+                  className="fixed right-4 sm:right-8 top-18 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.5)] py-2 z-9999999 animate-in fade-in zoom-in-95 duration-150"
+                  style={{ zIndex: 9999999 }}
                 >
                   <button 
                     type="button" 
@@ -444,7 +443,7 @@ export default function AppLayout() {
                     className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between ${i18n.language === 'en' ? 'text-blue-600 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-700 dark:text-slate-300'}`}
                   >
                     <span>English</span>
-                    {i18n.language === 'en' && <span className="text-blue-600 dark:text-blue-400">✓</span>}
+                    {i18n.language === 'en' && <span className="text-blue-600 dark:text-blue-400 font-black">✓</span>}
                   </button>
                   <button 
                     type="button" 
@@ -452,7 +451,7 @@ export default function AppLayout() {
                     className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between ${i18n.language === 'hi' ? 'text-blue-600 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-700 dark:text-slate-300'}`}
                   >
                     <span>हिन्दी (Hindi)</span>
-                    {i18n.language === 'hi' && <span className="text-blue-600 dark:text-blue-400">✓</span>}
+                    {i18n.language === 'hi' && <span className="text-blue-600 dark:text-blue-400 font-black">✓</span>}
                   </button>
                   <button 
                     type="button" 
@@ -460,7 +459,7 @@ export default function AppLayout() {
                     className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-between ${i18n.language === 'mr' ? 'text-blue-600 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-900/20' : 'text-slate-700 dark:text-slate-300'}`}
                   >
                     <span>मराठी (Marathi)</span>
-                    {i18n.language === 'mr' && <span className="text-blue-600 dark:text-blue-400">✓</span>}
+                    {i18n.language === 'mr' && <span className="text-blue-600 dark:text-blue-400 font-black">✓</span>}
                   </button>
                 </div>
               )}
