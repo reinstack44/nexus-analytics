@@ -27,6 +27,8 @@ export default function Subscription() {
 
       if (data && new Date(data.current_period_end) > new Date() && data.status === 'active') {
         setActiveSub(data);
+      } else {
+        setActiveSub(null);
       }
     }
     checkExistingSubscription();
@@ -38,6 +40,25 @@ export default function Subscription() {
   };
 
   const handleSubscribe = async () => {
+    // 1. ACTIVE PLAN GUARD: Agar pehle se plan active hai toh popup dikhao aur gateway block karo
+    if (activeSub && new Date(activeSub.current_period_end) > new Date() && activeSub.status === 'active') {
+      const activePlanName = activeSub.plan_type === 'monthly' ? 'Monthly Pro Plan (₹1,499)' : 'Annual Enterprise Plan (₹14,999)';
+      const expiryDate = new Date(activeSub.current_period_end).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+
+      showAlert({
+        title: "Active Plan Detected",
+        message: `You already have an active ${activePlanName} which is valid until ${expiryDate}. No further payment is required.`,
+        type: "success",
+        onClose: () => navigate('/', { replace: true })
+      });
+      return;
+    }
+
+    // 2. Otherwise open Razorpay standard gateway
     if (!window.Razorpay) {
       showAlert({ title: "SDK Error", message: "Razorpay SDK failed to load. Please check your internet connection.", type: "error" });
       return;
@@ -126,6 +147,8 @@ export default function Subscription() {
     rzp.open();
   };
 
+  const isCurrentPlanActive = activeSub && new Date(activeSub.current_period_end) > new Date() && activeSub.status === 'active';
+
   return (
     <div className="min-h-screen bg-[#030510] text-slate-100 flex flex-col justify-between p-4 sm:p-8 relative overflow-hidden font-sans">
       
@@ -169,7 +192,7 @@ export default function Subscription() {
           {t('subscription.description', 'Get unrestricted access to Daily Stock reconciliations, FIFO price tracking, Official Reports, and Magic Charts.')}
         </p>
 
-        {activeSub && (
+        {isCurrentPlanActive && (
           <div className="mt-6 p-4 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 text-xs font-bold inline-flex items-center gap-2">
             <ShieldCheck size={18} /> {t('subscription.activeUntil', 'Active subscription valid until')} {new Date(activeSub.current_period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
             <button
@@ -285,7 +308,7 @@ export default function Subscription() {
 
       </div>
 
-      {/* Direct Razorpay Action Button */}
+      {/* Direct Action Button */}
       <div className="max-w-md mx-auto w-full mt-8 mb-6 z-10">
         <button
           type="button"
@@ -296,6 +319,10 @@ export default function Subscription() {
           {loading ? (
             <>
               <Loader2 size={20} className="animate-spin" /> {t('subscription.openingGateway', 'Opening Razorpay Gateway...')}
+            </>
+          ) : isCurrentPlanActive ? (
+            <>
+              {t('subscription.goToDashboard', 'Go to Dashboard')} <ArrowRight size={18} />
             </>
           ) : (
             <>
