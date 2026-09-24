@@ -172,16 +172,13 @@ export default function AppLayout() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
 
-  // First-time grant welcome popup state
+  // First-time grant welcome popup state (Driven by Database)
   const [grantCelebrationOpen, setGrantCelebrationOpen] = useState(false);
   const [grantSubDetails, setGrantSubDetails] = useState(null);
 
   useEffect(() => {
     async function checkFirstTimeAdminGrant() {
       if (!user || isAdmin) return;
-      const ackKey = `nexus_welcomed_grant_${user.id}`;
-      const alreadyAcknowledged = localStorage.getItem(ackKey);
-      if (alreadyAcknowledged) return;
 
       try {
         const { data } = await supabase
@@ -190,7 +187,8 @@ export default function AppLayout() {
           .eq('user_id', user.id)
           .single();
 
-        if (data && data.status === 'active' && data.razorpay_payment_id?.startsWith('admin_override')) {
+        // Check if plan is active and welcome_shown is false
+        if (data && data.status === 'active' && data.welcome_shown === false) {
           setGrantSubDetails(data);
           setGrantCelebrationOpen(true);
         }
@@ -202,9 +200,13 @@ export default function AppLayout() {
     checkFirstTimeAdminGrant();
   }, [user, isAdmin]);
 
-  const handleCloseGrantCelebration = () => {
-    if (user) {
-      localStorage.setItem(`nexus_welcomed_grant_${user.id}`, 'true');
+  const handleCloseGrantCelebration = async () => {
+    if (user && grantSubDetails) {
+      // Mark welcome_shown = true in Database
+      await supabase
+        .from('user_subscriptions')
+        .update({ welcome_shown: true })
+        .eq('user_id', user.id);
     }
     setGrantCelebrationOpen(false);
   };
@@ -259,7 +261,7 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen bg-[#F8FAFC] dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-300">
       
-      {/* Admin Granted First-Time Welcoming Celebration Modal */}
+      {/* Admin Granted Instant Login Welcoming Celebration Modal */}
       <AdminGrantedWelcomeModal
         isOpen={grantCelebrationOpen}
         onClose={handleCloseGrantCelebration}
@@ -283,7 +285,6 @@ export default function AppLayout() {
         lg:translate-x-0 ${isCollapsed ? 'lg:w-20' : 'lg:w-64'} w-72`}
       >
         
-        {/* Collapse / Expand Toggle Button */}
         {!isMobile && (
           <button 
             type="button"
@@ -415,7 +416,6 @@ export default function AppLayout() {
           
           <div className="flex items-center gap-2 sm:gap-4">
 
-            {/* Language Dropdown */}
             <div className="relative">
               <button 
                 type="button"

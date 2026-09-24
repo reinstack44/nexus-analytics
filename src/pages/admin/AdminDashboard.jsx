@@ -179,7 +179,7 @@ export default function AdminDashboard() {
     setGrantModalOpen(true);
   };
 
-  // Submit Plan Grant (1 Month for Monthly, 1 Year for Yearly)
+  // Submit Plan Grant (welcome_shown = false ensures instant popup on user login)
   const handleGrantSubscriptionSubmit = async (e) => {
     e.preventDefault();
     if (!selectedUser) return;
@@ -203,6 +203,7 @@ export default function AdminDashboard() {
         current_period_end: endDate.toISOString(),
         amount_paid: 0,
         razorpay_payment_id: `admin_override_${Date.now()}`,
+        welcome_shown: false, // FLAG FOR INSTANT WELCOME POPUP
         updated_at: new Date().toISOString()
       };
 
@@ -440,7 +441,7 @@ export default function AdminDashboard() {
                             <Sparkles size={13} /> Grant Plan
                           </button>
 
-                          {/* Revoke Plan Button (Only if subscription is active) */}
+                          {/* Revoke Plan Button */}
                           {isSubActive && (
                             <button
                               type="button"
@@ -532,7 +533,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Modal: Direct Plan Selection (Months removed) */}
+      {/* Modal: Direct Plan Selection */}
       {grantModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl animate-in fade-in zoom-in duration-200">
@@ -578,7 +579,7 @@ export default function AdminDashboard() {
                   >
                     <div>
                       <div className="text-sm font-bold">Annual Enterprise Plan</div>
-                      <div className="text-xs text-slate-400">1 Year validityy (₹14,999 value)</div>
+                      <div className="text-xs text-slate-400">1 Year validity (₹14,999 value)</div>
                     </div>
                     <input 
                       type="radio" 
