@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
@@ -7,10 +7,158 @@ import { useTranslation } from 'react-i18next';
 import { 
   LayoutDashboard, Tag, ShoppingCart, Package, TrendingUp, LogOut, 
   Menu, X, ChevronLeft, ChevronRight, Sun, Moon, Globe, FileText, 
-  Wand2, Settings, ShieldCheck 
+  Wand2, Settings, ShieldCheck, Crown, Sparkles, HeartHandshake, CheckCircle2, ArrowRight
 } from 'lucide-react';
 
 import nxDiaryLogo from '../../assets/nx diary logo.png';
+
+// Welcoming VIP Dialog for Admin Granted Access
+function AdminGrantedWelcomeModal({ isOpen, onClose, details }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let animationFrameId;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const confettiCount = 90;
+    const particles = [];
+    const colors = ['#8b5cf6', '#6366f1', '#3b82f6', '#ec4899', '#f59e0b', '#10b981', '#ffffff'];
+
+    for (let i = 0; i < confettiCount; i++) {
+      particles.push({
+        x: canvas.width / 2 + (Math.random() - 0.5) * 160,
+        y: canvas.height / 2 + (Math.random() - 0.5) * 80,
+        vx: (Math.random() - 0.5) * 9,
+        vy: (Math.random() - 0.7) * 11,
+        size: Math.random() * 5 + 3,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rotation: Math.random() * 360,
+        rotationSpeed: (Math.random() - 0.5) * 8,
+        opacity: 1,
+        gravity: 0.28,
+      });
+    }
+
+    const render = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      particles.forEach((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += p.gravity;
+        p.rotation += p.rotationSpeed;
+        p.opacity = Math.max(0, p.opacity - 0.007);
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rotation * Math.PI) / 180);
+        ctx.globalAlpha = p.opacity;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 1.4);
+        ctx.restore();
+      });
+
+      animationFrameId = requestAnimationFrame(render);
+    };
+
+    render();
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isOpen]);
+
+  if (!isOpen || !details) return null;
+
+  const planTitle = details.plan_type === 'yearly' ? 'Annual Enterprise Plan' : 'Monthly Pro Plan';
+  const expiryFormatted = details.current_period_end 
+    ? new Date(details.current_period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : 'Active';
+
+  return (
+    <div className="fixed inset-0 z-100000 flex items-center justify-center p-4 sm:p-6 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-300 font-sans">
+      <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none z-10 w-full h-full" />
+
+      <div className="relative z-20 w-full max-w-md bg-slate-900/98 border border-slate-700/80 rounded-3xl p-6 sm:p-7 shadow-[0_20px_60px_rgba(0,0,0,0.6)] text-center animate-in zoom-in-95 duration-200 overflow-hidden">
+        
+        <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-48 h-48 bg-purple-500/20 rounded-full blur-2xl pointer-events-none"></div>
+
+        <div className="relative mb-3 flex flex-col items-center">
+          <img src={nxDiaryLogo} alt="NX Diary Logo" className="h-8 w-auto object-contain mb-2.5 drop-shadow-md" />
+          
+          <div className="w-13 h-13 rounded-2xl bg-linear-to-br from-purple-500/20 to-indigo-500/20 border border-purple-500/40 text-purple-400 flex items-center justify-center shadow-md relative">
+            <Crown size={26} className="animate-bounce duration-1000" />
+            <Sparkles size={13} className="absolute -top-1 -right-1 text-amber-400 animate-pulse" />
+          </div>
+        </div>
+
+        <div className="relative space-y-1 my-3">
+          <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border bg-purple-500/15 border-purple-500/30 text-purple-300">
+            <HeartHandshake size={11} /> Special Access Granted
+          </div>
+
+          <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-tight pt-1">
+            Congratulations! <br />
+            <span className="bg-linear-to-r from-purple-400 via-indigo-300 to-blue-400 bg-clip-text text-transparent">
+              Nexus Diary Has Granted Your Plan
+            </span>
+          </h2>
+
+          <p className="text-[11px] text-slate-400 max-w-xs mx-auto leading-relaxed pt-0.5">
+            Your store account has been upgraded with complimentary VIP access. All analytics engines are ready to use.
+          </p>
+        </div>
+
+        <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3 mb-4 text-left flex items-center justify-between">
+          <div>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Active Plan</span>
+            <h4 className="text-xs font-black text-white capitalize">{planTitle}</h4>
+          </div>
+          <div className="text-right">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Valid Until</span>
+            <h4 className="text-xs font-black text-purple-400 flex items-center gap-1">
+              <ShieldCheck size={12} className="text-emerald-400" /> {expiryFormatted}
+            </h4>
+          </div>
+        </div>
+
+        <div className="space-y-1.5 text-left text-[11px] font-semibold text-slate-300 mb-5 px-1">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+            <span>Dual-FIFO Daily Stock & Custom Batch Pricing</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+            <span>Trader Statements, Payment Ledgers & Balance Sheet</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+            <span>Magic Chart (Marathi 7-Rakaana) Excise Accounting</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+            <span>Official Multi-Page A4 PDF & Excel CSV Exports</span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full py-3 px-5 bg-linear-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs rounded-xl transition-all shadow-[0_6px_25px_rgba(139,92,246,0.4)] hover:-translate-y-0.5 flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          Enter Store Dashboard <ArrowRight size={15} />
+        </button>
+
+      </div>
+    </div>
+  );
+}
 
 export default function AppLayout() {
   const { user, isAdmin } = useAuth();
@@ -23,6 +171,43 @@ export default function AppLayout() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
+
+  // First-time grant welcome popup state
+  const [grantCelebrationOpen, setGrantCelebrationOpen] = useState(false);
+  const [grantSubDetails, setGrantSubDetails] = useState(null);
+
+  useEffect(() => {
+    async function checkFirstTimeAdminGrant() {
+      if (!user || isAdmin) return;
+      const ackKey = `nexus_welcomed_grant_${user.id}`;
+      const alreadyAcknowledged = localStorage.getItem(ackKey);
+      if (alreadyAcknowledged) return;
+
+      try {
+        const { data } = await supabase
+          .from('user_subscriptions')
+          .select('*')
+          .eq('user_id', user.id)
+          .single();
+
+        if (data && data.status === 'active' && data.razorpay_payment_id?.startsWith('admin_override')) {
+          setGrantSubDetails(data);
+          setGrantCelebrationOpen(true);
+        }
+      } catch {
+        // silent catch
+      }
+    }
+
+    checkFirstTimeAdminGrant();
+  }, [user, isAdmin]);
+
+  const handleCloseGrantCelebration = () => {
+    if (user) {
+      localStorage.setItem(`nexus_welcomed_grant_${user.id}`, 'true');
+    }
+    setGrantCelebrationOpen(false);
+  };
 
   const hour = new Date().getHours();
   const greeting = hour < 12 
@@ -74,6 +259,13 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen bg-[#F8FAFC] dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-300">
       
+      {/* Admin Granted First-Time Welcoming Celebration Modal */}
+      <AdminGrantedWelcomeModal
+        isOpen={grantCelebrationOpen}
+        onClose={handleCloseGrantCelebration}
+        details={grantSubDetails}
+      />
+
       {isMobileOpen && (
         <div 
           className="fixed inset-0 bg-slate-900/60 z-40 lg:hidden backdrop-blur-sm transition-opacity"
@@ -84,14 +276,14 @@ export default function AppLayout() {
         />
       )}
 
-      {/* Sidebar Container: Set to z-60 so it sits above header */}
+      {/* Sidebar Container */}
       <div 
         className={`fixed inset-y-0 left-0 z-60 flex flex-col bg-[#0B1121] text-slate-300 transition-all duration-300 ease-in-out border-r border-slate-800/60 shadow-2xl lg:shadow-none
         ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
         lg:translate-x-0 ${isCollapsed ? 'lg:w-20' : 'lg:w-64'} w-72`}
       >
         
-        {/* Collapse / Expand Toggle Button with highest local z-70 */}
+        {/* Collapse / Expand Toggle Button */}
         {!isMobile && (
           <button 
             type="button"
@@ -201,7 +393,7 @@ export default function AppLayout() {
         </div>
       </div>
 
-      {/* Main Content Area: Header with z-30 so sidebar button floats over it */}
+      {/* Main Content Area */}
       <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out ${isCollapsed ? 'lg:ml-20' : 'lg:ml-64'}`}>
         
         <header className="h-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-30 sticky top-0 transition-colors duration-300">
@@ -223,7 +415,7 @@ export default function AppLayout() {
           
           <div className="flex items-center gap-2 sm:gap-4">
 
-            {/* Language Dropdown Button */}
+            {/* Language Dropdown */}
             <div className="relative">
               <button 
                 type="button"
