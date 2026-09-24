@@ -21,24 +21,42 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public Login Route */}
-        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" replace />} />
+        {/* Public Login Route: Admin goes to /admin directly, Regular user to / */}
+        <Route 
+          path="/login" 
+          element={
+            !user ? (
+              <Login />
+            ) : isAdmin ? (
+              <Navigate to="/admin" replace />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          } 
+        />
 
-        {/* Subscription Selection (Admin redirects to home, User opens subscription) */}
+        {/* Subscription Route: Admin is redirected to /admin immediately */}
         <Route 
           path="/subscription" 
           element={
             !user ? (
               <Navigate to="/login" replace />
             ) : isAdmin ? (
-              <Navigate to="/" replace />
+              <Navigate to="/admin" replace />
             ) : (
               <Subscription />
             )
           } 
         />
 
-        {/* Protected SaaS Routes */}
+        {/* Super Admin Control Center */}
+        <Route element={<RequireAdmin />}>
+          <Route element={<AppLayout />}>
+            <Route path="admin" element={<AdminDashboard />} />
+          </Route>
+        </Route>
+
+        {/* Regular Store Users (Gated by Subscription) */}
         <Route element={<RequireSubscription />}>
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
@@ -49,16 +67,11 @@ function App() {
             <Route path="reports" element={<Reports />} />
             <Route path="magic-chart" element={<MagicChart />} />
             <Route path="settings" element={<Settings />} />
-
-            {/* Super Admin Route */}
-            <Route element={<RequireAdmin />}>
-              <Route path="admin" element={<AdminDashboard />} />
-            </Route>
           </Route>
         </Route>
 
-        {/* Wildcard Fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to={isAdmin ? "/admin" : "/"} replace />} />
       </Routes>
     </BrowserRouter>
   );

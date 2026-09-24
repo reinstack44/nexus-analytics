@@ -15,7 +15,6 @@ export default function RequireSubscription() {
     let isMounted = true;
 
     async function verifySubscription() {
-      // Still loading auth context
       if (authLoading) return;
 
       if (!user) {
@@ -24,8 +23,7 @@ export default function RequireSubscription() {
       }
 
       // =========================================================
-      // 1. ABSOLUTE LIFETIME ADMIN BYPASS
-      // If user is Admin, never query or require any subscription!
+      // ZERO CHECK FOR ADMIN: Directly pass Admin through
       // =========================================================
       if (isAdmin || profile?.role === 'admin') {
         if (isMounted) {
@@ -35,7 +33,7 @@ export default function RequireSubscription() {
         return;
       }
 
-      // 2. Check if profile is suspended
+      // Check if store account was paused by Admin
       if (profile && profile.is_active === false) {
         if (isMounted) {
           setHasSubscription(false);
@@ -44,7 +42,7 @@ export default function RequireSubscription() {
         return;
       }
 
-      // 3. Regular Customer Store Subscription Verification
+      // Check regular customer subscription
       try {
         const { data, error } = await supabase
           .from('user_subscriptions')
@@ -78,7 +76,6 @@ export default function RequireSubscription() {
     navigate('/login');
   };
 
-  // 1. Wait until AuthContext & role profile are 100% loaded
   if (authLoading || checkingSub) {
     return (
       <div className="min-h-screen bg-[#030510] flex flex-col items-center justify-center text-slate-400 font-sans">
@@ -88,17 +85,16 @@ export default function RequireSubscription() {
     );
   }
 
-  // 2. If user not logged in
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
-  // 3. IMMEDIATE ADMIN PASS-THROUGH (No subscription needed for Admin)
+  // Admin directly allowed without any subscription
   if (isAdmin || profile?.role === 'admin') {
     return <Outlet />;
   }
 
-  // 4. PAUSED SERVICES SCREEN FOR REGULAR USERS
+  // Paused Services screen for regular store owners
   if (profile?.is_active === false) {
     return (
       <div className="min-h-screen bg-[#030510] flex items-center justify-center p-4 relative overflow-hidden font-sans">
@@ -133,7 +129,7 @@ export default function RequireSubscription() {
     );
   }
 
-  // 5. Redirect unpaid regular users to Subscription checkout
+  // Redirect unpaid regular store users
   if (!hasSubscription) {
     return <Navigate to="/subscription" replace />;
   }

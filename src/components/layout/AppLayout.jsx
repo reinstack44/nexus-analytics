@@ -12,7 +12,7 @@ import {
 
 import nxDiaryLogo from '../../assets/nx diary logo.png';
 
-// Welcoming VIP Dialog for Admin Granted Access
+// Welcoming VIP Dialog for Customer Store Owners (When Admin Grants Plan)
 function AdminGrantedWelcomeModal({ isOpen, onClose, details }) {
   const canvasRef = useRef(null);
 
@@ -172,12 +172,13 @@ export default function AppLayout() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
 
-  // First-time grant welcome popup state (Driven by Database)
+  // Customer-only welcome popup state
   const [grantCelebrationOpen, setGrantCelebrationOpen] = useState(false);
   const [grantSubDetails, setGrantSubDetails] = useState(null);
 
   useEffect(() => {
     async function checkFirstTimeAdminGrant() {
+      // Admin is completely excluded from welcome popup
       if (!user || isAdmin) return;
 
       try {
@@ -187,8 +188,7 @@ export default function AppLayout() {
           .eq('user_id', user.id)
           .single();
 
-        // Check if plan is active and welcome_shown is false
-        if (data && data.status === 'active' && data.welcome_shown === false) {
+        if (data && data.status === 'active' && data.welcome_shown === false && data.razorpay_payment_id?.startsWith('admin_override')) {
           setGrantSubDetails(data);
           setGrantCelebrationOpen(true);
         }
@@ -202,7 +202,6 @@ export default function AppLayout() {
 
   const handleCloseGrantCelebration = async () => {
     if (user && grantSubDetails) {
-      // Mark welcome_shown = true in Database
       await supabase
         .from('user_subscriptions')
         .update({ welcome_shown: true })
@@ -261,12 +260,14 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen bg-[#F8FAFC] dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-300">
       
-      {/* Admin Granted Instant Login Welcoming Celebration Modal */}
-      <AdminGrantedWelcomeModal
-        isOpen={grantCelebrationOpen}
-        onClose={handleCloseGrantCelebration}
-        details={grantSubDetails}
-      />
+      {/* Customer Store Owner Welcoming Celebration Modal */}
+      {!isAdmin && (
+        <AdminGrantedWelcomeModal
+          isOpen={grantCelebrationOpen}
+          onClose={handleCloseGrantCelebration}
+          details={grantSubDetails}
+        />
+      )}
 
       {isMobileOpen && (
         <div 
@@ -416,6 +417,7 @@ export default function AppLayout() {
           
           <div className="flex items-center gap-2 sm:gap-4">
 
+            {/* Language Dropdown */}
             <div className="relative">
               <button 
                 type="button"
