@@ -326,7 +326,7 @@ export default function Dashboard() {
       `}</style>
 
       {/* HEADER WITH SLICER */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 relative z-50">
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 relative z-10">
         <div>
           <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">{t('dashboard.title', 'Executive Dashboard')}</h2>
           <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm sm:text-base">{t('dashboard.description', 'Real-time overview filtered by your selected timeline.')}</p>

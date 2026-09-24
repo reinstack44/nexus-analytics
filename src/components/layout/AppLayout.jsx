@@ -12,7 +12,7 @@ import {
 
 import nxDiaryLogo from '../../assets/nx diary logo.png';
 
-// Welcoming VIP Dialog for Customer Store Owners (When Admin Grants Plan)
+// Welcoming VIP Dialog for Customer Store Owners
 function AdminGrantedWelcomeModal({ isOpen, onClose, details }) {
   const canvasRef = useRef(null);
 
@@ -172,7 +172,6 @@ export default function AppLayout() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false); 
 
-  // Customer-only welcome popup state
   const [grantCelebrationOpen, setGrantCelebrationOpen] = useState(false);
   const [grantSubDetails, setGrantSubDetails] = useState(null);
 
@@ -259,7 +258,6 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen bg-[#F8FAFC] dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-300">
       
-      {/* Customer Store Owner Welcoming Celebration Modal */}
       {!isAdmin && (
         <AdminGrantedWelcomeModal
           isOpen={grantCelebrationOpen}
@@ -278,27 +276,27 @@ export default function AppLayout() {
         />
       )}
 
+      {/* Floating Global Collapse Toggle Button */}
+      {!isMobile && (
+        <button 
+          type="button"
+          onClick={() => {
+            setIsCollapsed(!isCollapsed);
+            setIsLangMenuOpen(false);
+          }}
+          className={`fixed top-7 ${isCollapsed ? 'left-20' : 'left-64'} -translate-x-1/2 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-full p-1.5 shadow-2xl hover:bg-blue-50 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-blue-400 transition-all z-999999 focus:outline-none cursor-pointer hover:scale-115`}
+          title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+        >
+          {isCollapsed ? <ChevronRight size={14} strokeWidth={3} /> : <ChevronLeft size={14} strokeWidth={3} />}
+        </button>
+      )}
+
       {/* Sidebar Container */}
       <div 
-        className={`fixed inset-y-0 left-0 z-60 flex flex-col bg-[#0B1121] text-slate-300 transition-all duration-300 ease-in-out border-r border-slate-800/60 shadow-2xl lg:shadow-none
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-[#0B1121] text-slate-300 transition-all duration-300 ease-in-out border-r border-slate-800/60 shadow-2xl lg:shadow-none
         ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
         lg:translate-x-0 ${isCollapsed ? 'lg:w-20' : 'lg:w-64'} w-72`}
       >
-        
-        {!isMobile && (
-          <button 
-            type="button"
-            onClick={() => {
-              setIsCollapsed(!isCollapsed);
-              setIsLangMenuOpen(false);
-            }}
-            className="absolute -right-4 top-7 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-full p-1.5 shadow-2xl hover:bg-blue-50 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-blue-400 transition-all z-70 focus:outline-none cursor-pointer hover:scale-110"
-            title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-          >
-            {isCollapsed ? <ChevronRight size={14} strokeWidth={3} /> : <ChevronLeft size={14} strokeWidth={3} />}
-          </button>
-        )}
-
         <div className="h-20 flex items-center justify-between px-5 border-b border-slate-800/60 shrink-0">
           <Link to="/" className="flex items-center overflow-hidden w-full h-full py-4" onClick={() => setIsLangMenuOpen(false)}>
              <img 
@@ -394,9 +392,10 @@ export default function AppLayout() {
         </div>
       </div>
 
-      {/* Main Content Area: Header with high z-50 */}
+      {/* Main Content Area: Header with isolation and high z-index */}
       <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out ${isCollapsed ? 'lg:ml-20' : 'lg:ml-64'}`}>
         
+        {/* HEADER: Set to z-50 relative to page main */}
         <header className="h-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-4 sm:px-8 z-50 sticky top-0 transition-colors duration-300">
           <div className="flex items-center gap-4">
             {isMobile && (
@@ -414,9 +413,9 @@ export default function AppLayout() {
             </h1>
           </div>
           
-          <div className="flex items-center gap-2 sm:gap-4 relative z-50">
+          <div className="flex items-center gap-2 sm:gap-4">
 
-            {/* Language Dropdown Container with Fixed Top Stacking Layer */}
+            {/* Language Dropdown (Exact under button + Stacking Fix) */}
             <div className="relative">
               <button 
                 type="button"
@@ -434,8 +433,8 @@ export default function AppLayout() {
               {isLangMenuOpen && (
                 <div 
                   onClick={(e) => e.stopPropagation()}
-                  className="fixed right-4 sm:right-8 top-18 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.5)] py-2 z-9999999 animate-in fade-in zoom-in-95 duration-150"
-                  style={{ zIndex: 9999999 }}
+                  className="absolute right-0 top-full mt-2 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-[0_10px_35px_rgba(0,0,0,0.4)] py-2 z-99999 animate-in fade-in zoom-in-95 duration-150"
+                  style={{ zIndex: 99999 }}
                 >
                   <button 
                     type="button" 
@@ -495,7 +494,8 @@ export default function AppLayout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 scroll-smooth" onClick={() => setIsLangMenuOpen(false)}>
+        {/* MAIN: Stacking context at z-0 */}
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 scroll-smooth relative z-0" onClick={() => setIsLangMenuOpen(false)}>
           <div className="max-w-7xl mx-auto">
             <Outlet />
           </div>
