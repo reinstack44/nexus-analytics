@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { ShieldCheck, Check, Sparkles, Zap, Lock, LogOut, ArrowRight, Loader2, ArrowUpCircle } from 'lucide-react';
 import logoImg from '../../assets/nx diary logo.png';
+import SubscriptionSuccessModal from '../../components/subscription/SubscriptionSuccessModal';
 
 export default function Subscription() {
   const { user } = useAuth();
@@ -15,6 +16,10 @@ export default function Subscription() {
   const [selectedPlan, setSelectedPlan] = useState('monthly');
   const [loading, setLoading] = useState(false);
   const [activeSub, setActiveSub] = useState(null);
+
+  // VIP Celebration Modal State
+  const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successDetails, setSuccessDetails] = useState(null);
 
   useEffect(() => {
     async function checkExistingSubscription() {
@@ -27,7 +32,6 @@ export default function Subscription() {
 
       if (data && new Date(data.current_period_end) > new Date() && data.status === 'active') {
         setActiveSub(data);
-        // If monthly user visits, preselect yearly for upgrade
         if (data.plan_type === 'monthly') {
           setSelectedPlan('yearly');
         }
@@ -47,29 +51,27 @@ export default function Subscription() {
   const isYearlyActive = activeSub && activeSub.status === 'active' && activeSub.plan_type === 'yearly' && new Date(activeSub.current_period_end) > new Date();
 
   const handleSubscribe = async () => {
-    // 1. YEARLY GUARD: Block if Annual plan is already active
     if (isYearlyActive) {
-      const expiryDate = new Date(activeSub.current_period_end).toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric'
+      const isGranted = activeSub.razorpay_payment_id?.startsWith('admin_override');
+      setSuccessDetails({
+        planType: 'yearly',
+        validUntil: activeSub.current_period_end,
+        paymentId: activeSub.razorpay_payment_id,
+        isGrantedByAdmin: isGranted
       });
-      showAlert({
-        title: "Annual Plan Active",
-        message: `You already have the highest tier Annual Enterprise Plan (Valid until ${expiryDate}). No further payment or upgrade is required.`,
-        type: "success",
-        onClose: () => navigate('/', { replace: true })
-      });
+      setSuccessModalOpen(true);
       return;
     }
 
-    // 2. MONTHLY DUPLICATE GUARD: Prevent buying monthly again if already monthly active
     if (isMonthlyActive && selectedPlan === 'monthly') {
-      showAlert({
-        title: "Monthly Plan Already Active",
-        message: "You already have an active Monthly Pro Plan. To upgrade to the Annual plan, please select the Annual Enterprise Plan card.",
-        type: "warning"
+      const isGranted = activeSub.razorpay_payment_id?.startsWith('admin_override');
+      setSuccessDetails({
+        planType: 'monthly',
+        validUntil: activeSub.current_period_end,
+        paymentId: activeSub.razorpay_payment_id,
+        isGrantedByAdmin: isGranted
       });
+      setSuccessModalOpen(true);
       return;
     }
 
@@ -118,7 +120,6 @@ export default function Subscription() {
           const startDate = new Date();
           let endDate = new Date();
 
-          // If monthly user upgraded to yearly, extend from current monthly expiry
           if (isMonthlyActive && activeSub?.current_period_end) {
             const currentExpiry = new Date(activeSub.current_period_end);
             endDate = currentExpiry > startDate ? currentExpiry : startDate;
@@ -148,12 +149,14 @@ export default function Subscription() {
 
           if (error) throw error;
 
-          showAlert({
-            title: isMonthlyActive ? "Upgrade Successful!" : "Payment Successful!",
-            message: `Your ${planName} is now active and extended until ${endDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}.`,
-            type: "success",
-            onClose: () => navigate('/', { replace: true })
+          // TRIGGER BEAUTIFUL VIP CELEBRATION MODAL
+          setSuccessDetails({
+            planType: selectedPlan,
+            validUntil: endDate.toISOString(),
+            paymentId: subscriptionPayload.razorpay_payment_id,
+            isGrantedByAdmin: false
           });
+          setSuccessModalOpen(true);
         } catch (err) {
           showAlert({ title: "Activation Failed", message: "Payment succeeded but activating plan failed: " + err.message, type: "error" });
         } finally {
@@ -170,9 +173,21 @@ export default function Subscription() {
     rzp.open();
   };
 
+  const handleCloseCelebration = () => {
+    setSuccessModalOpen(false);
+    navigate('/', { replace: true });
+  };
+
   return (
     <div className="min-h-screen bg-[#030510] text-slate-100 flex flex-col justify-between p-4 sm:p-8 relative overflow-hidden font-sans">
       
+      {/* VIP Celebration Welcoming VFX Modal */}
+      <SubscriptionSuccessModal
+        isOpen={successModalOpen}
+        onClose={handleCloseCelebration}
+        details={successDetails}
+      />
+
       {/* Background Lighting */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-120 h-120 bg-blue-600/10 rounded-full blur-[140px] pointer-events-none"></div>
       <div className="absolute bottom-10 left-10 w-80 h-80 bg-indigo-600/10 rounded-full blur-[100px] pointer-events-none"></div>
@@ -247,7 +262,7 @@ export default function Subscription() {
       {/* Pricing Cards Grid */}
       <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 w-full z-10">
         
-        {/* Monthly Plan (Disabled if already active) */}
+        {/* Monthly Plan */}
         <div 
           onClick={() => {
             if (!isMonthlyActive && !isYearlyActive) {
@@ -311,7 +326,7 @@ export default function Subscription() {
           </div>
         </div>
 
-        {/* Yearly Plan (Upgrade Option) */}
+        {/* Yearly Plan */}
         <div 
           onClick={() => {
             if (!isYearlyActive) {

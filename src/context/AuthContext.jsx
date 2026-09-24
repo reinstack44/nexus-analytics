@@ -6,17 +6,19 @@ const AuthContext = createContext({});
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [profile, setProfile] = useState(null); // stores { role: 'admin' | 'user', is_active: boolean }
+  const [profile, setProfile] = useState(null); // { id, email, role: 'admin' | 'user', is_active: boolean }
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (userId) => {
     if (!userId) return null;
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('user_profiles')
         .select('*')
         .eq('id', userId)
         .single();
+      
+      if (error || !data) return null;
       return data;
     } catch {
       return null;
@@ -31,14 +33,14 @@ export const AuthProvider = ({ children }) => {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) throw error;
         
+        const currentUser = session?.user ?? null;
         if (isMounted) {
-          const currentUser = session?.user ?? null;
           setUser(currentUser);
           if (currentUser) {
             const userProfile = await fetchProfile(currentUser.id);
-            setProfile(userProfile);
+            if (isMounted) setProfile(userProfile);
           } else {
-            setProfile(null);
+            if (isMounted) setProfile(null);
           }
         }
       } catch (err) {
@@ -62,9 +64,9 @@ export const AuthProvider = ({ children }) => {
         setUser(currentUser);
         if (currentUser) {
           const userProfile = await fetchProfile(currentUser.id);
-          setProfile(userProfile);
+          if (isMounted) setProfile(userProfile);
         } else {
-          setProfile(null);
+          if (isMounted) setProfile(null);
         }
         setLoading(false);
       }

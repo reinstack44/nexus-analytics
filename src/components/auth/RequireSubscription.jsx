@@ -8,7 +8,7 @@ import logoImg from '../../assets/nx diary logo.png';
 export default function RequireSubscription() {
   const { user, isAdmin, profile, loading: authLoading } = useAuth();
   const [hasSubscription, setHasSubscription] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [checkingSub, setCheckingSub] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -16,28 +16,29 @@ export default function RequireSubscription() {
 
     async function verifySubscription() {
       if (!user) {
-        if (isMounted) setLoading(false);
+        if (isMounted) setCheckingSub(false);
         return;
       }
 
-      // If user account is paused by admin
+      // 1. ADMIN BYPASS: Admin users have immediate free access to everything
+      if (isAdmin || profile?.role === 'admin') {
+        if (isMounted) {
+          setHasSubscription(true);
+          setCheckingSub(false);
+        }
+        return;
+      }
+
+      // 2. Check if user account was paused by Admin
       if (profile && profile.is_active === false) {
         if (isMounted) {
           setHasSubscription(false);
-          setLoading(false);
+          setCheckingSub(false);
         }
         return;
       }
 
-      // Admin bypasses subscription gate
-      if (isAdmin) {
-        if (isMounted) {
-          setHasSubscription(true);
-          setLoading(false);
-        }
-        return;
-      }
-
+      // 3. Regular Store User Subscription check
       try {
         const { data, error } = await supabase
           .from('user_subscriptions')
@@ -55,7 +56,7 @@ export default function RequireSubscription() {
         console.error('Subscription verification failed:', err);
         if (isMounted) setHasSubscription(false);
       } finally {
-        if (isMounted) setLoading(false);
+        if (isMounted) setCheckingSub(false);
       }
     }
 
@@ -73,17 +74,22 @@ export default function RequireSubscription() {
     navigate('/login');
   };
 
-  if (authLoading || loading) {
+  if (authLoading || checkingSub) {
     return (
-      <div className="min-h-screen bg-[#030510] flex flex-col items-center justify-center text-slate-400">
+      <div className="min-h-screen bg-[#030510] flex flex-col items-center justify-center text-slate-400 font-sans">
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-semibold text-sm animate-pulse">Verifying Account Subscription...</p>
+        <p className="font-semibold text-sm animate-pulse">Verifying Account Privileges...</p>
       </div>
     );
   }
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // Admin always passes directly to app
+  if (isAdmin || profile?.role === 'admin') {
+    return <Outlet />;
   }
 
   // PAUSED SERVICES UI SCREEN
@@ -121,6 +127,7 @@ export default function RequireSubscription() {
     );
   }
 
+  // Redirect unpaid non-admin users to subscription page
   if (!hasSubscription) {
     return <Navigate to="/subscription" replace />;
   }
