@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, forwardRef, useCallback, useMemo } from 'react';
 import { supabase } from '../../config/supabaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { useModal } from '../../context/ModalContext';
 import { useTranslation } from 'react-i18next';
 import { 
   Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, 
@@ -19,12 +20,10 @@ const formatDisplayDate = (dateObj) => {
   return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
 };
 
-// Safe financial rounding helper
 const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Scalable fetcher across large historical data
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -46,7 +45,6 @@ async function fetchAllRows(queryBuilder) {
   return allData;
 }
 
-// Fixed scale helper to prevent decimal bottle units
 const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedMrp) => {
   const currentSum = batches.reduce((acc, b) => acc + b.qty, 0);
   if (currentSum === targetBaseOpening) return batches;
@@ -158,6 +156,7 @@ const recalculateRow = (row) => {
 
 export default function DailyStock() {
   const { user } = useAuth();
+  const { showAlert, showConfirm } = useModal();
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -171,7 +170,6 @@ export default function DailyStock() {
     isDirtyRef.current = isDirty;
   }, [isDirty]);
 
-  // Strict timezone-neutral DB serialization helper
   const formatDateForDB = useCallback((dateObj) => {
     if (!dateObj) return '';
     const d = new Date(dateObj);
@@ -198,8 +196,6 @@ export default function DailyStock() {
   const [stockRows, setStockRows] = useState([]);
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0, totalMrpRevenue: 0 });
 
-  const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', isDanger: false, onConfirm: null });
-  const [alertModal, setAlertModal] = useState({ isOpen: false, title: '', message: '' });
   const [holidayModal, setHolidayModal] = useState({ isOpen: false, date: null, dateStr: '' });
   const [pipelineWarning, setPipelineWarning] = useState(null);
   const [customRangeMode, setCustomRangeMode] = useState(false);
@@ -207,12 +203,18 @@ export default function DailyStock() {
   const [markedHolidays, setMarkedHolidays] = useState([]);
   const [filledDates, setFilledDates] = useState([]);
   const [lockedRanges, setLockedRanges] = useState([]); 
+
+  // POPUP EXPENSE & CASH LEDGER STATE
+  const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
+  const [popupTab, setPopupTab] = useState('expense');
   const [popupDate, setPopupDate] = useState(new Date());
+  const [expenses, setExpenses] = useState([]);
+  const [collections, setCollections] = useState([]);
+  const [popupLoading, setPopupLoading] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [editingCollectionId, setEditingCollectionId] = useState(null);
-
-  const closeConfirm = () => setConfirmModal(prev => ({ ...prev, isOpen: false }));
-  const closeAlert = () => setAlertModal(prev => ({ ...prev, isOpen: false }));
+  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '' });
+  const [collectionForm, setCollectionForm] = useState({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
 
   // Realtime database listener
   useEffect(() => {
@@ -313,18 +315,18 @@ export default function DailyStock() {
         return;
       }
       if ((redirected || date) < startDate) {
-        setAlertModal({ isOpen: true, title: t('common.close', 'Invalid Selection'), message: "End date must fall on or after the start date." });
+        showAlert({ title: t('common.close', 'Invalid Selection'), message: "End date must fall on or after the start date.", type: 'warning' });
         return;
       }
       if (formatDateForDB(redirected || date) !== formatDateForDB(startDate)) {
         const range = getDatesInRange(startDate, redirected || date);
         if (range.some(d => markedHolidays.includes(d))) {
-          setAlertModal({ isOpen: true, title: t('dailyStock.holidayDeclaredTitle', 'Overlaps Holiday'), message: "Selected block contains declared holidays. Range selection blocked." });
+          showAlert({ title: t('dailyStock.holidayDeclaredTitle', 'Overlaps Holiday'), message: "Selected block contains declared holidays. Range selection blocked.", type: 'warning' });
           return;
         }
         const rangeToCheck = range.slice(0, -1);
         if (rangeToCheck.some(d => filledDates.includes(d))) {
-          setAlertModal({ isOpen: true, title: "Overlaps Existing Entries", message: "Selected range overlaps with previously saved daily stock records. Range selection blocked." });
+          showAlert({ title: "Overlaps Existing Entries", message: "Selected range overlaps with previously saved daily stock records. Range selection blocked.", type: 'warning' });
           return;
         }
       }
@@ -341,14 +343,13 @@ export default function DailyStock() {
     const [startYear, startMonth, startDay] = rangeStartStr.split('-').map(Number);
     const trueStartObj = new Date(startYear, startMonth - 1, startDay);
 
-    setConfirmModal({
-      isOpen: true,
+    showConfirm({
       title: t('dailyStock.splitModalTitle', 'Unlock & Split Combined Range?'),
       message: t('dailyStock.splitModalMsg', `Are you sure you want to split this combined block? This will permanently DELETE all recorded ledger values from ${formatDisplayDate(trueStartObj)} to ${formatDisplayDate(endDate || startDate)} (including closing balances) from the database, unlocking these dates so you can fill them individually day-by-day.`),
       isDanger: true,
+      confirmText: "Split Range",
       onConfirm: async () => {
         setIsSaving(true);
-        closeConfirm();
         try {
           await supabase.from('locked_ranges').delete().eq('user_id', user.id).eq('start_date', rangeStartStr).eq('end_date', rangeEndStr);
           await supabase.from('daily_stock').delete().eq('user_id', user.id).gte('date', rangeStartStr).lte('date', rangeEndStr);
@@ -360,7 +361,7 @@ export default function DailyStock() {
           setRefreshTrigger(prev => prev + 1);
           setIsDirty(false);
         } catch (err) {
-          setAlertModal({ isOpen: true, title: "Split Range Failed", message: err.message });
+          showAlert({ title: "Split Range Failed", message: err.message, type: 'error' });
         } finally {
           setIsSaving(false);
         }
@@ -368,7 +369,7 @@ export default function DailyStock() {
     });
   };
 
-  // SECURED CALENDAR & RETROSPECTIVE CHRONOLOGICAL PIPELINE HANDLER
+  // SECURED CALENDAR PREFERENCES
   useEffect(() => {
     let isMounted = true;
     const fetchCloudPreferences = async () => {
@@ -501,12 +502,6 @@ export default function DailyStock() {
   }, [user, refreshTrigger, startDate, customRangeMode, formatDateForDB]);
 
   const [purchaseModal, setPurchaseModal] = useState({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
-  const [isBankDepositOpen, setIsBankDepositOpen] = useState(false);
-  const [popupTab, setPopupTab] = useState('expense');
-  const [expenses, setExpenses] = useState([]);
-  const [collections, setCollections] = useState([]);
-  const [expenseForm, setExpenseForm] = useState({ date: new Date(), description: '', amount: '' });
-  const [collectionForm, setCollectionForm] = useState({ date: new Date(), description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
   const prevDatesRef = useRef({ start: null, end: null });
@@ -535,8 +530,8 @@ export default function DailyStock() {
       ] = await Promise.all([
         supabase.from('brands').select('id, brand_name, bottle_size, selling_price, mrp_price').order('display_order', { ascending: true }).order('brand_name', { ascending: true }),
         fetchAllRows(supabase.from('daily_stock').select('date, brand_id, opening_balance, closing_balance, unit_price, unit_mrp').eq('user_id', user.id).lte('date', endStr).order('date', { ascending: true })),
-        supabase.from('expenses').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
-        supabase.from('owner_withdrawals').select('amount').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
+        supabase.from('expenses').select('amount, date').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
+        supabase.from('owner_withdrawals').select('amount, date').eq('user_id', user.id).gte('date', startStr).lte('date', endStr)
       ]);
 
       if (!isMounted) return;
@@ -732,30 +727,61 @@ export default function DailyStock() {
     return () => { isMounted = false; };
   }, [startDate, endDate, isHolidaySelected, refreshTrigger, markedHolidays, user, customRangeMode, formatDateForDB, normalizeDateStr, isMultiDayRange]);
 
-  const fetchPopupData = async (dateToFetch) => {
+  // FETCH POPUP DATA (SYNCED TO EXACT SELECTED POPUP DATE)
+  const fetchPopupData = useCallback(async (dateToFetch) => {
+    if (!user) return;
+    setPopupLoading(true);
     const dateStr = formatDateForDB(dateToFetch);
-    const { data: expData } = await supabase.from('expenses').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
-    const { data: collData } = await supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false });
-    if (expData) setExpenses(expData);
-    if (collData) setCollections(collData);
-  };
+
+    try {
+      const [
+        { data: expData, error: expErr },
+        { data: collData, error: collErr }
+      ] = await Promise.all([
+        supabase.from('expenses').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false }),
+        supabase.from('owner_withdrawals').select('*').eq('user_id', user.id).eq('date', dateStr).order('created_at', { ascending: false })
+      ]);
+
+      if (!expErr) setExpenses(expData || []);
+      if (!collErr) setCollections(collData || []);
+    } catch (err) {
+      console.error("Error fetching popup log:", err);
+    } finally {
+      setPopupLoading(false);
+    }
+  }, [user, formatDateForDB]);
+
+  // Sync popup data safely on mount/date change
+  useEffect(() => {
+    let isMounted = true;
+    if (isBankDepositOpen && popupDate) {
+      Promise.resolve().then(() => {
+        if (isMounted) {
+          fetchPopupData(popupDate);
+        }
+      });
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [isBankDepositOpen, popupDate, fetchPopupData]);
 
   const handleOpenBankDeposit = () => {
-    setIsBankDepositOpen(true);
-    const activeDate = endDate || startDate;
+    const activeDate = endDate || startDate || new Date();
     setPopupDate(activeDate);
-    setExpenseForm(prev => ({ ...prev, date: activeDate }));
-    setCollectionForm(prev => ({ ...prev, date: activeDate }));
     setEditingExpenseId(null);
     setEditingCollectionId(null);
+    setExpenseForm({ description: '', amount: '' });
+    setCollectionForm({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+    setIsBankDepositOpen(true);
   };
 
   const openHolidayConfirm = () => {
-    setConfirmModal({
-      isOpen: true,
+    showConfirm({
       title: t('dailyStock.holidayDeclaredTitle', 'Declare as Holiday?'),
       message: t('dailyStock.holidayDeclaredMsg', 'Marking this period as a holiday will automatically carry forward opening stock and lock transactions.'),
       isDanger: false,
+      confirmText: "Declare Holiday",
       onConfirm: async () => {
         setIsSaving(true);
         const holidayUpserts = selectedDates.map(dateStr => ({ user_id: user.id, date: dateStr }));
@@ -787,7 +813,7 @@ export default function DailyStock() {
         setRefreshTrigger(prev => prev + 1);
         setIsSaving(false);
         setIsDirty(false);
-        closeConfirm();
+        showAlert({ title: "Holiday Declared", message: "Date block safely preserved as holiday.", type: "success" });
       }
     });
   };
@@ -799,6 +825,7 @@ export default function DailyStock() {
     setRefreshTrigger(prev => prev + 1); 
     setIsSaving(false);
     setIsDirty(false);
+    showAlert({ title: "Holiday Cancelled", message: "Date block unlocked for daily entry.", type: "success" });
   };
 
   const handleSort = async () => {
@@ -946,7 +973,7 @@ export default function DailyStock() {
       setRefreshTrigger(prev => prev + 1);
       setIsDirty(false);
     } catch (err) {
-      setAlertModal({ isOpen: true, title: "Reconciliation Failed", message: err.message });
+      showAlert({ title: "Reconciliation Failed", message: err.message, type: "error" });
     } finally {
       setIsSaving(false);
       setPurchaseModal({ isOpen: false, brand: null, qty: '', price: '', mrp: '', isPriceChanged: false, isMrpChanged: false });
@@ -1025,70 +1052,130 @@ export default function DailyStock() {
       setRefreshTrigger(prev => prev + 1);
       setIsDirty(false);
     } catch (err) {
-      setAlertModal({ isOpen: true, title: "Database Error", message: err.message });
+      showAlert({ title: "Database Error", message: err.message, type: "error" });
     } finally {
       setIsSaving(false);
     }
   };
 
+  // ADD / UPDATE EXPENSE
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    if (editingExpenseId) {
-      const { error } = await supabase.from('expenses').update({
-        date: formatDateForDB(expenseForm.date), description: expenseForm.description, amount: parseFloat(expenseForm.amount)
-      }).eq('id', editingExpenseId);
-      if (!error) { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); fetchPopupData(expenseForm.date); setRefreshTrigger(prev => prev + 1); }
-    } else {
-      const { error } = await supabase.from('expenses').insert([{
-        user_id: user.id, date: formatDateForDB(expenseForm.date), description: expenseForm.description, amount: parseFloat(expenseForm.amount)
-      }]);
-      if (!error) { setExpenseForm({ ...expenseForm, description: '', amount: '' }); fetchPopupData(expenseForm.date); setRefreshTrigger(prev => prev + 1); }
+    const dateStr = formatDateForDB(popupDate);
+
+    try {
+      if (editingExpenseId) {
+        const { error } = await supabase.from('expenses').update({
+          date: dateStr, 
+          description: expenseForm.description, 
+          amount: parseFloat(expenseForm.amount)
+        }).eq('id', editingExpenseId);
+
+        if (error) throw error;
+        setEditingExpenseId(null);
+      } else {
+        const { error } = await supabase.from('expenses').insert([{
+          user_id: user.id, 
+          date: dateStr, 
+          description: expenseForm.description, 
+          amount: parseFloat(expenseForm.amount)
+        }]);
+
+        if (error) throw error;
+      }
+
+      setExpenseForm({ description: '', amount: '' });
+      await fetchPopupData(popupDate);
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err) {
+      showAlert({ title: "Expense Save Failed", message: err.message, type: "error" });
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
-  const editExpense = (exp) => { setEditingExpenseId(exp.id); setExpenseForm({ date: new Date(exp.date), description: exp.description, amount: exp.amount }); };
+  const editExpense = (exp) => { 
+    setEditingExpenseId(exp.id); 
+    setExpenseForm({ description: exp.description, amount: exp.amount }); 
+  };
   
   const openDeleteExpense = (id) => {
-    setConfirmModal({
-      isOpen: true, title: t('common.delete', 'Delete Expense?'), message: 'This transaction record will be permanently deleted.', isDanger: true,
+    showConfirm({
+      title: t('common.delete', 'Delete Expense?'), 
+      message: 'This expense transaction record will be permanently deleted.', 
+      isDanger: true,
+      confirmText: "Delete",
       onConfirm: async () => {
         setIsSubmitting(true); 
         const { error } = await supabase.from('expenses').delete().eq('id', id); 
-        if (!error) { fetchPopupData(expenseForm.date); setRefreshTrigger(prev => prev + 1); } 
-        setIsSubmitting(false); closeConfirm();
+        if (!error) { 
+          await fetchPopupData(popupDate); 
+          setRefreshTrigger(prev => prev + 1); 
+        } 
+        setIsSubmitting(false);
       }
     });
   };
 
+  // ADD / UPDATE COLLECTION
   const handleAddCollection = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    if (editingCollectionId) {
-      const { error } = await supabase.from('owner_withdrawals').update({
-        date: formatDateForDB(collectionForm.date), description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
-      }).eq('id', editingCollectionId);
-      if (!error) { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); fetchPopupData(collectionForm.date); setRefreshTrigger(prev => prev + 1); }
-    } else {
-      const { error } = await supabase.from('owner_withdrawals').insert([{
-        user_id: user.id, date: formatDateForDB(collectionForm.date), description: collectionForm.description, amount: parseFloat(collectionForm.amount), withdrawal_mode: collectionForm.mode
-      }]);
-      if (!error) { setCollectionForm({ ...collectionForm, description: '', amount: '' }); fetchPopupData(collectionForm.date); setRefreshTrigger(prev => prev + 1); }
+    const dateStr = formatDateForDB(popupDate);
+
+    try {
+      if (editingCollectionId) {
+        const { error } = await supabase.from('owner_withdrawals').update({
+          date: dateStr, 
+          description: collectionForm.description, 
+          amount: parseFloat(collectionForm.amount), 
+          withdrawal_mode: collectionForm.mode
+        }).eq('id', editingCollectionId);
+
+        if (error) throw error;
+        setEditingCollectionId(null);
+      } else {
+        const { error } = await supabase.from('owner_withdrawals').insert([{
+          user_id: user.id, 
+          date: dateStr, 
+          description: collectionForm.description, 
+          amount: parseFloat(collectionForm.amount), 
+          withdrawal_mode: collectionForm.mode
+        }]);
+
+        if (error) throw error;
+      }
+
+      setCollectionForm({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+      await fetchPopupData(popupDate);
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err) {
+      showAlert({ title: "Collection Save Failed", message: err.message, type: "error" });
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
-  const editCollection = (coll) => { setEditingCollectionId(coll.id); setCollectionForm({ date: new Date(coll.date), description: coll.description, amount: coll.amount, mode: coll.withdrawal_mode }); };
+  const editCollection = (coll) => { 
+    setEditingCollectionId(coll.id); 
+    setCollectionForm({ description: coll.description, amount: coll.amount, mode: coll.withdrawal_mode }); 
+  };
   
   const openDeleteCollection = (id) => {
-    setConfirmModal({
-      isOpen: true, title: t('common.delete', 'Delete Entry?'), message: 'This collection entry will be permanently removed.', isDanger: true,
+    showConfirm({
+      title: t('common.delete', 'Delete Entry?'), 
+      message: 'This collection entry will be permanently removed.', 
+      isDanger: true,
+      confirmText: "Delete",
       onConfirm: async () => {
         setIsSubmitting(true); 
         const { error } = await supabase.from('owner_withdrawals').delete().eq('id', id); 
-        if (!error) { fetchPopupData(collectionForm.date); setRefreshTrigger(prev => prev + 1); } 
-        setIsSubmitting(false); closeConfirm();
+        if (!error) { 
+          await fetchPopupData(popupDate); 
+          setRefreshTrigger(prev => prev + 1); 
+        } 
+        setIsSubmitting(false);
       }
     });
   };
@@ -1202,42 +1289,10 @@ export default function DailyStock() {
         }
       `}</style>
 
-      {/* GLOBAL CONFIRM MODAL */}
-      {confirmModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" style={{ zIndex: 100000 }}>
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-w-sm w-full transform scale-100 transition-transform">
-            <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">{confirmModal.title}</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">{confirmModal.message}</p>
-            <div className="flex gap-3">
-              <button onClick={closeConfirm} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors cursor-pointer">{t('common.cancel', 'Cancel')}</button>
-              <button onClick={confirmModal.onConfirm} className={`flex-1 px-4 py-2.5 text-white rounded-xl font-bold transition-colors shadow-sm cursor-pointer ${confirmModal.isDanger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                {t('common.confirm', 'Confirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* GLOBAL ALERT MODAL */}
-      {alertModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" style={{ zIndex: 100000 }}>
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-w-sm w-full">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-orange-100 dark:bg-orange-900/30 text-orange-500 rounded-full"><AlertCircle size={24} /></div>
-              <h3 className="text-xl font-bold text-slate-800 dark:text-white">{alertModal.title}</h3>
-            </div>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">{alertModal.message}</p>
-            <button onClick={closeAlert} className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white rounded-xl font-bold transition-colors cursor-pointer">
-              {t('common.understood', 'Understood')}
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* HOLIDAY DECLARED INFO MODAL */}
       {holidayModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" style={{ zIndex: 100000 }}>
-          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 text-center">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200 z-100000">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 text-center p-6">
             <div className="w-20 h-20 bg-orange-100 dark:bg-orange-900/30 text-orange-500 rounded-full flex items-center justify-center mb-5 shadow-inner border border-orange-200 dark:border-orange-800 mx-auto">
               <CalendarOff size={40} />
             </div>
@@ -1245,7 +1300,7 @@ export default function DailyStock() {
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
               The selected date <strong className="text-slate-800 dark:text-white">{formatDisplayDate(holidayModal.date)}</strong> is marked as a holiday.
             </p>
-            <div className="flex flex-col gap-2 p-4">
+            <div className="flex flex-col gap-2">
               <button 
                 onClick={() => handleCancelHolidayFromModal(holidayModal.dateStr)} 
                 disabled={isSaving}
@@ -1274,7 +1329,8 @@ export default function DailyStock() {
         </div>
       )}
 
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 z-50 relative">
+      {/* Control Bar: z-40 ensures DatePicker floats over table and cards */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 relative z-40">
         <div className="shrink-0">
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
             <Package className="text-blue-500" /> {t('dailyStock.title', 'Daily Stock Ledger')}
@@ -1285,7 +1341,7 @@ export default function DailyStock() {
         <div className="flex-1 min-w-0 flex xl:justify-end mt-2 xl:mt-0">
           <div className="flex flex-wrap items-center justify-start xl:justify-end gap-2 max-w-full">
             
-            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
+            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner relative z-40">
               <DatePicker 
                 selected={startDate} onChange={handleStartDateChange} maxDate={new Date()} dateFormat="dd MMM yyyy" 
                 customInput={<CustomDateInput placeholder={t('dailyStock.startDatePlaceholder', 'Start Date')} />} 
@@ -1294,6 +1350,7 @@ export default function DailyStock() {
                 selectsStart
                 startDate={startDate}
                 endDate={endDate}
+                popperPlacement="bottom-start"
               />
               <span className="text-slate-400 font-bold px-1 hidden sm:block">{t('common.to', 'to')}</span>
               <DatePicker 
@@ -1304,6 +1361,7 @@ export default function DailyStock() {
                 selectsEnd
                 startDate={startDate}
                 endDate={endDate}
+                popperPlacement="bottom-end"
               />
             </div>
             
@@ -1440,16 +1498,18 @@ export default function DailyStock() {
                         
                         <td className="px-3 py-4">
                           <div className="font-bold text-slate-800 dark:text-slate-100">{row.brand_name}</div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-col gap-1">
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-col gap-1 max-w-sm">
                             <span className="font-semibold uppercase tracking-wider text-[10px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded w-fit">{row.bottle_size}</span>
-                            <div className="flex flex-col gap-1 bg-slate-50/50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-800/80 mt-1">
+                            
+                            {/* SMART 2-BATCH CONTAINER: Automatically hides 0 LEFT depleted batches & scrolls if > 2 */}
+                            <div className="flex flex-col gap-1 bg-slate-50/70 dark:bg-slate-900/60 p-2 rounded-xl border border-slate-200/60 dark:border-slate-800 mt-1 max-h-88px] overflow-y-auto custom-scrollbar">
                               {(() => {
                                 const activeBatches = [];
                                 
                                 if (row.starting_batches && row.starting_batches.length > 0) {
                                   row.starting_batches.forEach((b, idx) => {
                                     activeBatches.push({ 
-                                      label: `Old Batch ${row.starting_batches.length > 1 ? idx + 1 : ''}`, 
+                                      label: `Batch ${row.starting_batches.length > 1 ? idx + 1 : 'Old'}`, 
                                       qty: b.qty, 
                                       mrp: b.mrp, 
                                       price: b.price, 
@@ -1476,6 +1536,7 @@ export default function DailyStock() {
                                   });
                                 }
 
+                                // Distribute Closing Balance from newest to oldest batch
                                 if (row.closing_balance !== '' && row.closing_balance !== null) {
                                   let remainingStock = parseInt(row.closing_balance, 10) || 0;
                                   for (let i = activeBatches.length - 1; i >= 0; i--) {
@@ -1487,40 +1548,31 @@ export default function DailyStock() {
                                   activeBatches.forEach(b => { b.left = b.qty; });
                                 }
 
-                                if (activeBatches.length === 0) {
+                                // FILTER OUT 0 LEFT DEPLETED BATCHES FOR CLEAN USER EXPERIENCE
+                                const visibleBatches = activeBatches.filter(b => b.left > 0 || b.isNew);
+
+                                if (visibleBatches.length === 0) {
                                   return (
-                                    <div className="text-[11px] text-slate-400">
-                                      Baseline (MRP: {formatRs(row.purchase_mrp || row.carried_mrp || row.mrp_price)} | Sale: {formatRs(row.purchase_price || row.carried_price || row.selling_price)})
+                                    <div className="text-[11px] text-slate-400 py-0.5">
+                                      Baseline Rate (MRP: {formatRs(row.purchase_mrp || row.carried_mrp || row.mrp_price)} | Sale: {formatRs(row.purchase_price || row.carried_price || row.selling_price)})
                                     </div>
                                   );
                                 }
 
-                                return activeBatches.map((batch, idx) => {
-                                  const isStockZero = batch.left === 0;
-                                  
-                                  const statusBadgeClass = isStockZero
-                                    ? "bg-rose-50/80 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border-rose-200/40 dark:border-rose-900/20"
-                                    : "bg-amber-50/80 dark:bg-amber-950/10 text-amber-600 dark:text-amber-400 border-amber-200/40 dark:border-amber-900/20";
-
+                                return visibleBatches.map((batch, idx) => {
                                   return (
                                     <div 
                                       key={`batch-row-${idx}`} 
-                                      className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5 ${idx > 0 ? 'border-t border-slate-100 dark:border-slate-800/40' : ''} ${batch.isNew ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-600 dark:text-slate-300'}`}
+                                      className={`flex items-center justify-between gap-x-2 py-1 ${idx > 0 ? 'border-t border-slate-100 dark:border-slate-800/50' : ''}`}
                                     >
-                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
-                                        <span className="font-extrabold text-slate-800 dark:text-slate-100 shrink-0">{batch.label}:</span>
-                                        <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">{batch.qty} {t('common.units', 'Qty')}</span>
-                                        <span className="text-slate-300 dark:text-slate-700 text-[9px] select-none shrink-0">•</span>
-                                        <span className="font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                                          MRP: {formatRs(batch.mrp)}
-                                        </span>
-                                        <span className="text-slate-300 dark:text-slate-700 text-[9px] select-none shrink-0">•</span>
-                                        <span className="font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                                          Sale: {formatRs(batch.price)}
-                                        </span>
+                                      <div className="flex flex-wrap items-center gap-x-1.5 text-[10.5px]">
+                                        <span className="font-black text-slate-800 dark:text-slate-100 shrink-0">{batch.label}:</span>
+                                        <span className="font-bold text-slate-600 dark:text-slate-300 whitespace-nowrap">Sale: ₹{batch.price}</span>
+                                        <span className="text-slate-300 dark:text-slate-700 text-[8px]">•</span>
+                                        <span className="text-slate-400 dark:text-slate-500 whitespace-nowrap">MRP: ₹{batch.mrp}</span>
                                       </div>
                                       
-                                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase border shrink-0 whitespace-nowrap transition-all ${statusBadgeClass}`}>
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40 shrink-0 whitespace-nowrap">
                                         {batch.left} {t('dailyStock.leftBadge', 'left')}
                                       </span>
                                     </div>
@@ -1629,7 +1681,7 @@ export default function DailyStock() {
 
       {/* PURCHASE BATCH RECONCILIATION MODAL */}
       {purchaseModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" style={{ zIndex: 90000 }}>
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-100000">
           <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
             
             <div className="flex justify-between items-center px-5 py-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 shrink-0">
@@ -1770,33 +1822,56 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* FINANCIAL OPERATIONS MODAL */}
+      {/* FULLY RESPONSIVE FINANCIAL OPERATIONS MODAL (TOP-LAYER z-100000) */}
       {isBankDepositOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 90000 }}>
-          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 z-100000 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-5xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-150">
             
-            <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
-              <div className="flex items-center gap-4">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                  <Landmark size={24} className="text-blue-500" /> {t('dailyStock.cashLedgerTitle', 'Operational Cash Ledger')}
-                </h3>
+            {/* Modal Header */}
+            <div className="flex justify-between items-center px-6 py-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/50 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl">
+                  <Landmark size={22} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    {t('dailyStock.cashLedgerTitle', 'Operational Cash Ledger')}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                    Viewing records for: <strong className="text-blue-600 dark:text-blue-400">{formatDisplayDate(popupDate)}</strong>
+                  </p>
+                </div>
               </div>
-              <button type="button" onClick={() => setIsBankDepositOpen(false)} className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-red-500 hover:text-white rounded-full transition-colors outline-none cursor-pointer"><X size={20} /></button>
+              <button 
+                type="button" 
+                onClick={() => setIsBankDepositOpen(false)} 
+                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors outline-none cursor-pointer"
+              >
+                <X size={20} />
+              </button>
             </div>
             
-            <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+            {/* Modal Body */}
+            <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar flex-1">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 
-                <div className="bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit overflow-hidden">
-                  <div className="flex border-b border-slate-100 dark:border-slate-800">
+                {/* Form Column with dedicated high z-index datepicker container */}
+                <div className="bg-slate-50/60 dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 h-fit overflow-visible relative z-30">
+                  
+                  {/* Tab Switcher */}
+                  <div className="flex border-b border-slate-200 dark:border-slate-800 bg-slate-100/50 dark:bg-slate-900/50 rounded-t-2xl overflow-hidden">
                     <button 
                       type="button"
                       onClick={() => {
                         setPopupTab('expense');
                         setEditingCollectionId(null);
-                        setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+                        setCollectionForm({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
                       }} 
-                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors cursor-pointer ${popupTab === 'expense' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                      className={`flex-1 py-3.5 text-xs font-extrabold text-center transition-all cursor-pointer ${
+                        popupTab === 'expense' 
+                          ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-b-2 border-red-500' 
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      }`}
                     >
                       {t('dailyStock.businessExpenseTab', 'Business Expense')}
                     </button>
@@ -1805,75 +1880,81 @@ export default function DailyStock() {
                       onClick={() => {
                         setPopupTab('collection');
                         setEditingExpenseId(null);
-                        setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+                        setExpenseForm({ description: '', amount: '' });
                       }} 
-                      className={`flex-1 py-4 text-sm font-bold text-center transition-colors cursor-pointer ${popupTab === 'collection' ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                      className={`flex-1 py-3.5 text-xs font-extrabold text-center transition-all cursor-pointer ${
+                        popupTab === 'collection' 
+                          ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-500' 
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      }`}
                     >
                       {t('dailyStock.onlineCollectionTab', 'Online Collection')}
                     </button>
                   </div>
 
-                  <div className="p-6">
+                  <div className="p-5">
                     {popupTab === 'expense' ? (
-                      <form onSubmit={handleAddExpense} className="space-y-4 animate-in fade-in zoom-in duration-200">
-                        <div className="form-date-picker">
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.date', 'Date')}</label>
+                      <form onSubmit={handleAddExpense} className="space-y-4">
+                        <div className="form-date-picker relative z-50">
+                          <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.date', 'Date')}</label>
                           <DatePicker 
-                            selected={expenseForm.date} 
-                            onChange={(date) => { setExpenseForm({ ...expenseForm, date }); }} 
+                            selected={popupDate} 
+                            onChange={(date) => { setPopupDate(date); }} 
                             dateFormat="dd MMM yyyy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
                             showMonthDropdown
                             showYearDropdown
                             dropdownMode="select"
+                            popperPlacement="bottom-start"
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
-                          <input type="text" required value={expenseForm.description ?? ''} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Electricity Bill" />
+                          <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
+                          <input type="text" required value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Light Bill, Rent" />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
-                          <input type="number" required min="1" step="any" value={expenseForm.amount ?? ''} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
+                          <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
+                          <input type="number" required min="1" step="any" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                         </div>
                         
                         {editingExpenseId ? (
-                          <div className="flex gap-3 mt-2">
-                            <button type="button" onClick={() => { setEditingExpenseId(null); setExpenseForm({ date: popupDate, description: '', amount: '' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors cursor-pointer">{t('common.cancel', 'Cancel')}</button>
-                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors cursor-pointer">{t('dailyStock.updateExpenseButton', 'Update Expense')}</button>
+                          <div className="flex gap-2.5 pt-1">
+                            <button type="button" onClick={() => { setEditingExpenseId(null); setExpenseForm({ description: '', amount: '' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors text-xs cursor-pointer">{t('common.cancel', 'Cancel')}</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors text-xs cursor-pointer">{t('dailyStock.updateExpenseButton', 'Update')}</button>
                           </div>
                         ) : (
-                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-red-600 text-white font-medium py-2.5 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"><Plus size={18}/> {t('dailyStock.addExpenseButton', 'Add Expense')}</button>
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 text-xs shadow-md cursor-pointer"><Plus size={16}/> {t('dailyStock.addExpenseButton', 'Add Expense')}</button>
                         )}
                       </form>
                     ) : (
-                      <form onSubmit={handleAddCollection} className="space-y-4 animate-in fade-in zoom-in duration-200">
-                        <div className="form-date-picker">
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.date', 'Date')}</label>
+                      <form onSubmit={handleAddCollection} className="space-y-4">
+                        <div className="form-date-picker relative z-50">
+                          <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.date', 'Date')}</label>
                           <DatePicker 
-                            selected={collectionForm.date} 
-                            onChange={(date) => { setCollectionForm({ ...collectionForm, date }); }} 
+                            selected={popupDate} 
+                            onChange={(date) => { setPopupDate(date); }} 
                             dateFormat="dd MMM yyyy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
                             showMonthDropdown
                             showYearDropdown
                             dropdownMode="select"
+                            popperPlacement="bottom-start"
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
-                          <input type="text" required value={collectionForm.description ?? ''} onChange={(e) => setCollectionForm({ ...collectionForm, description: e.target.value })} className={inputClass} />
+                          <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
+                          <input type="text" required value={collectionForm.description} onChange={(e) => setCollectionForm({ ...collectionForm, description: e.target.value })} className={inputClass} />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
-                            <input type="number" required min="1" value={collectionForm.amount ?? ''} onChange={(e) => setCollectionForm({ ...collectionForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
+                            <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
+                            <input type="number" required min="1" value={collectionForm.amount} onChange={(e) => setCollectionForm({ ...collectionForm, amount: e.target.value })} className={inputClass} placeholder="0.00" />
                           </div>
                           <div>
-                            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.mode', 'Mode')}</label>
-                            <select value={collectionForm.mode ?? 'UPI/Bank'} onChange={(e) => setCollectionForm({ ...collectionForm, mode: e.target.value })} className={inputClass}>
+                            <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.mode', 'Mode')}</label>
+                            <select value={collectionForm.mode} onChange={(e) => setCollectionForm({ ...collectionForm, mode: e.target.value })} className={inputClass}>
                               <option value="UPI/Bank">UPI/Bank</option>
                               <option value="Cash">Cash</option>
                             </select>
@@ -1881,71 +1962,80 @@ export default function DailyStock() {
                         </div>
 
                         {editingCollectionId ? (
-                          <div className="flex gap-3 mt-2">
-                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ date: popupDate, description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors cursor-pointer">{t('common.cancel', 'Cancel')}</button>
-                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition-colors cursor-pointer">{t('dailyStock.updateCollectionButton', 'Update Collection')}</button>
+                          <div className="flex gap-2.5 pt-1">
+                            <button type="button" onClick={() => { setEditingCollectionId(null); setCollectionForm({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' }); }} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold py-2.5 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors text-xs cursor-pointer">{t('common.cancel', 'Cancel')}</button>
+                            <button type="submit" disabled={isSubmitting} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors text-xs cursor-pointer">{t('dailyStock.updateCollectionButton', 'Update')}</button>
                           </div>
                         ) : (
-                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"><ArrowDownCircle size={18} /> {t('dailyStock.recordCollectionButton', 'Record Collection')}</button>
+                          <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 text-xs shadow-md cursor-pointer"><ArrowDownCircle size={16} /> {t('dailyStock.recordCollectionButton', 'Record Collection')}</button>
                         )}
                       </form>
                     )}
                   </div>
                 </div>
 
-                <div className="lg:col-span-2 bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                      {popupTab === 'expense' ? <Receipt size={18} className="text-red-500"/> : <Landmark size={18} className="text-indigo-500"/>}
+                {/* Table Log Column */}
+                <div className="lg:col-span-2 bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col h-full relative z-10">
+                  <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex justify-between items-center">
+                    <h4 className="text-sm font-black text-slate-800 dark:text-white flex items-center gap-2">
+                      {popupTab === 'expense' ? <Receipt size={16} className="text-red-500"/> : <Landmark size={16} className="text-indigo-500"/>}
                       {popupTab === 'expense' ? t('dailyStock.dailyExpensesTitle', 'Daily Expenses Log') : t('dailyStock.dailyCollectionsTitle', 'Daily Online Collections')}
-                    </h3>
+                    </h4>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      Total: ₹{((popupTab === 'expense' ? expenses : collections).reduce((sum, r) => sum + parseFloat(r.amount || 0), 0)).toLocaleString('en-IN')}
+                    </span>
                   </div>
                   
-                  <div className="overflow-x-auto max-h-96 custom-scrollbar">
+                  <div className="overflow-x-auto max-h-80 custom-scrollbar flex-1">
                     <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
-                      <thead className="bg-white dark:bg-slate-950 text-slate-400 font-semibold uppercase text-xs tracking-wider sticky top-0 border-b border-slate-100 dark:border-slate-800 z-10">
+                      <thead className="bg-slate-50/80 dark:bg-slate-900 text-slate-400 font-semibold uppercase text-[10px] tracking-wider sticky top-0 border-b border-slate-100 dark:border-slate-800 z-10">
                         <tr>
-                          <th className="px-6 py-4">{t('common.description', 'Description')}</th>
-                          {popupTab === 'collection' && <th className="px-6 py-4 text-center">{t('common.mode', 'Mode')}</th>}
-                          <th className="px-6 py-4 text-right">{t('common.amount', 'Amount')} (₹)</th>
-                          <th className="px-4 py-4 text-center">{t('common.actions', 'Actions')}</th>
+                          <th className="px-5 py-3">{t('common.description', 'Description')}</th>
+                          {popupTab === 'collection' && <th className="px-4 py-3 text-center">{t('common.mode', 'Mode')}</th>}
+                          <th className="px-5 py-3 text-right">{t('common.amount', 'Amount')} (₹)</th>
+                          <th className="px-4 py-3 text-center">{t('common.actions', 'Actions')}</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {(popupTab === 'expense' ? expenses : collections).length === 0 ? (
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                        {popupLoading ? (
+                          <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">{t('common.loading', 'Loading records...')}</td></tr>
+                        ) : (popupTab === 'expense' ? expenses : collections).length === 0 ? (
                           <tr><td colSpan={popupTab === 'collection' ? 4 : 3} className="px-6 py-12 text-center text-slate-400">{t('dailyStock.noRecordsFound', 'No records found for the selected date.')}</td></tr>
                         ) : (
                           (popupTab === 'expense' ? expenses : collections).map((row) => (
-                            <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
-                              <td className="px-6 py-4 font-medium text-slate-800 dark:text-slate-100">{row.description}</td>
+                            <tr key={row.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
+                              <td className="px-5 py-3.5 font-bold text-slate-800 dark:text-slate-100">{row.description}</td>
                               {popupTab === 'collection' && (
-                                <td className="px-6 py-4 text-center">
-                                  <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded-md ${row.withdrawal_mode === 'Cash' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-500' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
+                                <td className="px-4 py-3.5 text-center">
+                                  <span className={`px-2 py-0.5 text-[9px] font-extrabold uppercase rounded-md ${row.withdrawal_mode === 'Cash' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-500' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
                                     {row.withdrawal_mode}
                                   </span>
                                 </td>
                               )}
-                              <td className={`px-6 py-4 text-right font-bold ${popupTab === 'expense' ? 'text-red-600 dark:text-red-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
-                                  ₹{parseFloat(row.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                                <td className="px-4 py-4 text-center">
-                                  <div className="flex justify-center gap-2">
-                                    <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"><Edit2 size={16} /></button>
-                                    <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors cursor-pointer"><Trash2 size={16} /></button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
+                              <td className={`px-5 py-3.5 text-right font-black ${popupTab === 'expense' ? 'text-red-600 dark:text-red-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
+                                ₹{parseFloat(row.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-4 py-3.5 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button onClick={() => popupTab === 'expense' ? editExpense(row) : editCollection(row)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"><Edit2 size={14} /></button>
+                                  <button onClick={() => popupTab === 'expense' ? openDeleteExpense(row.id) : openDeleteCollection(row.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors cursor-pointer"><Trash2 size={14} /></button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
+
               </div>
             </div>
+
           </div>
-        )}
-      </div>
-    );
-  }
+        </div>
+      )}
+
+    </div>
+  );
+}

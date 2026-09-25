@@ -12,7 +12,7 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
     type="button"
     onClick={onClick}
     ref={ref}
-    className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50"
+    className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 cursor-pointer"
   >
     <Calendar size={16} className="text-blue-500 mr-2" />
     {value || placeholder}
@@ -279,13 +279,15 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-8 pb-8 transition-colors duration-300">
+    <div className="space-y-8 pb-8 transition-colors duration-300 relative">
       <style>{`
         .react-datepicker-wrapper { display: block; }
-        .react-datepicker-popper { z-index: 99999 !important; }
+        .react-datepicker-popper { 
+          z-index: 99999 !important; 
+        }
         .react-datepicker { 
           background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; 
-          border-radius: 1.25rem !important; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1) !important; 
+          border-radius: 1.25rem !important; box-shadow: 0 20px 30px -5px rgba(0, 0, 0, 0.3) !important; 
           font-family: inherit !important; padding: 0.75rem !important; overflow: hidden;
         }
         .react-datepicker__month-container { background-color: #ffffff !important; }
@@ -302,7 +304,7 @@ export default function Dashboard() {
           cursor: pointer; margin: 0 0.25rem 0.75rem 0.25rem;
         }
         .react-datepicker__header select:focus { border-color: #3b82f6; }
-        .react-datepicker__day-name { color: #94a3b8 !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
+        .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
         .react-datepicker__day { 
           color: #334155 !important; border-radius: 50% !important; width: 2.25rem !important;
           line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; background-color: transparent !important;
@@ -325,14 +327,14 @@ export default function Dashboard() {
         .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
       `}</style>
 
-      {/* HEADER WITH SLICER */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 relative z-10">
+      {/* HEADER: Set to z-40 relative layer so popper always floats over metrics row */}
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 relative z-40">
         <div>
           <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">{t('dashboard.title', 'Executive Dashboard')}</h2>
           <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm sm:text-base">{t('dashboard.description', 'Real-time overview filtered by your selected timeline.')}</p>
         </div>
         
-        <div className="flex items-center gap-2 bg-white/60 dark:bg-slate-900/60 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm backdrop-blur-sm relative z-50">
+        <div className="flex items-center gap-2 bg-white/60 dark:bg-slate-900/60 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm backdrop-blur-sm relative z-40">
           <DatePicker
             selected={startDate}
             onChange={handleStartDateChange}
@@ -342,6 +344,7 @@ export default function Dashboard() {
             showMonthDropdown
             showYearDropdown
             dropdownMode="select"
+            popperPlacement="bottom-start"
           />
           <span className="text-slate-400 font-semibold px-1">{t('common.to', 'to')}</span>
           <DatePicker
@@ -354,6 +357,7 @@ export default function Dashboard() {
             showMonthDropdown
             showYearDropdown
             dropdownMode="select"
+            popperPlacement="bottom-end"
           />
         </div>
       </div>
