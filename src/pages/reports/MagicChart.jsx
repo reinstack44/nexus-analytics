@@ -9,7 +9,7 @@ import 'react-datepicker/dist/react-datepicker.css';
 const CustomMonthInput = forwardRef(({ value, onClick }, ref) => {
   const { t } = useTranslation();
   return (
-    <button type="button" onClick={onClick} ref={ref} className="flex items-center justify-between px-4 py-2.5 h-12 w-56 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer">
+    <button type="button" onClick={onClick} ref={ref} className="flex items-center justify-between px-4 py-2.5 h-12 w-full sm:w-56 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer">
       <div className="flex items-center">
         <Calendar size={18} className="text-indigo-500 mr-2 shrink-0" />
         <span>{value || t('magicChart.selectMonth', 'Select Month')}</span>
@@ -350,8 +350,77 @@ export default function MagicChart() {
   const locale = i18n.language === 'hi' ? 'hi-IN' : i18n.language === 'mr' ? 'mr-IN' : 'en-IN';
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300">
+    <div className="max-w-5xl mx-auto space-y-6 transition-colors duration-300 relative z-10">
       
+      {/* Dynamic CSS injection to style React Datepicker globally to match image theme safely */}
+      <style>{`
+        .react-datepicker-wrapper { display: block; width: 100%; }
+        .react-datepicker-popper { 
+          z-index: 99999 !important; 
+        }
+        .react-datepicker { 
+          background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; 
+          border-radius: 1.25rem !important; box-shadow: 0 20px 30px -5px rgba(0, 0, 0, 0.3) !important; 
+          font-family: inherit !important; padding: 0.75rem !important; overflow: hidden;
+        }
+        .react-datepicker__month-container { background-color: #ffffff !important; }
+        .react-datepicker__header { 
+          background-color: #ffffff !important; border-bottom: 1px solid #f8fafc !important; 
+          padding-top: 0.25rem !important;
+        }
+        .react-datepicker__current-month { 
+          color: #1e293b; font-weight: 700; font-size: 1rem; margin-bottom: 1rem !important; 
+        }
+        .react-datepicker__header select {
+          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
+          padding: 0.25rem 0.5rem; font-weight: 600; color: #1e293b; outline: none;
+          cursor: pointer; margin: 0 0.25rem 0.75rem 0.25rem;
+        }
+        .react-datepicker__header select:focus { border-color: #3b82f6; }
+        
+        /* Month picker specific styles */
+        .react-datepicker__month-wrapper {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 0.5rem;
+        }
+        .react-datepicker__month-text {
+          color: #334155 !important;
+          border-radius: 0.75rem !important;
+          width: 4.5rem !important;
+          padding: 0.5rem 0 !important;
+          margin: 0 0.25rem !important;
+          font-weight: 600 !important;
+          transition: all 0.2s ease !important;
+        }
+        .react-datepicker__month-text:hover {
+          background-color: #f1f5f9 !important;
+          color: #0f172a !important;
+        }
+        .react-datepicker__month-text--selected,
+        .react-datepicker__month-text--keyboard-selected {
+          background-color: #2563eb !important;
+          color: #ffffff !important;
+          box-shadow: 0 4px 6px -1px rgb(37 99 235 / 0.4) !important;
+        }
+        .react-datepicker__triangle { display: none !important; }
+
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__month-container { background-color: #0f172a !important; }
+        .dark .react-datepicker__header { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
+        .dark .react-datepicker__header select { background-color: #1e293b !important; color: #f8fafc !important; border-color: #334155 !important; }
+        
+        .dark .react-datepicker__month-text { color: #cbd5e1 !important; }
+        .dark .react-datepicker__month-text:hover { background-color: #1e293b !important; color: #f8fafc !important; }
+        .dark .react-datepicker__month-text--selected,
+        .dark .react-datepicker__month-text--keyboard-selected {
+          background-color: #3b82f6 !important;
+          color: #ffffff !important;
+          box-shadow: none !important; /* No glow on dark mode */
+        }
+      `}</style>
+
       {/* HEADER SECTION */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 relative z-50">
         <div className="shrink-0 flex items-center gap-3">
@@ -364,7 +433,7 @@ export default function MagicChart() {
           </div>
         </div>
         
-        <div className="shrink-0 relative flex items-center gap-3">
+        <div className="w-full md:w-auto relative flex items-center justify-end gap-3 z-50">
           <button
             type="button"
             disabled={loading}
@@ -382,16 +451,18 @@ export default function MagicChart() {
             showMonthYearPicker
             customInput={<CustomMonthInput />}
             maxDate={new Date()}
+            popperPlacement="bottom-end"
+            wrapperClassName="w-full sm:w-auto"
             renderCustomHeader={({ date, changeYear }) => {
               const currentYear = new Date().getFullYear();
               const years = Array.from({ length: currentYear - 2019 + 1 }, (_, i) => 2020 + i);
               return (
-                <div className="flex justify-center pb-2 pt-1 border-b border-slate-100 dark:border-slate-800 mb-2">
+                <div className="flex justify-center pb-2 pt-1 mb-2 bg-[#ffffff] dark:bg-[#0f172a] rounded-t-xl">
                   <div className="relative">
                     <select
                       value={date.getFullYear()}
                       onChange={({ target: { value } }) => changeYear(parseInt(value, 10))}
-                      className="appearance-none bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-1.5 pr-8 font-black outline-none cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors shadow-sm text-center"
+                      className="appearance-none bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-1.5 pr-8 font-semibold outline-none cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors shadow-sm text-center"
                     >
                       {years.map((option) => (
                         <option key={option} value={option}>{option}</option>
@@ -412,10 +483,10 @@ export default function MagicChart() {
           <p className="text-slate-500 font-medium">{t('magicChart.reconcilingLedger', 'Reconciling ledger entries...')}</p>
         </div>
       ) : (
-        <div className="space-y-8 animate-in fade-in duration-300">
+        <div className="space-y-8 animate-in fade-in duration-300 relative z-10">
           
           {/* LEDGER SHEETS CONTAINER */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-2xl p-6 space-y-8 overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg rounded-2xl p-6 space-y-8">
             
             <div className="text-center">
               <h3 className="text-xl font-black text-slate-700 dark:text-slate-300 tracking-widest uppercase">

@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { 
   FileText, Download, FileSpreadsheet, Printer, Calendar, ChevronDown, 
-  TrendingUp, Users, Receipt, Landmark, Sigma, Wand2 
+  TrendingUp, Users, Receipt, Landmark, Sigma, Wand2, ChevronLeft 
 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -14,13 +14,71 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
     type="button"
     onClick={onClick} 
     ref={ref} 
-    className="flex items-center px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 whitespace-nowrap cursor-pointer"
+    className="flex items-center px-4 py-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 cursor-pointer w-full sm:w-auto justify-between"
   >
-    <Calendar size={16} className="text-blue-500 mr-2" /> {value || placeholder}
-    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3" />
+    <div className="flex items-center">
+      <Calendar size={16} className="text-blue-500 mr-2 shrink-0" /> 
+      <span className="flex-1 text-left sm:text-center whitespace-nowrap">{value || placeholder}</span>
+    </div>
+    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3 shrink-0" />
   </button>
 ));
 CustomDateInput.displayName = "CustomDateInput";
+
+// Custom Header to match the app theme perfectly
+const CustomHeader = ({
+  date,
+  changeYear,
+  changeMonth,
+  decreaseMonth,
+  prevMonthButtonDisabled,
+}) => {
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const years = Array.from({length: 20}, (_, i) => new Date().getFullYear() - 10 + i);
+
+  return (
+    <div className="flex flex-col bg-[#0f172a] px-3 pt-4 pb-2 rounded-t-xl text-white">
+      <div className="flex justify-between items-center mb-4 px-2">
+        <button 
+          type="button"
+          onClick={(e) => { e.preventDefault(); decreaseMonth(); }} 
+          disabled={prevMonthButtonDisabled} 
+          className="text-slate-300 hover:text-white outline-none cursor-pointer p-1 rounded-full hover:bg-slate-800 transition-colors"
+        >
+          <ChevronLeft size={20} strokeWidth={2.5} />
+        </button>
+        <div className="font-bold text-[17px] tracking-wide">{months[date.getMonth()]} {date.getFullYear()}</div>
+        <div className="w-7"></div> 
+      </div>
+      <div className="flex justify-center gap-3">
+        <div className="relative">
+          <select
+            value={months[date.getMonth()]}
+            onChange={({ target: { value } }) => changeMonth(months.indexOf(value))}
+            className="appearance-none bg-[#1e293b] border border-slate-700 rounded-lg pl-3 pr-8 py-1.5 text-sm font-semibold text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+          >
+            {months.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+        <div className="relative">
+          <select
+            value={date.getFullYear()}
+            onChange={({ target: { value } }) => changeYear(value)}
+            className="appearance-none bg-[#1e293b] border border-slate-700 rounded-lg pl-3 pr-8 py-1.5 text-sm font-semibold text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+          >
+            {years.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const formatDateForDB = (date) => {
   if (!date) return '';
@@ -76,7 +134,6 @@ const safeRound = (value) => {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
-// Scalable fetcher across large historical data
 async function fetchAllRows(queryBuilder) {
   let allData = [];
   let page = 0;
@@ -787,53 +844,54 @@ export default function Reports() {
   const locale = i18n.language === 'hi' ? 'hi-IN' : i18n.language === 'mr' ? 'mr-IN' : 'en-IN';
 
   return (
-    <div className="space-y-6 transition-colors duration-300">
+    <div className="space-y-6 transition-colors duration-300 relative z-10">
       <style>{`
         .header-date-picker .react-datepicker-wrapper { display: inline-block; width: auto; }
         .react-datepicker-popper { z-index: 99999 !important; }
+        
+        .react-datepicker-wrapper { display: block; width: 100%; }
         .react-datepicker { 
-          background-color: #ffffff !important; 
-          border: 1px solid #e2e8f0 !important; 
-          border-radius: 1rem !important; 
-          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important; 
-          font-family: inherit !important; 
-          padding: 0.5rem !important;
+          background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; 
+          border-radius: 1.25rem !important; box-shadow: 0 20px 30px -5px rgba(0, 0, 0, 0.3) !important; 
+          font-family: inherit !important; padding: 0.75rem !important; overflow: hidden;
         }
         .react-datepicker__month-container { background-color: #ffffff !important; }
         .react-datepicker__header { 
-          background-color: #ffffff !important; 
-          border-bottom: 1px solid #f1f5f9 !important; 
-          padding-top: 0.5rem !important;
+          background-color: #ffffff !important; border-bottom: 1px solid #f8fafc !important; 
+          padding-top: 0.25rem !important;
         }
-        .react-datepicker__current-month, .react-datepicker-time__header, .react-datepicker-year-header { 
-          color: #0f172a !important; font-weight: 700 !important; font-size: 0.95rem !important; margin-bottom: 0.5rem !important;
+        .react-datepicker__current-month { 
+          color: #1e293b; font-weight: 700; font-size: 1rem; margin-bottom: 1rem !important; 
         }
         .react-datepicker__header select {
           background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
-          padding: 0.2rem 0.5rem; font-weight: 600; color: #1e293b; cursor: pointer;
-          margin: 0 0.25rem 0.5rem 0.25rem; outline: none;
+          padding: 0.25rem 0.5rem; font-weight: 600; color: #1e293b; outline: none;
+          cursor: pointer; margin: 0 0.25rem 0.75rem 0.25rem;
         }
+        .react-datepicker__header select:focus { border-color: #3b82f6; }
         .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
         .react-datepicker__day { 
-          color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important;
-          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important;
+          color: #334155 !important; border-radius: 50% !important; width: 2.25rem !important;
+          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; background-color: transparent !important;
         }
         .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
         .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { 
-          background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; 
+          background-color: #2563eb !important; color: #ffffff !important; font-weight: 600 !important; 
+          box-shadow: 0 4px 6px -1px rgb(37 99 235 / 0.4) !important;
         }
         .react-datepicker__triangle { display: none !important; }
 
-        /* Dark Mode Overrides */
-        .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
-        .dark .react-datepicker__month-container { background-color: #1e293b !important; }
-        .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
-        .dark .react-datepicker__current-month, .dark .react-datepicker-time__header, .dark .react-datepicker-year-header { color: #f8fafc !important; }
-        .dark .react-datepicker__header select { background-color: #334155 !important; color: #f8fafc !important; border-color: #475569 !important; }
-        .dark .react-datepicker__day-name { color: #94a3b8 !important; }
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__month-container { background-color: #0f172a !important; }
+        .dark .react-datepicker__header { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
+        .dark .react-datepicker__header select { background-color: #1e293b !important; color: #f8fafc !important; border-color: #334155 !important; }
+        .dark .react-datepicker__day-name { color: #64748b !important; }
         .dark .react-datepicker__day { color: #cbd5e1 !important; }
-        .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; }
+        .dark .react-datepicker__day:hover { background-color: #1e293b !important; color: #f8fafc !important; }
+        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { 
+          background-color: #3b82f6 !important; color: #ffffff !important; box-shadow: none !important; 
+        }
         
         @media print {
           @page { 
@@ -846,13 +904,18 @@ export default function Reports() {
             print-color-adjust: exact !important;
             box-shadow: none !important;
             text-shadow: none !important;
+            overflow: visible !important;
           }
 
-          html, body { 
+          html, body, #root, .app-container { 
             background-color: #ffffff !important; 
             color: #0f172a !important; 
             margin: 0 !important; 
             padding: 0 !important; 
+            height: auto !important;
+            overflow: visible !important;
+            display: block !important;
+            position: static !important;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; 
           }
 
@@ -866,14 +929,17 @@ export default function Reports() {
           .no-print { display: none !important; }
           
           #printable-report, #printable-report * { visibility: visible; } 
+          
+          /* FIX: Removed position: absolute which causes 1-page cutoff */
           #printable-report { 
-            position: absolute !important; 
-            left: 0 !important; 
-            top: 0 !important; 
+            position: relative !important; 
             width: 100% !important; 
             background-color: #ffffff !important; 
             padding: 0 !important;
             margin: 0 !important;
+            display: block !important;
+            left: 0 !important;
+            top: 0 !important;
           }
 
           .print-section-header {
@@ -967,9 +1033,30 @@ export default function Reports() {
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="header-date-picker flex items-center gap-2 bg-slate-100/50 dark:bg-slate-900/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
-            <DatePicker selected={startDate} onChange={handleStartDateChange} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
+            <DatePicker 
+              selected={startDate} 
+              onChange={handleStartDateChange} 
+              maxDate={new Date()} 
+              dateFormat="dd/MM/yy" 
+              customInput={<CustomDateInput />} 
+              renderCustomHeader={CustomHeader}
+              showMonthDropdown 
+              showYearDropdown 
+              dropdownMode="select"
+            />
             <span className="text-slate-400 font-medium px-1">{t('common.to', 'to')}</span>
-            <DatePicker selected={endDate} onChange={handleEndDateChange} minDate={startDate} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
+            <DatePicker 
+              selected={endDate} 
+              onChange={handleEndDateChange} 
+              minDate={startDate} 
+              maxDate={new Date()} 
+              dateFormat="dd/MM/yy" 
+              customInput={<CustomDateInput />} 
+              renderCustomHeader={CustomHeader}
+              showMonthDropdown 
+              showYearDropdown 
+              dropdownMode="select"
+            />
           </div>
 
           <div className="relative">

@@ -11,10 +11,12 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
     type="button"
     onClick={onClick}
     ref={ref}
-    className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-bold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+    className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 cursor-pointer w-full sm:w-auto justify-between"
   >
-    <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
-    {value || placeholder}
+    <div className="flex items-center">
+      <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
+      <span className="flex-1 text-left sm:text-center whitespace-nowrap">{value || placeholder}</span>
+    </div>
     <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3 shrink-0" />
   </button>
 ));
@@ -328,8 +330,58 @@ export default function ProfitLoss() {
   }, [startDate, endDate, refreshTrigger, user]);
 
   return (
-    <div className="space-y-6 transition-colors duration-300">
+    <div className="space-y-6 transition-colors duration-300 relative z-10">
       
+      {/* Datepicker Styles Extracted exactly from Dashboard.jsx */}
+      <style>{`
+        .react-datepicker-wrapper { display: block; width: 100%; }
+        .react-datepicker-popper { 
+          z-index: 99999 !important; 
+        }
+        .react-datepicker { 
+          background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; 
+          border-radius: 1.25rem !important; box-shadow: 0 20px 30px -5px rgba(0, 0, 0, 0.3) !important; 
+          font-family: inherit !important; padding: 0.75rem !important; overflow: hidden;
+        }
+        .react-datepicker__month-container { background-color: #ffffff !important; }
+        .react-datepicker__header { 
+          background-color: #ffffff !important; border-bottom: 1px solid #f8fafc !important; 
+          padding-top: 0.25rem !important;
+        }
+        .react-datepicker__current-month { 
+          color: #1e293b; font-weight: 700; font-size: 1rem; margin-bottom: 1rem !important; 
+        }
+        .react-datepicker__header select {
+          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
+          padding: 0.25rem 0.5rem; font-weight: 600; color: #1e293b; outline: none;
+          cursor: pointer; margin: 0 0.25rem 0.75rem 0.25rem;
+        }
+        .react-datepicker__header select:focus { border-color: #3b82f6; }
+        .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
+        .react-datepicker__day { 
+          color: #334155 !important; border-radius: 50% !important; width: 2.25rem !important;
+          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; background-color: transparent !important;
+        }
+        .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
+        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { 
+          background-color: #2563eb !important; color: #ffffff !important; font-weight: 600 !important; 
+          box-shadow: 0 4px 6px -1px rgb(37 99 235 / 0.4) !important;
+        }
+        .react-datepicker__triangle { display: none !important; }
+
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__month-container { background-color: #0f172a !important; }
+        .dark .react-datepicker__header { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
+        .dark .react-datepicker__header select { background-color: #1e293b !important; color: #f8fafc !important; border-color: #334155 !important; }
+        .dark .react-datepicker__day-name { color: #64748b !important; }
+        .dark .react-datepicker__day { color: #cbd5e1 !important; }
+        .dark .react-datepicker__day:hover { background-color: #1e293b !important; color: #f8fafc !important; }
+        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { 
+          background-color: #3b82f6 !important; color: #ffffff !important; box-shadow: none !important; 
+        }
+      `}</style>
+
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 relative z-50 transition-colors duration-300">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
@@ -338,10 +390,33 @@ export default function ProfitLoss() {
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('profitloss.description', 'Track P&L (Tax Safe) and Cash in Hand.')}</p>
         </div>
         
-        <div className="header-date-picker flex flex-row items-center gap-2 bg-slate-100/50 dark:bg-slate-900/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner">
-          <DatePicker selected={startDate} onChange={(date) => setStartDate(date)} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
+        <div className="flex flex-col sm:flex-row items-center gap-2 bg-slate-100/50 dark:bg-slate-900/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-inner relative z-50 w-full sm:w-auto">
+          <DatePicker 
+            selected={startDate} 
+            onChange={(date) => setStartDate(date)} 
+            maxDate={new Date()} 
+            dateFormat="dd/MM/yy" 
+            customInput={<CustomDateInput />} 
+            showMonthDropdown 
+            showYearDropdown 
+            dropdownMode="select"
+            popperPlacement="bottom-start"
+            wrapperClassName="w-full sm:w-auto"
+          />
           <span className="text-slate-400 dark:text-slate-500 font-medium px-1">{t('common.to', 'to')}</span>
-          <DatePicker selected={endDate} onChange={(date) => setEndDate(date)} minDate={startDate} maxDate={new Date()} dateFormat="dd/MM/yy" customInput={<CustomDateInput />} showMonthDropdown showYearDropdown dropdownMode="select"/>
+          <DatePicker 
+            selected={endDate} 
+            onChange={(date) => setEndDate(date)} 
+            minDate={startDate} 
+            maxDate={new Date()} 
+            dateFormat="dd/MM/yy" 
+            customInput={<CustomDateInput />} 
+            showMonthDropdown 
+            showYearDropdown 
+            dropdownMode="select"
+            popperPlacement="bottom-end"
+            wrapperClassName="w-full sm:w-auto"
+          />
         </div>
       </div>
 

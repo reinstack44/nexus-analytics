@@ -11,19 +11,21 @@ const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
     type="button"
     onClick={onClick}
     ref={ref}
-    className="flex items-center px-3 py-2 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 whitespace-nowrap cursor-pointer"
+    className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl transition-all duration-200 text-sm font-semibold text-slate-700 dark:text-slate-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 cursor-pointer w-full sm:w-auto justify-between"
   >
-    <Calendar size={14} className="text-blue-500 mr-2 shrink-0" />
-    {value || placeholder}
-    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-2 shrink-0" />
+    <div className="flex items-center">
+      <Calendar size={16} className="text-blue-500 mr-2 shrink-0" />
+      {value || placeholder}
+    </div>
+    <ChevronDown size={14} className="text-slate-400 dark:text-slate-500 ml-3 shrink-0" />
   </button>
 ));
 CustomDateInput.displayName = "CustomDateInput";
 
 const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
-  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left cursor-pointer`}>
+  <button type="button" onClick={onClick} ref={ref} className={`${className} flex justify-between items-center text-left cursor-pointer w-full`}>
     <span>{value}</span>
-    <Calendar size={16} className="text-slate-400" />
+    <Calendar size={16} className="text-slate-400 shrink-0" />
   </button>
 ));
 FormDateInput.displayName = "FormDateInput";
@@ -316,10 +318,60 @@ export default function PurchaseManager() {
   const inputClass = "w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all duration-300 text-sm";
 
   return (
-    <div className="space-y-6 transition-colors duration-300">
+    <div className="space-y-6 transition-colors duration-300 relative z-10">
       
+      {/* Exact CSS from Dashboard.jsx */}
+      <style>{`
+        .react-datepicker-wrapper { display: block; width: 100%; }
+        .react-datepicker-popper { 
+          z-index: 99999 !important; 
+        }
+        .react-datepicker { 
+          background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; 
+          border-radius: 1.25rem !important; box-shadow: 0 20px 30px -5px rgba(0, 0, 0, 0.3) !important; 
+          font-family: inherit !important; padding: 0.75rem !important; overflow: hidden;
+        }
+        .react-datepicker__month-container { background-color: #ffffff !important; }
+        .react-datepicker__header { 
+          background-color: #ffffff !important; border-bottom: 1px solid #f8fafc !important; 
+          padding-top: 0.25rem !important;
+        }
+        .react-datepicker__current-month { 
+          color: #1e293b; font-weight: 700; font-size: 1rem; margin-bottom: 1rem !important; 
+        }
+        .react-datepicker__header select {
+          background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem;
+          padding: 0.25rem 0.5rem; font-weight: 600; color: #1e293b; outline: none;
+          cursor: pointer; margin: 0 0.25rem 0.75rem 0.25rem;
+        }
+        .react-datepicker__header select:focus { border-color: #3b82f6; }
+        .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
+        .react-datepicker__day { 
+          color: #334155 !important; border-radius: 50% !important; width: 2.25rem !important;
+          line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; background-color: transparent !important;
+        }
+        .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
+        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { 
+          background-color: #2563eb !important; color: #ffffff !important; font-weight: 600 !important; 
+          box-shadow: 0 4px 6px -1px rgb(37 99 235 / 0.4) !important;
+        }
+        .react-datepicker__triangle { display: none !important; }
+
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__month-container { background-color: #0f172a !important; }
+        .dark .react-datepicker__header { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__current-month { color: #f8fafc !important; }
+        .dark .react-datepicker__header select { background-color: #1e293b !important; color: #f8fafc !important; border-color: #334155 !important; }
+        .dark .react-datepicker__day-name { color: #64748b !important; }
+        .dark .react-datepicker__day { color: #cbd5e1 !important; }
+        .dark .react-datepicker__day:hover { background-color: #1e293b !important; color: #f8fafc !important; }
+        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { 
+          background-color: #3b82f6 !important; color: #ffffff !important; box-shadow: none !important; 
+        }
+      `}</style>
+
       {/* Tabs Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-40">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight">{t('purchaseManager.title', 'Traders & Account Ledgers')}</h2>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('purchaseManager.description', 'Track financial transaction histories, credits, and remaining balance sheets.')}</p>
@@ -345,8 +397,8 @@ export default function PurchaseManager() {
 
       {activeTab === 'ledger' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300">
-          {/* Form Side */}
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit">
+          {/* Form Side - Assigned relative z-50 to overcome stacking context issues */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit relative z-50">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 flex items-center gap-2 border-b border-slate-50 dark:border-slate-800 pb-4">
               <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg text-blue-600 dark:text-blue-400">
                 <Wallet size={18} />
@@ -363,7 +415,7 @@ export default function PurchaseManager() {
                 </select>
               </div>
 
-              <div className="form-date-picker">
+              <div className="relative z-50">
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('purchaseManager.transactionDateLabel', 'Transaction Date')}</label>
                 <DatePicker 
                   selected={parseDBDate(ledgerForm.date)} 
@@ -373,6 +425,7 @@ export default function PurchaseManager() {
                   showMonthDropdown
                   showYearDropdown
                   dropdownMode="select" 
+                  wrapperClassName="w-full"
                 />
               </div>
 
@@ -397,15 +450,15 @@ export default function PurchaseManager() {
             </form>
           </div>
 
-          {/* Table Ledger Display */}
-          <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
-            <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+          {/* Table Ledger Display - Assigned relative z-40 so form popper correctly floats over it */}
+          <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit flex flex-col relative z-40">
+            <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row justify-between sm:items-center gap-4 rounded-t-2xl">
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-2 sm:mb-0">
                 <FileText size={18} className="text-slate-400 dark:text-slate-500" />
                 {t('purchaseManager.statementAccountTitle', 'Statement Account Ledger')}
               </h3>
               
-              <div className="header-date-picker flex items-center gap-2">
+              <div className="flex flex-col sm:flex-row items-center gap-2 bg-white/60 dark:bg-slate-900/60 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm backdrop-blur-sm relative z-40 w-full sm:w-auto">
                 <DatePicker
                   selected={filterStartDate}
                   onChange={(date) => setFilterStartDate(date)}
@@ -415,6 +468,8 @@ export default function PurchaseManager() {
                   showMonthDropdown
                   showYearDropdown
                   dropdownMode="select"
+                  popperPlacement="bottom-start"
+                  wrapperClassName="w-full sm:w-auto"
                 />
                 <span className="text-slate-400 font-medium px-1">{t('common.to', 'to')}</span>
                 <DatePicker
@@ -427,11 +482,13 @@ export default function PurchaseManager() {
                   showMonthDropdown
                   showYearDropdown
                   dropdownMode="select"
+                  popperPlacement="bottom-end"
+                  wrapperClassName="w-full sm:w-auto"
                 />
               </div>
             </div>
             
-            <div className="overflow-x-auto flex-1">
+            <div className="overflow-x-auto flex-1 rounded-b-2xl">
               <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
                 <thead className="bg-slate-50/80 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold uppercase text-xs tracking-wider border-b border-slate-100 dark:border-slate-800">
                   <tr>
@@ -526,7 +583,7 @@ export default function PurchaseManager() {
             </div>
             
             <form onSubmit={handleEditTxSubmit} className="p-5 space-y-4">
-              <div className="form-date-picker">
+              <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('purchaseManager.transactionDateLabel', 'Transaction Date')}</label>
                 <DatePicker 
                   selected={parseDBDate(editTxForm.date)} 
@@ -536,6 +593,7 @@ export default function PurchaseManager() {
                   showMonthDropdown
                   showYearDropdown
                   dropdownMode="select" 
+                  wrapperClassName="w-full"
                 />
               </div>
               <div>
@@ -562,7 +620,7 @@ export default function PurchaseManager() {
       {/* TRADERS TAB */}
       {activeTab === 'traders' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 h-fit relative z-50">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 flex items-center gap-2 border-b border-slate-50 dark:border-slate-800 pb-4">
               <div className="p-2 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg text-indigo-600 dark:text-indigo-400">
                 <Users size={18} />
@@ -580,7 +638,7 @@ export default function PurchaseManager() {
             </form>
           </div>
 
-          <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col">
+          <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden h-fit flex flex-col relative z-40">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800">
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Users size={18} className="text-slate-400 dark:text-slate-500" /> {t('purchaseManager.registeredTradersTitle', 'Registered Traders')}
