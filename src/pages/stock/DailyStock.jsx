@@ -90,6 +90,70 @@ const FormDateInput = forwardRef(({ value, onClick, className }, ref) => (
 ));
 FormDateInput.displayName = "FormDateInput";
 
+// Custom Autocomplete Component for Descriptions
+const AutocompleteInput = ({ value, onChange, options, onDeleteOption, placeholder, className, required }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const wrapperRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filtered = options.filter(o => o.description.toLowerCase().includes(value.toLowerCase()));
+
+  return (
+    <div ref={wrapperRef} className="relative w-full">
+      <div className="relative">
+        <input
+          type="text"
+          required={required}
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          className={`${className} pr-8`}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none transition-colors cursor-pointer"
+        >
+          <ChevronDown size={16} />
+        </button>
+      </div>
+      {isOpen && filtered.length > 0 && (
+        <ul className="absolute z-1000 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar">
+          {filtered.map(opt => (
+            <li key={opt.id} className="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors group border-b last:border-b-0 border-slate-100 dark:border-slate-700/50">
+              <span className="flex-1 text-sm font-semibold text-slate-700 dark:text-slate-200" onClick={() => { onChange(opt.description); setIsOpen(false); }}>
+                {opt.description}
+              </span>
+              <button 
+                type="button" 
+                onClick={(e) => { e.stopPropagation(); onDeleteOption(opt.id); }} 
+                className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer"
+                title="Delete saved description"
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 const formatRs = (num) => '₹' + safeRound(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const recalculateRow = (row) => {
@@ -215,6 +279,46 @@ export default function DailyStock() {
   const [editingCollectionId, setEditingCollectionId] = useState(null);
   const [expenseForm, setExpenseForm] = useState({ description: '', amount: '' });
   const [collectionForm, setCollectionForm] = useState({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
+
+  // Saved Descriptions State
+  const [savedDescriptions, setSavedDescriptions] = useState([]);
+
+  // Fetch saved descriptions from DB
+  const fetchSavedDescriptions = useCallback(async () => {
+    if (!user) return;
+    try {
+      const { data, error } = await supabase.from('user_saved_descriptions').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+      if (!error && data) {
+        setSavedDescriptions(data);
+      }
+    } catch (err) {
+      console.error('Failed to load saved descriptions', err);
+    }
+  }, [user]);
+
+  // Handle saving new description seamlessly
+  const saveNewDescription = async (type, desc) => {
+    if (!desc || desc.trim() === '') return;
+    const existing = savedDescriptions.find(d => d.type === type && d.description.toLowerCase() === desc.trim().toLowerCase());
+    if (!existing) {
+      try {
+        const { error } = await supabase.from('user_saved_descriptions').insert([{ user_id: user.id, type, description: desc.trim() }]);
+        if (!error) fetchSavedDescriptions();
+      } catch (err) {
+        console.error('Error saving description', err);
+      }
+    }
+  };
+
+  // Handle deleting a saved description
+  const handleDeleteDescription = async (id) => {
+    try {
+      await supabase.from('user_saved_descriptions').delete().eq('id', id);
+      setSavedDescriptions(prev => prev.filter(d => d.id !== id));
+    } catch (err) {
+      console.error('Error deleting description', err);
+    }
+  };
 
   // Realtime database listener
   useEffect(() => {
@@ -758,13 +862,14 @@ export default function DailyStock() {
       Promise.resolve().then(() => {
         if (isMounted) {
           fetchPopupData(popupDate);
+          fetchSavedDescriptions();
         }
       });
     }
     return () => {
       isMounted = false;
     };
-  }, [isBankDepositOpen, popupDate, fetchPopupData]);
+  }, [isBankDepositOpen, popupDate, fetchPopupData, fetchSavedDescriptions]);
 
   const handleOpenBankDeposit = () => {
     const activeDate = endDate || startDate || new Date();
@@ -1085,6 +1190,7 @@ export default function DailyStock() {
         if (error) throw error;
       }
 
+      await saveNewDescription('expense', expenseForm.description);
       setExpenseForm({ description: '', amount: '' });
       await fetchPopupData(popupDate);
       setRefreshTrigger(prev => prev + 1);
@@ -1147,6 +1253,7 @@ export default function DailyStock() {
         if (error) throw error;
       }
 
+      await saveNewDescription('collection', collectionForm.description);
       setCollectionForm({ description: 'Transferred to Bank', amount: '', mode: 'UPI/Bank' });
       await fetchPopupData(popupDate);
       setRefreshTrigger(prev => prev + 1);
@@ -1822,7 +1929,7 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* FULLY RESPONSIVE FINANCIAL OPERATIONS MODAL (TOP-LAYER z-100000) */}
+      {/* FULLY RESPONSIVE FINANCIAL OPERATIONS MODAL (TOP-LAYER z-[100000]) */}
       {isBankDepositOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 z-100000 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-5xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-150">
@@ -1911,7 +2018,15 @@ export default function DailyStock() {
                         </div>
                         <div>
                           <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
-                          <input type="text" required value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className={inputClass} placeholder="e.g., Light Bill, Rent" />
+                          <AutocompleteInput 
+                            required 
+                            value={expenseForm.description} 
+                            onChange={(val) => setExpenseForm({ ...expenseForm, description: val })} 
+                            options={savedDescriptions.filter(d => d.type === 'expense')}
+                            onDeleteOption={handleDeleteDescription}
+                            className={inputClass} 
+                            placeholder="e.g., Light Bill, Rent" 
+                          />
                         </div>
                         <div>
                           <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.amount', 'Amount')} (₹)</label>
@@ -1945,7 +2060,15 @@ export default function DailyStock() {
                         </div>
                         <div>
                           <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">{t('common.description', 'Description')}</label>
-                          <input type="text" required value={collectionForm.description} onChange={(e) => setCollectionForm({ ...collectionForm, description: e.target.value })} className={inputClass} />
+                          <AutocompleteInput 
+                            required 
+                            value={collectionForm.description} 
+                            onChange={(val) => setCollectionForm({ ...collectionForm, description: val })} 
+                            options={savedDescriptions.filter(d => d.type === 'collection')}
+                            onDeleteOption={handleDeleteDescription}
+                            className={inputClass} 
+                            placeholder="e.g., Bank Deposit" 
+                          />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
