@@ -7,7 +7,7 @@ import {
   Package, Calendar, Save, Calculator, AlertCircle, CheckCircle2, 
   GripVertical, ChevronDown, Landmark, Plus, ArrowDownCircle, 
   Receipt, X, Sigma, IndianRupee, Edit2, Trash2, Coffee, 
-  CalendarOff, Info, Lock, ArrowRightLeft 
+  CalendarOff, Info, Lock, ArrowRightLeft, ChevronLeft
 } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -64,6 +64,61 @@ const scaleStartingBatches = (batches, targetBaseOpening, carriedPrice, carriedM
     }
   }
   return result.filter(b => b.qty > 0);
+};
+
+// GLOBAL THEMED CALENDAR HEADER
+const CustomHeader = ({
+  date,
+  changeYear,
+  changeMonth,
+  decreaseMonth,
+  prevMonthButtonDisabled,
+}) => {
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const years = Array.from({length: 20}, (_, i) => new Date().getFullYear() - 10 + i);
+
+  return (
+    <div className="flex flex-col bg-[#0f172a] px-3 pt-4 pb-2 rounded-t-xl text-white">
+      <div className="flex justify-between items-center mb-4 px-2">
+        <button 
+          type="button"
+          onClick={(e) => { e.preventDefault(); decreaseMonth(); }} 
+          disabled={prevMonthButtonDisabled} 
+          className="text-slate-300 hover:text-white outline-none cursor-pointer p-1 rounded-full hover:bg-slate-800 transition-colors"
+        >
+          <ChevronLeft size={20} strokeWidth={2.5} />
+        </button>
+        <div className="font-bold text-[17px] tracking-wide">{months[date.getMonth()]} {date.getFullYear()}</div>
+        <div className="w-7"></div> 
+      </div>
+      <div className="flex justify-center gap-3">
+        <div className="relative">
+          <select
+            value={months[date.getMonth()]}
+            onChange={({ target: { value } }) => changeMonth(months.indexOf(value))}
+            className="appearance-none bg-[#1e293b] border border-slate-700 rounded-lg pl-3 pr-8 py-1.5 text-sm font-semibold text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+          >
+            {months.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+        <div className="relative">
+          <select
+            value={date.getFullYear()}
+            onChange={({ target: { value } }) => changeYear(value)}
+            className="appearance-none bg-[#1e293b] border border-slate-700 rounded-lg pl-3 pr-8 py-1.5 text-sm font-semibold text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+          >
+            {years.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const CustomDateInput = forwardRef(({ value, onClick, placeholder }, ref) => (
@@ -483,17 +538,48 @@ export default function DailyStock() {
       try {
         const [
           { data: holidayData },
+          stockEntries,
           { data: activeBrands },
           { data: rangeData }
         ] = await Promise.all([
           supabase.from('holidays').select('date').eq('user_id', user.id),
-          supabase.from('brands').select('id, brand_name, bottle_size'),
+          fetchAllRows(supabase.from('daily_stock').select('date, closing_balance').eq('user_id', user.id)),
+          supabase.from('brands').select('id, brand_name, bottle_size, created_at'), // Select created_at for time-travel check
           supabase.from('locked_ranges').select('start_date, end_date').eq('user_id', user.id)
         ]);
 
         if (isMounted) {
-          if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
-          if (rangeData) setLockedRanges(rangeData);
+          // PROPERLY NORMALIZE DATES FOR CSS DAY HIGHLIGHTS
+          if (holidayData) {
+            setMarkedHolidays(holidayData.map(h => h.date ? h.date.split('T')[0] : ''));
+          }
+          if (rangeData) {
+            setLockedRanges(rangeData.map(r => ({
+              start_date: r.start_date ? r.start_date.split('T')[0] : '',
+              end_date: r.end_date ? r.end_date.split('T')[0] : ''
+            })));
+          }
+
+          const dateCounts = {};
+          stockEntries?.forEach(entry => {
+            if (entry.closing_balance !== null && entry.closing_balance !== undefined) {
+              // Strictly extract YYYY-MM-DD
+              const dateOnly = entry.date ? entry.date.split('T')[0] : '';
+              if (dateOnly) {
+                dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
+              }
+            }
+          });
+
+          // Verify filled dates properly against brand creation timeline
+          const fullyFilledDates = Object.keys(dateCounts).filter(dateStr => {
+             const applicableBrands = activeBrands ? activeBrands.filter(b => {
+                 const createdStr = formatDateForDB(new Date(b.created_at));
+                 return createdStr <= dateStr;
+             }) : [];
+             return dateCounts[dateStr] >= applicableBrands.length;
+          });
+          setFilledDates(fullyFilledDates);
         }
 
         if (!customRangeMode) {
@@ -544,7 +630,7 @@ export default function DailyStock() {
             .eq('user_id', user.id)
             .in('date', checkDates);
 
-          const holidayDates = holidays ? holidays.map(h => h.date) : [];
+          const holidayDates = holidays ? holidays.map(h => h.date ? h.date.split('T')[0] : '') : [];
           const requiredWorkingDates = checkDates.filter(d => !holidayDates.includes(d));
 
           if (requiredWorkingDates.length === 0) {
@@ -572,9 +658,10 @@ export default function DailyStock() {
             if (!requiredWorkingDates.includes(normalizedDate)) return; // Filter safety
 
             if (!recordsByDate[normalizedDate]) {
-              recordsByDate[normalizedDate] = { count: 0, nullBrands: [] };
+              recordsByDate[normalizedDate] = { count: 0, nullBrands: [], filledBrandIds: [] };
             }
             recordsByDate[normalizedDate].count++;
+            recordsByDate[normalizedDate].filledBrandIds.push(r.brand_id);
             
             // Track if ANY brand was saved with a NULL closing balance
             if (r.closing_balance === null || r.closing_balance === undefined) {
@@ -1365,56 +1452,47 @@ export default function DailyStock() {
         .form-date-picker .react-datepicker-wrapper { display: block; width: 100%; }
         .react-datepicker-popper { z-index: 99999 !important; }
         .react-datepicker { background-color: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 1rem !important; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important; padding: 0.5rem !important; }
-        .react-datepicker__month-select, .react-datepicker__year-select { background-color: #f8fafc !important; border: 1px solid #cbd5e1 !important; border-radius: 0.5rem !important; padding: 0.2rem 0.5rem !important; color: #1e293b !important; font-weight: 600 !important; cursor: pointer !important; outline: none !important; }
+        
         .react-datepicker__month-container { background-color: #ffffff !important; }
-        .react-datepicker__current-month { display: none !important; } 
-        .react-datepicker__header__dropdown { margin-top: 5px; margin-bottom: 10px; display: flex; justify-content: center; gap: 8px; font-size: 0.95rem; }
+        .react-datepicker__header { background-color: transparent !important; border-bottom: none !important; padding: 0 !important; }
         .react-datepicker__day-name { color: #64748b !important; font-weight: 600 !important; width: 2.25rem !important; margin: 0.1rem !important; }
-        .react-datepicker__day { color: #334155 !important; border-radius: 0.5rem !important; width: 2.25rem !important; line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; }
+        .react-datepicker__day { color: #334155 !important; border-radius: 50% !important; width: 2.25rem !important; line-height: 2.25rem !important; transition: all 0.2s ease !important; margin: 0.1rem !important; background-color: transparent !important;}
         .react-datepicker__day:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
-        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; }
+        .react-datepicker__day--selected, .react-datepicker__day--keyboard-selected { background-color: #2563eb !important; color: #ffffff !important; font-weight: bold !important; box-shadow: 0 4px 6px -1px rgb(37 99 235 / 0.4) !important;}
         .react-datepicker__triangle { display: none !important; }
         
-        /* State Indicators */
-        .react-datepicker__day--highlighted-holiday { background-color: #f97316 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
-        .react-datepicker__day--highlighted-filled { background-color: #10b981 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
-        .react-datepicker__day--highlighted-combined { background-color: #6366f1 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 0.5rem !important; }
+        /* RESTORED: Custom Highlight Colors */
+        .react-datepicker__day--highlighted-holiday { background-color: #f97316 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 50% !important; }
+        .react-datepicker__day--highlighted-filled { background-color: #3b82f6 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 50% !important; }
+        .react-datepicker__day--highlighted-combined { background-color: #6366f1 !important; color: #ffffff !important; font-weight: bold !important; border-radius: 50% !important; }
         
-        .react-datepicker__day--in-range {
+        /* Range selection styling */
+        .react-datepicker__day--in-range, .react-datepicker__day--in-selecting-range {
           background-color: #dbeafe !important;
           color: #1e40af !important;
-          border-radius: 0px !important;
+          border-radius: 50% !important;
         }
-        .react-datepicker__day--range-start {
-          background-color: #3b82f6 !important;
+        .react-datepicker__day--range-start, .react-datepicker__day--range-end {
+          background-color: #2563eb !important;
           color: #ffffff !important;
-          border-top-left-radius: 0.5rem !important;
-          border-bottom-left-radius: 0.5rem !important;
-        }
-        .react-datepicker__day--range-end {
-          background-color: #3b82f6 !important;
-          color: #ffffff !important;
-          border-top-right-radius: 0.5rem !important;
-          border-bottom-right-radius: 0.5rem !important;
+          border-radius: 50% !important;
         }
         
-        .dark .react-datepicker { background-color: #1e293b !important; border-color: #334155 !important; }
-        .dark .react-datepicker__month-container { background-color: #1e293b !important; }
-        .dark .react-datepicker__header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
+        /* Dark Mode Overrides */
+        .dark .react-datepicker { background-color: #0f172a !important; border-color: #1e293b !important; }
+        .dark .react-datepicker__month-container { background-color: #0f172a !important; }
         .dark .react-datepicker__day-name { color: #94a3b8 !important; }
         .dark .react-datepicker__day { color: #cbd5e1 !important; }
-        .dark .react-datepicker__day:hover { background-color: #334155 !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--selected { background-color: #3b82f6 !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--highlighted-holiday { background-color: #ea580c !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--highlighted-filled { background-color: #059669 !important; color: #ffffff !important; }
-        .dark .react-datepicker__day--highlighted-combined { background-color: #4f46e5 !important; color: #ffffff !important; }
-        .dark .react-datepicker__month-select, .dark .react-datepicker__year-select { background-color: #0f172a !important; border-color: #334155 !important; color: #f8fafc !important; }
-        .dark .react-datepicker__month-select option, .dark .react-datepicker__year-select option { background-color: #0f172a !important; color: #f8fafc !important; }
+        .dark .react-datepicker__day:hover { background-color: #1e293b !important; color: #f8fafc !important; }
         
-        .dark .react-datepicker__day--in-range {
+        .dark .react-datepicker__day--selected, .dark .react-datepicker__day--keyboard-selected { background-color: #3b82f6 !important; color: #ffffff !important; box-shadow: none !important; }
+        .dark .react-datepicker__day--highlighted-holiday { background-color: #ea580c !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--highlighted-filled { background-color: #3b82f6 !important; color: #ffffff !important; }
+        .dark .react-datepicker__day--highlighted-combined { background-color: #4f46e5 !important; color: #ffffff !important; }
+        
+        .dark .react-datepicker__day--in-range, .dark .react-datepicker__day--in-selecting-range {
           background-color: #1e3a8a !important;
           color: #eff6ff !important;
-          border-radius: 0px !important;
         }
       `}</style>
 
@@ -1492,7 +1570,7 @@ export default function DailyStock() {
               <DatePicker 
                 selected={startDate} onChange={handleStartDateChange} maxDate={new Date()} dateFormat="dd MMM yyyy" 
                 customInput={<CustomDateInput placeholder={t('dailyStock.startDatePlaceholder', 'Start Date')} />} 
-                showMonthDropdown showYearDropdown dropdownMode="select"
+                renderCustomHeader={CustomHeader}
                 dayClassName={getDayClassName}
                 selectsStart
                 startDate={startDate}
@@ -1503,7 +1581,7 @@ export default function DailyStock() {
               <DatePicker 
                 selected={endDate} onChange={handleEndDateChange} minDate={startDate} maxDate={new Date()} dateFormat="dd MMM yyyy" 
                 customInput={<CustomDateInput placeholder={t('dailyStock.endDatePlaceholder', 'End Date')} />} 
-                showMonthDropdown showYearDropdown dropdownMode="select"
+                renderCustomHeader={CustomHeader}
                 dayClassName={getDayClassName}
                 selectsEnd
                 startDate={startDate}
@@ -2050,6 +2128,7 @@ export default function DailyStock() {
                             dateFormat="dd MMM yyyy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
+                            renderCustomHeader={CustomHeader}
                             showMonthDropdown
                             showYearDropdown
                             dropdownMode="select"
@@ -2092,6 +2171,7 @@ export default function DailyStock() {
                             dateFormat="dd MMM yyyy" 
                             className={inputClass} 
                             customInput={<FormDateInput className={inputClass} />} 
+                            renderCustomHeader={CustomHeader}
                             showMonthDropdown
                             showYearDropdown
                             dropdownMode="select"
