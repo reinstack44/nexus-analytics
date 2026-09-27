@@ -261,7 +261,7 @@ export default function DailyStock() {
   const [dailySummary, setDailySummary] = useState({ totalSalesQty: 0, totalRevenue: 0, totalExpenses: 0, totalCollections: 0, totalMrpRevenue: 0 });
 
   const [holidayModal, setHolidayModal] = useState({ isOpen: false, date: null, dateStr: '' });
-  const [pipelineWarning, setPipelineWarning] = useState(null);
+  const [pipelineWarning, setPipelineWarning] = useState(null); 
   const [customRangeMode, setCustomRangeMode] = useState(false);
 
   const [markedHolidays, setMarkedHolidays] = useState([]);
@@ -362,8 +362,9 @@ export default function DailyStock() {
     const dates = [];
     let current = new Date(start);
     const last = new Date(end || start);
-    current.setHours(0,0,0,0); 
-    last.setHours(0,0,0,0);
+    // Use mid-day to prevent daylight savings skips
+    current.setHours(12,0,0,0); 
+    last.setHours(12,0,0,0);
     while (current <= last) { 
       dates.push(formatDateForDB(current)); 
       current.setDate(current.getDate() + 1); 
@@ -473,7 +474,7 @@ export default function DailyStock() {
     });
   };
 
-  // SECURED CALENDAR PREFERENCES
+  // SECURED CALENDAR PREFERENCES & PIPELINE TRACKER
   useEffect(() => {
     let isMounted = true;
     const fetchCloudPreferences = async () => {
@@ -482,31 +483,17 @@ export default function DailyStock() {
       try {
         const [
           { data: holidayData },
-          stockEntries,
           { data: activeBrands },
           { data: rangeData }
         ] = await Promise.all([
           supabase.from('holidays').select('date').eq('user_id', user.id),
-          fetchAllRows(supabase.from('daily_stock').select('date, closing_balance').eq('user_id', user.id)),
-          supabase.from('brands').select('id'),
+          supabase.from('brands').select('id, brand_name, bottle_size'),
           supabase.from('locked_ranges').select('start_date, end_date').eq('user_id', user.id)
         ]);
-        
-        const activeBrandsCount = activeBrands ? activeBrands.length : 0;
 
         if (isMounted) {
           if (holidayData) setMarkedHolidays(holidayData.map(h => h.date));
           if (rangeData) setLockedRanges(rangeData);
-
-          const dateCounts = {};
-          stockEntries?.forEach(entry => {
-            if (entry.closing_balance !== null && entry.closing_balance !== undefined) {
-              dateCounts[entry.date] = (dateCounts[entry.date] || 0) + 1;
-            }
-          });
-
-          const fullyFilledDates = Object.keys(dateCounts).filter(dateStr => dateCounts[dateStr] >= activeBrandsCount);
-          setFilledDates(fullyFilledDates);
         }
 
         if (!customRangeMode) {
@@ -530,9 +517,14 @@ export default function DailyStock() {
             return;
           }
 
-          const firstDateObj = new Date(firstDateStr);
+          // Use strict numeric parsing to avoid UTC time shifts
+          const [fYear, fMonth, fDay] = firstDateStr.split('-').map(Number);
+          const firstDateObj = new Date(fYear, fMonth - 1, fDay);
+          firstDateObj.setHours(12, 0, 0, 0); // Safe local time
+
           const dayBeforeStartObj = new Date(startDate);
           dayBeforeStartObj.setDate(dayBeforeStartObj.getDate() - 1);
+          dayBeforeStartObj.setHours(12, 0, 0, 0);
 
           const checkDates = [];
           let cur = new Date(firstDateObj);
@@ -560,38 +552,68 @@ export default function DailyStock() {
             return;
           }
 
-          const { data: stockRecords } = await supabase
-            .from('daily_stock')
-            .select('date, closing_balance')
-            .eq('user_id', user.id)
-            .in('date', requiredWorkingDates);
+          // Use gte/lte to reliably bypass supabase in-query limits
+          const minDate = requiredWorkingDates[0];
+          const maxDate = requiredWorkingDates[requiredWorkingDates.length - 1];
+          
+          const stockRecords = await fetchAllRows(
+             supabase.from('daily_stock')
+               .select('date, brand_id, closing_balance')
+               .eq('user_id', user.id)
+               .gte('date', minDate)
+               .lte('date', maxDate)
+          );
 
           const recordsByDate = {};
           stockRecords?.forEach(r => {
-            if (!recordsByDate[r.date]) {
-              recordsByDate[r.date] = { count: 0, hasNull: false };
+            // Strictly extract YYYY-MM-DD to avoid mismatch with T00:00:00
+            const normalizedDate = r.date ? r.date.split('T')[0] : '';
+            if (!normalizedDate) return;
+            if (!requiredWorkingDates.includes(normalizedDate)) return; // Filter safety
+
+            if (!recordsByDate[normalizedDate]) {
+              recordsByDate[normalizedDate] = { count: 0, nullBrands: [] };
             }
-            recordsByDate[r.date].count++;
+            recordsByDate[normalizedDate].count++;
+            
+            // Track if ANY brand was saved with a NULL closing balance
             if (r.closing_balance === null || r.closing_balance === undefined) {
-              recordsByDate[r.date].hasNull = true;
+              recordsByDate[normalizedDate].nullBrands.push(r.brand_id);
             }
           });
 
-          let earliestIncompleteDate = null;
+          let lockDetails = null;
+          
+          // CRITICAL FIX: Only lock if the entire day is missing, OR if a specific brand has a NULL closing balance.
+          // Do NOT lock simply because count < activeBrands (since user may have added new brands later).
           for (const dateStr of requiredWorkingDates) {
             const dayInfo = recordsByDate[dateStr];
-            if (!dayInfo || dayInfo.count < activeBrandsCount || dayInfo.hasNull) {
-              earliestIncompleteDate = dateStr;
-              break;
+            
+            if (!dayInfo || dayInfo.count === 0) {
+               // The entire date is missing from the database
+               lockDetails = {
+                 date: dateStr,
+                 missingBrands: [] // Signifies completely missing day
+               };
+               break; 
+            }
+            
+            if (dayInfo.nullBrands && dayInfo.nullBrands.length > 0) {
+               // The user saved the date, but left one or more closing balances blank
+               const nullNames = activeBrands
+                 ? activeBrands.filter(b => dayInfo.nullBrands.includes(b.id)).map(b => `${b.brand_name} (${b.bottle_size})`)
+                 : [];
+               
+               lockDetails = {
+                 date: dateStr,
+                 missingBrands: nullNames
+               };
+               break; 
             }
           }
 
           if (isMounted) {
-            if (earliestIncompleteDate) {
-              setPipelineWarning(earliestIncompleteDate);
-            } else {
-              setPipelineWarning(null);
-            }
+            setPipelineWarning(lockDetails);
           }
         } else {
           if (isMounted) setPipelineWarning(null);
@@ -1426,13 +1448,31 @@ export default function DailyStock() {
         </div>
       )}
 
-      {/* PIPELINE LOCK WARNING */}
+      {/* PIPELINE LOCK WARNING WITH DETAILED INFO */}
       {pipelineWarning && !isHolidaySelected && !customRangeMode && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 flex items-start sm:items-center gap-3 animate-in fade-in">
           <Lock className="text-red-500 shrink-0 mt-0.5 sm:mt-0" size={20} />
-          <p className="text-sm text-red-800 dark:text-red-300 leading-relaxed font-medium">
-            {t('dailyStock.pipelineLockedWarning', 'Reconciliation Locked: The closing stock for previous working day is incomplete. You must save its closing balance or declare it as a holiday before managing subsequent dates.')}
-          </p>
+          <div className="flex-1">
+            <p className="text-sm text-red-800 dark:text-red-300 leading-relaxed font-bold">
+              {t('dailyStock.pipelineLockedWarning', 'Reconciliation Locked: The closing stock for a previous working day is incomplete. You must save its closing balance or declare it as a holiday before managing subsequent dates.')}
+            </p>
+            {pipelineWarning.date && (
+              <div className="mt-2 text-xs text-red-700 dark:text-red-400 font-medium bg-red-100/50 dark:bg-red-950/50 p-2.5 rounded-lg border border-red-200/50 dark:border-red-800/50">
+                <span className="block mb-1">
+                  <span className="font-bold uppercase tracking-wider text-[10px]">Pending Date:</span> <span className="text-sm">{formatDisplayDate(pipelineWarning.date)}</span>
+                </span>
+                {pipelineWarning.missingBrands && pipelineWarning.missingBrands.length > 0 ? (
+                  <span className="block">
+                    <span className="font-bold uppercase tracking-wider text-[10px]">Unsaved Brands (Blank Closing Bal):</span> <span className="text-sm">{pipelineWarning.missingBrands.join(', ')}</span>
+                  </span>
+                ) : (
+                  <span className="block">
+                    <span className="font-bold uppercase tracking-wider text-[10px]">Status:</span> <span className="text-sm">No stock entries saved for this date. Please save the ledger.</span>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
